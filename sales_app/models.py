@@ -156,7 +156,7 @@ class CarritoCompra(models.Model):
     )
     productos = models.ManyToManyField(
         'catalog_app.Producto',
-        through='CarritoProducto',
+        db_table='carrito_producto',
         help_text='Relación M:N entre carritos y productos.'
     )
 
@@ -178,9 +178,6 @@ class Beneficio(models.Model):
     )
     fecha = models.DateField(
         help_text='Fecha en que se generó la sugerencia.'
-    )
-    es_notificacion = models.BooleanField(
-        help_text='Indica si fue enviado como notificación al cliente.'
     )
     enviado_momento_compra = models.BooleanField(
         help_text='Indica si se envió en el momento de la compra.'
@@ -217,13 +214,3 @@ class Beneficio(models.Model):
 
     class Meta:
         db_table = 'beneficio'
-
-
-class CarritoProducto(models.Model):
-    id_carrito_producto = models.AutoField(primary_key=True)
-    id_carrito = models.ForeignKey('CarritoCompra', on_delete=models.CASCADE, db_column='id_carrito')
-    id_producto = models.ForeignKey('catalog_app.Producto', on_delete=models.CASCADE, db_column='id_producto')
-
-    class Meta:
-        db_table = 'carrito_producto'
-        unique_together = (('id_carrito', 'id_producto'),)

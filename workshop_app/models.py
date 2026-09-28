@@ -126,7 +126,7 @@ class Reparacion(models.Model):
     )
     categorias = models.ManyToManyField(
         CategoriaReparacion,
-        through='ReparacionCategoria',
+        db_table='reparacion_categoria',
         help_text='Relación M:N entre reparaciones y categorías de reparación.'
     )
 
@@ -264,13 +264,3 @@ class Calificacion(models.Model):
 
     class Meta:
         db_table = 'calificacion'
-
-
-class ReparacionCategoria(models.Model):
-    id_reparacion_categoria = models.AutoField(primary_key=True)
-    id_reparacion = models.ForeignKey('Reparacion', on_delete=models.CASCADE, db_column='id_reparacion')
-    id_categoria = models.ForeignKey('CategoriaReparacion', on_delete=models.CASCADE, db_column='id_categoria')
-
-    class Meta:
-        db_table = 'reparacion_categoria'
-        unique_together = (('id_reparacion', 'id_categoria'),)
