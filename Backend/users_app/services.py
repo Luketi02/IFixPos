@@ -96,7 +96,8 @@ def autenticar_con_google(google_token: str) -> Dict[str, Any]:
             usuario = Usuario.objects.create(
                 email=email,
                 contrasena=make_password(None), # Contraseña inusable
-                id_rol=rol_cliente
+                id_rol=rol_cliente,
+                fecha_registro=datetime.now(timezone.utc).date()
             )
             
         tokens = generar_tokens_jwt(usuario)
