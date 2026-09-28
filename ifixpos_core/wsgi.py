@@ -1,5 +1,5 @@
 """
-WSGI config for ifixnet_core project.
+WSGI config for ifixpos_core project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 
@@ -11,6 +11,6 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ifixnet_core.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ifixpos_core.settings')
 
 application = get_wsgi_application()

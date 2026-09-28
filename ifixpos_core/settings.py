@@ -38,6 +38,16 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Módulos del ERP IFixPos
+    'users_app',
+    'geo_app',
+    'catalog_app',
+    'workshop_app',
+    'sales_app',
+    'inventory_app',
+    'purchases_app',
+    'core_app',
 ]
 
 MIDDLEWARE = [
@@ -50,7 +60,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'ifixnet_core.urls'
+ROOT_URLCONF = 'ifixpos_core.urls'
 
 TEMPLATES = [
     {
@@ -67,7 +77,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'ifixnet_core.wsgi.application'
+WSGI_APPLICATION = 'ifixpos_core.wsgi.application'
 
 
 # Database
