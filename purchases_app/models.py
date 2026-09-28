@@ -70,7 +70,7 @@ class SolicitudCotizacion(models.Model):
     )
     productos = models.ManyToManyField(
         'catalog_app.Producto',
-        through='SolicitudCotizacionProducto',
+        db_table='solicitud_cotizacion_producto',
         help_text='Relación M:N entre solicitud de cotización y productos requeridos.'
     )
 
@@ -305,13 +305,3 @@ class RegistroCompra(models.Model):
 
     class Meta:
         db_table = 'registro_compra'
-
-
-class SolicitudCotizacionProducto(models.Model):
-    id_solicitud_producto = models.AutoField(primary_key=True)
-    id_solicitud = models.ForeignKey('SolicitudCotizacion', on_delete=models.CASCADE, db_column='id_solicitud')
-    id_producto = models.ForeignKey('catalog_app.Producto', on_delete=models.CASCADE, db_column='id_producto')
-
-    class Meta:
-        db_table = 'solicitud_cotizacion_producto'
-        unique_together = (('id_solicitud', 'id_producto'),)
