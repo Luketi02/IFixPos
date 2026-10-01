@@ -85,6 +85,31 @@ class DetalleVenta(models.Model):
         db_table = 'detalle_venta'
 
 
+class MedioPago(models.Model):
+    """
+    Medios de pago disponibles.
+    """
+    id_mediopago = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del medio de pago.'
+    )
+    estado = models.BooleanField(
+        help_text='Estado del medio de pago (activo/inactivo).'
+    )
+    nombre_medio_pago = models.CharField(
+        max_length=100,
+        help_text='Nombre del medio de pago.'
+    )
+    recargo = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text='Porcentaje o monto de recargo del medio de pago.'
+    )
+
+    class Meta:
+        db_table = 'medio_pago'
+
+
 class Pago(models.Model):
     """
     Pagos aplicados a ventas.
@@ -93,8 +118,11 @@ class Pago(models.Model):
         primary_key=True,
         help_text='Identificador único del pago.'
     )
-    medio_pago = models.IntegerField(
-        help_text='Canal de pago utilizado representado como valor enumerado.'
+    medio_pago = models.ForeignKey(
+        MedioPago,
+        on_delete=models.RESTRICT,
+        db_column='id_mediopago',
+        help_text='Medio de pago utilizado.'
     )
     monto_pagado = models.DecimalField(
         max_digits=10,
@@ -156,12 +184,37 @@ class CarritoCompra(models.Model):
     )
     productos = models.ManyToManyField(
         'catalog_app.Producto',
-        db_table='carrito_producto',
+        through='CarritoProducto',
         help_text='Relación M:N entre carritos y productos.'
     )
 
     class Meta:
         db_table = 'carrito_compra'
+
+
+class CarritoProducto(models.Model):
+    """
+    Relación intermedia entre Carritos de Compra y Productos.
+    """
+    id_carrito_producto = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del detalle de carrito.'
+    )
+    id_carrito = models.ForeignKey(
+        CarritoCompra,
+        on_delete=models.CASCADE,
+        db_column='id_carrito',
+        help_text='Identificador del carrito de compra.'
+    )
+    id_producto = models.ForeignKey(
+        'catalog_app.Producto',
+        on_delete=models.RESTRICT,
+        db_column='id_producto',
+        help_text='Identificador del producto en el carrito.'
+    )
+
+    class Meta:
+        db_table = 'carrito_producto'
 
 
 class Beneficio(models.Model):

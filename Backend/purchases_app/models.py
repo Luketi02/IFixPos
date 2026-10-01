@@ -70,12 +70,37 @@ class SolicitudCotizacion(models.Model):
     )
     productos = models.ManyToManyField(
         'catalog_app.Producto',
-        db_table='solicitud_cotizacion_producto',
+        through='SolicitudCotizacionProducto',
         help_text='Relación M:N entre solicitud de cotización y productos requeridos.'
     )
 
     class Meta:
         db_table = 'solicitud_cotizacion'
+
+
+class SolicitudCotizacionProducto(models.Model):
+    """
+    Relación intermedia entre Solicitudes de Cotización y Productos.
+    """
+    id_solicitud_producto = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del detalle de solicitud.'
+    )
+    id_solicitud = models.ForeignKey(
+        SolicitudCotizacion,
+        on_delete=models.CASCADE,
+        db_column='id_solicitud',
+        help_text='Identificador de la solicitud de cotización.'
+    )
+    id_producto = models.ForeignKey(
+        'catalog_app.Producto',
+        on_delete=models.RESTRICT,
+        db_column='id_producto',
+        help_text='Identificador del producto solicitado.'
+    )
+
+    class Meta:
+        db_table = 'solicitud_cotizacion_producto'
 
 
 class InvitacionCotizar(models.Model):
