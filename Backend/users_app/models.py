@@ -9,6 +9,12 @@ class RolUsuario(models.Model):
         primary_key=True, 
         help_text='Identificador único del rol.'
     )
+    codigo = models.CharField(
+        max_length=50,
+        unique=True,
+        db_index=True,
+        help_text='Código semántico inmutable del rol (ej. ADMIN, TECNICO, CLIENTE).'
+    )
     nombre_rol = models.CharField(
         max_length=100, 
         help_text='Nombre legible del rol asignado a usuarios.'
