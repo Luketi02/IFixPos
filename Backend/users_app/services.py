@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.utils.crypto import get_random_string
 from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
-from users_app.selectors import obtener_usuario_por_email, email_existe, get_rol_cliente, obtener_token_valido
+from users_app.selectors import obtener_usuario_por_email, email_existe, get_rol_cliente, obtener_token_valido, obtener_configuracion_bool
 from core_app.models import LogSistema, Notificacion
 from google.oauth2 import id_token
 from google.auth.transport import requests
@@ -17,6 +17,33 @@ from rest_framework_simplejwt.tokens import RefreshToken
 class CredencialesInvalidasError(Exception):
     """Excepción para manejar errores de autenticación."""
     pass
+
+def registrar_log_condicional(
+    *, 
+    clave_switch: str, 
+    accion: str, 
+    tipo: str, 
+    modulo_origen: str, 
+    tabla_afectada: Optional[str] = None, 
+    id_registro_afectado: Optional[int] = None, 
+    id_usuario: Optional[int] = None
+) -> None:
+    """Registra un log en el sistema si el switch en ConfiguracionSistema está activo."""
+    if not obtener_configuracion_bool(clave_switch):
+        return
+        
+    usuario = Usuario.objects.get(id_usuario=id_usuario) if id_usuario else None
+        
+    LogSistema.objects.create(
+        fecha_hora=datetime.now(timezone.utc).time(),
+        accion=accion,
+        tipo=tipo,
+        modulo_origen=modulo_origen,
+        tabla_afectada=tabla_afectada,
+        id_registro_afectado=str(id_registro_afectado) if id_registro_afectado else None,
+        id_usuario=usuario
+    )
+
 
 def generar_tokens_jwt(usuario: Usuario) -> Dict[str, str]:
     """Genera tokens de acceso y refresco JWT para el usuario especificado."""
@@ -132,14 +159,14 @@ def registrar_cuenta_publica(
             telefono_alt=telefono_alt
         )
         
-        LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
             accion="Registro de cuenta pública",
             tipo="INFO",
             modulo_origen="Usuarios",
             tabla_afectada="usuario",
-            id_registro_afectado=str(usuario.id_usuario),
-            id_usuario=usuario
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
         )
         
     return usuario
@@ -186,14 +213,14 @@ def registrar_cuenta_interna(
         
         ejecutor = Usuario.objects.get(id_usuario=id_ejecutor) if id_ejecutor else None
         
-        LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
             accion="Registro de cuenta interna",
             tipo="INFO",
             modulo_origen="Usuarios",
             tabla_afectada="usuario",
-            id_registro_afectado=str(usuario.id_usuario),
-            id_usuario=ejecutor
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=id_ejecutor
         )
         
         Notificacion.objects.create(
@@ -222,14 +249,14 @@ def cerrar_sesion_usuario(*, id_usuario: int, refresh_token: str) -> None:
             
         usuario = Usuario.objects.get(id_usuario=id_usuario) if id_usuario else None
         
-        LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
             accion="Cierre de sesión exitoso",
             tipo="INFO",
             modulo_origen="Autenticación",
             tabla_afectada="usuario",
-            id_registro_afectado=str(id_usuario),
-            id_usuario=usuario
+            id_registro_afectado=id_usuario,
+            id_usuario=id_usuario
         )
 
 def generar_token_seguridad(*, email: str) -> str:
@@ -263,14 +290,14 @@ def validar_y_restablecer_credencial(*, email: str, token: str, nueva_contrasena
         token_obj.utilizado = True
         token_obj.save()
         
-        LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
             accion="Restablecimiento de credenciales vía Token",
             tipo="SEGURIDAD",
             modulo_origen="Autenticación",
             tabla_afectada="usuario",
-            id_registro_afectado=str(usuario.id_usuario),
-            id_usuario=usuario
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
         )
 
 def solicitar_recuperacion_contrasena(*, email: str, captcha_token: str) -> None:
@@ -288,12 +315,12 @@ def solicitar_recuperacion_contrasena(*, email: str, captcha_token: str) -> None
         # Generamos el token de seguridad (este método ya guarda en BD y está anidado en savepoint)
         generar_token_seguridad(email=email)
         
-        LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
             accion="Solicitud de recuperación de contraseña",
             tipo="SEGURIDAD",
             modulo_origen="Autenticación",
             tabla_afectada="usuario",
-            id_registro_afectado=str(usuario.id_usuario),
-            id_usuario=usuario
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
         )

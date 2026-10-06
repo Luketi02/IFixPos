@@ -2,6 +2,9 @@ from typing import Optional
 from django.core.exceptions import ValidationError
 from datetime import datetime, timezone
 from users_app.models import Usuario, RolUsuario, TokenSeguridad
+from core_app.models import ConfiguracionSistema
+from datetime import datetime, timezone
+from users_app.models import Usuario, RolUsuario, TokenSeguridad
 
 def obtener_usuario_por_email(email: str) -> Usuario:
     """
@@ -53,3 +56,13 @@ def obtener_token_valido(*, id_usuario: int, codigo: str) -> TokenSeguridad:
         raise ValidationError("El token ha expirado.")
         
     return token
+
+
+def obtener_configuracion_bool(clave: str) -> bool:
+    """Obtiene un flag booleano de ConfiguracionSistema. Fail-safe a False."""
+    try:
+        config = ConfiguracionSistema.objects.get(clave=clave)
+        val = str(config.valor).strip().lower()
+        return val in ('true', '1', 't', 'y', 'yes')
+    except ConfiguracionSistema.DoesNotExist:
+        return False
