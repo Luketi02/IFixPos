@@ -22,3 +22,4 @@ Frontend/.env.*.local
 .DS_Store
 .vscode/
 .idea/
+/Documentacion/
