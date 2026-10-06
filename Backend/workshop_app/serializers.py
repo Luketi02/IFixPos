@@ -13,3 +13,20 @@ class DispositivoOutputSerializer(serializers.Serializer):
     imagen = serializers.CharField(max_length=500, allow_null=True)
     id_modelo = serializers.IntegerField(source='id_modelo_id')
     id_usuario = serializers.IntegerField(source='id_usuario_id')
+
+
+class ModeloDispositivoAnidadoSerializer(serializers.Serializer):
+    id_modelo = serializers.IntegerField()
+    nombre = serializers.CharField()
+
+class ReparacionAnidadoSerializer(serializers.Serializer):
+    etapa = serializers.CharField()
+    codigo_sec = serializers.CharField()
+    fecha_inicio = serializers.DateField()
+
+class DispositivoFiltradoOutputSerializer(serializers.Serializer):
+    id_dispositivo = serializers.IntegerField()
+    numero_serie = serializers.CharField()
+    fecha_registro = serializers.DateField()
+    modelo = ModeloDispositivoAnidadoSerializer(source='id_modelo', read_only=True)
+    reparaciones = ReparacionAnidadoSerializer(source='reparacion_set', many=True, read_only=True)

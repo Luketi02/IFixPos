@@ -88,3 +88,19 @@ class PerfilOutputSerializer(serializers.Serializer):
     dni = serializers.CharField(allow_null=True, required=False)
     telefono_alt = serializers.CharField(allow_null=True, required=False)
     foto_perfil = serializers.CharField(allow_null=True, required=False)
+
+
+class PerfilUsuarioAnidadoSerializer(serializers.Serializer):
+    dni = serializers.CharField()
+    nombre = serializers.CharField()
+    apellido = serializers.CharField()
+
+class RolUsuarioAnidadoSerializer(serializers.Serializer):
+    nombre_rol = serializers.CharField()
+
+class UsuarioFiltradoOutputSerializer(serializers.Serializer):
+    id_usuario = serializers.IntegerField()
+    email = serializers.EmailField()
+    fecha_registro = serializers.DateField()
+    rol = RolUsuarioAnidadoSerializer(source='id_rol', read_only=True)
+    perfil = PerfilUsuarioAnidadoSerializer(source='perfilusuario', read_only=True)

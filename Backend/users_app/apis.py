@@ -227,3 +227,37 @@ class EditarPerfilApi(APIView):
             
         output_serializer = PerfilOutputSerializer(datos_perfil)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+from users_app.selectors import filtrar_usuarios
+from users_app.serializers import UsuarioFiltradoOutputSerializer
+
+class FiltrarUsuariosApi(APIView):
+    permission_classes = [IsAuthenticated] 
+
+    def get(self, request):
+        try:
+            dni = request.query_params.get('dni')
+            email = request.query_params.get('email')
+            id_rol = request.query_params.get('id_rol')
+            activo = request.query_params.get('activo')
+            id_pais = request.query_params.get('id_pais')
+            id_provincia = request.query_params.get('id_provincia')
+            id_ciudad = request.query_params.get('id_ciudad')
+
+            if id_rol is not None: id_rol = int(id_rol)
+            if activo is not None: activo = activo.lower() in ['true', '1', 't', 'y']
+            if id_pais is not None: id_pais = int(id_pais)
+            if id_provincia is not None: id_provincia = int(id_provincia)
+            if id_ciudad is not None: id_ciudad = int(id_ciudad)
+
+            usuarios = filtrar_usuarios(
+                dni=dni, email=email, id_rol=id_rol, activo=activo,
+                id_pais=id_pais, id_provincia=id_provincia, id_ciudad=id_ciudad
+            )
+            
+            serializer = UsuarioFiltradoOutputSerializer(usuarios, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except ValueError:
+            return Response({"error": "Parámetro numérico inválido."}, status=status.HTTP_400_BAD_REQUEST)

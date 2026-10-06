@@ -1,4 +1,5 @@
 from typing import Optional
+from django.db.models import QuerySet, Q
 from django.core.exceptions import ValidationError
 from datetime import datetime, timezone
 from users_app.models import Usuario, RolUsuario, TokenSeguridad, PerfilUsuario
@@ -77,3 +78,37 @@ def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
 def email_existe_excluyendo_usuario(email: str, id_usuario_excluido: int) -> bool:
     """Verifica si un email existe excluyendo un ID de usuario en particular."""
     return Usuario.objects.filter(email=email).exclude(id_usuario=id_usuario_excluido).exists()
+
+
+def filtrar_usuarios(
+    *, 
+    dni: str = None, 
+    email: str = None, 
+    id_rol: int = None, 
+    activo: bool = None, 
+    id_pais: int = None, 
+    id_provincia: int = None, 
+    id_ciudad: int = None
+) -> QuerySet[Usuario]:
+    """CU-32: Filtro de usuarios. Retorna un QuerySet de Usuario optimizado."""
+    
+    qs = Usuario.objects.select_related('perfilusuario', 'id_rol')
+    
+    if email:
+        qs = qs.filter(email=email)
+    if dni:
+        qs = qs.filter(perfilusuario__dni=dni)
+    if id_rol is not None:
+        qs = qs.filter(id_rol=id_rol)
+    
+    if activo is not None:
+        pass 
+        
+    if id_ciudad is not None:
+        qs = qs.filter(direccion__id_ciudad=id_ciudad)
+    elif id_provincia is not None:
+        qs = qs.filter(direccion__id_ciudad__id_provincia=id_provincia)
+    elif id_pais is not None:
+        qs = qs.filter(direccion__id_ciudad__id_provincia__id_pais=id_pais)
+        
+    return qs.distinct()
