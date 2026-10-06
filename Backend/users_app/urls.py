@@ -7,7 +7,8 @@ from users_app.apis import (
     LogoutApi,
     GenerarTokenSeguridadApi,
     RestablecerCredencialesApi,
-    SolicitarRecuperacionContrasenaApi
+    SolicitarRecuperacionContrasenaApi,
+    EditarPerfilApi
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path('token/generar/', GenerarTokenSeguridadApi.as_view(), name='api_generar_token'),
     path('token/restablecer/', RestablecerCredencialesApi.as_view(), name='api_restablecer_credenciales'),
     path('recuperar-contrasena/solicitar/', SolicitarRecuperacionContrasenaApi.as_view(), name='api_solicitar_recuperacion'),
+    path('perfil/editar/', EditarPerfilApi.as_view(), name='api_editar_perfil'),
 ]

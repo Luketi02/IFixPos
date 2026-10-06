@@ -8,13 +8,14 @@ from users_app.serializers import (
     RegistroPublicoInputSerializer, RegistroInternoInputSerializer,
     UsuarioOutputSerializer, LogoutInputSerializer,
     GenerarTokenInputSerializer, RestablecerCredencialesInputSerializer,
-    RecuperarContrasenaInputSerializer
+    RecuperarContrasenaInputSerializer,
+    EditarPerfilInputSerializer, PerfilOutputSerializer
 )
 from users_app.services import (
     autenticar_y_obtener_tokens, autenticar_con_google, CredencialesInvalidasError,
     registrar_cuenta_publica, registrar_cuenta_interna, cerrar_sesion_usuario,
     generar_token_seguridad, validar_y_restablecer_credencial,
-    solicitar_recuperacion_contrasena
+    solicitar_recuperacion_contrasena, editar_perfil_usuario
 )
 
 
@@ -199,3 +200,30 @@ class SolicitarRecuperacionContrasenaApi(APIView):
         # Respuesta estricta anti-enumeración, siempre la misma:
         mensaje_seguro = "Si el correo está registrado en nuestro sistema, recibirá instrucciones para recuperar su contraseña en los próximos minutos."
         return Response({"mensaje": mensaje_seguro}, status=status.HTTP_200_OK)
+
+
+class EditarPerfilApi(APIView):
+    """
+    Endpoint para editar el perfil del usuario autenticado de forma segura (prevención IDOR).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request):
+        serializer = EditarPerfilInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        id_usuario = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
+        if not id_usuario:
+            return Response({"detail": "Usuario no autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        try:
+            datos_perfil = editar_perfil_usuario(
+                id_usuario=id_usuario,
+                **serializer.validated_data
+            )
+        except ValidationError as e:
+            return Response({"detail": e.messages if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            
+        output_serializer = PerfilOutputSerializer(datos_perfil)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)

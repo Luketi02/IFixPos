@@ -65,3 +65,26 @@ class RecuperarContrasenaInputSerializer(serializers.Serializer):
     """Validador para solicitar la recuperación de contraseña."""
     email = serializers.EmailField(required=True)
     captcha_token = serializers.CharField(required=True)
+
+
+class EditarPerfilInputSerializer(serializers.Serializer):
+    """Validador para editar el perfil de un usuario."""
+    nombre = serializers.CharField(required=True)
+    apellido = serializers.CharField(required=True)
+    email = serializers.EmailField(required=True)
+    telefono = serializers.CharField(required=True)
+    dni = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    telefono_alt = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    foto_perfil = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class PerfilOutputSerializer(serializers.Serializer):
+    """Estructura de salida para los datos del perfil actualizado."""
+    id_usuario = serializers.IntegerField()
+    email = serializers.EmailField()
+    nombre = serializers.CharField()
+    apellido = serializers.CharField()
+    telefono = serializers.CharField()
+    dni = serializers.CharField(allow_null=True, required=False)
+    telefono_alt = serializers.CharField(allow_null=True, required=False)
+    foto_perfil = serializers.CharField(allow_null=True, required=False)

@@ -5,7 +5,11 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.utils.crypto import get_random_string
 from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
-from users_app.selectors import obtener_usuario_por_email, email_existe, get_rol_cliente, obtener_token_valido, obtener_configuracion_bool
+from users_app.selectors import (
+    obtener_usuario_por_email, email_existe, get_rol_cliente, 
+    obtener_token_valido, obtener_configuracion_bool,
+    obtener_perfil_usuario, email_existe_excluyendo_usuario
+)
 from core_app.models import LogSistema, Notificacion
 from google.oauth2 import id_token
 from google.auth.transport import requests
@@ -324,3 +328,53 @@ def solicitar_recuperacion_contrasena(*, email: str, captcha_token: str) -> None
             id_registro_afectado=usuario.id_usuario,
             id_usuario=usuario.id_usuario
         )
+
+def editar_perfil_usuario(
+    *, 
+    id_usuario: int, 
+    email: str, 
+    nombre: str, 
+    apellido: str, 
+    telefono: str, 
+    dni: Optional[str] = None, 
+    telefono_alt: Optional[str] = None, 
+    foto_perfil: Optional[str] = None
+) -> Dict[str, Any]:
+    """Actualiza el email (Usuario) y demás datos (PerfilUsuario) de manera atómica."""
+    with transaction.atomic():
+        if email_existe_excluyendo_usuario(email, id_usuario):
+            raise ValidationError("El correo electrónico ingresado ya está siendo utilizado por otra cuenta.")
+            
+        usuario = Usuario.objects.get(id_usuario=id_usuario)
+        usuario.email = email
+        usuario.save()
+        
+        perfil = obtener_perfil_usuario(id_usuario)
+        perfil.nombre = nombre
+        perfil.apellido = apellido
+        perfil.telefono = telefono
+        perfil.dni = dni
+        perfil.telefono_alt = telefono_alt
+        perfil.foto_perfil = foto_perfil
+        perfil.save()
+        
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
+            accion="Edición de perfil de usuario",
+            tipo="INFO",
+            modulo_origen="Usuarios",
+            tabla_afectada="perfil_usuario",
+            id_registro_afectado=id_usuario,
+            id_usuario=id_usuario
+        )
+        
+        return {
+            "id_usuario": usuario.id_usuario,
+            "email": usuario.email,
+            "nombre": perfil.nombre,
+            "apellido": perfil.apellido,
+            "telefono": perfil.telefono,
+            "dni": perfil.dni,
+            "telefono_alt": perfil.telefono_alt,
+            "foto_perfil": perfil.foto_perfil
+        }

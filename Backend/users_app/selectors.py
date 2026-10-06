@@ -1,10 +1,8 @@
 from typing import Optional
 from django.core.exceptions import ValidationError
 from datetime import datetime, timezone
-from users_app.models import Usuario, RolUsuario, TokenSeguridad
+from users_app.models import Usuario, RolUsuario, TokenSeguridad, PerfilUsuario
 from core_app.models import ConfiguracionSistema
-from datetime import datetime, timezone
-from users_app.models import Usuario, RolUsuario, TokenSeguridad
 
 def obtener_usuario_por_email(email: str) -> Usuario:
     """
@@ -66,3 +64,16 @@ def obtener_configuracion_bool(clave: str) -> bool:
         return val in ('true', '1', 't', 'y', 'yes')
     except ConfiguracionSistema.DoesNotExist:
         return False
+
+
+def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
+    """Busca y retorna el perfil de un usuario, o levanta ValidationError si no existe."""
+    try:
+        return PerfilUsuario.objects.get(id_usuario=id_usuario)
+    except PerfilUsuario.DoesNotExist:
+        raise ValidationError("El perfil de usuario no existe.")
+
+
+def email_existe_excluyendo_usuario(email: str, id_usuario_excluido: int) -> bool:
+    """Verifica si un email existe excluyendo un ID de usuario en particular."""
+    return Usuario.objects.filter(email=email).exclude(id_usuario=id_usuario_excluido).exists()
