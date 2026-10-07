@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { GoogleLogin } from '@react-oauth/google';
+import { Link } from 'react-router-dom';
 import ReCAPTCHA from 'react-google-recaptcha';
+import { motion } from 'framer-motion';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
@@ -79,7 +81,12 @@ const LoginScreen = () => {
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans text-slate-50">
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans text-slate-50"
+    >
       <div className="bg-slate-800 w-full max-w-md p-8 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] shadow-cyan-500/10 border border-slate-700/50 transition-all duration-300 ease-in-out">
         
         <div className="text-center mb-8">
@@ -205,15 +212,15 @@ const LoginScreen = () => {
         </div>
 
         <div className="mt-8 text-center">
-          <a
-            href="/register"
+          <Link
+            to="/register"
             className="text-sm text-slate-400 hover:text-cyan-400 transition-colors duration-300 font-medium"
           >
             ¿No tienes cuenta? Regístrate aquí
-          </a>
+          </Link>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
