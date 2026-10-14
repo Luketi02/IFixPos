@@ -9,13 +9,15 @@ from users_app.serializers import (
     UsuarioOutputSerializer, LogoutInputSerializer,
     GenerarTokenInputSerializer, RestablecerCredencialesInputSerializer,
     RecuperarContrasenaInputSerializer,
-    EditarPerfilInputSerializer, PerfilOutputSerializer
+    EditarPerfilInputSerializer, PerfilOutputSerializer,
+    CompletarOnboardingInputSerializer
 )
 from users_app.services import (
     autenticar_y_obtener_tokens, autenticar_con_google, CredencialesInvalidasError,
     registrar_cuenta_publica, registrar_cuenta_interna, cerrar_sesion_usuario,
     generar_token_seguridad, validar_y_restablecer_credencial,
-    solicitar_recuperacion_contrasena, editar_perfil_usuario
+    solicitar_recuperacion_contrasena, editar_perfil_usuario,
+    completar_perfil_onboarding
 )
 
 
@@ -227,6 +229,33 @@ class EditarPerfilApi(APIView):
             
         output_serializer = PerfilOutputSerializer(datos_perfil)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class CompletarOnboardingApi(APIView):
+    """
+    Endpoint de onboarding para usuarios provenientes de Google.
+    Exige DNI y Teléfono para completar el perfil.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CompletarOnboardingInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        id_usuario = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
+        if not id_usuario:
+            return Response({"detail": "Usuario no autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        try:
+            completar_perfil_onboarding(
+                id_usuario=id_usuario,
+                dni=serializer.validated_data['dni'],
+                telefono=serializer.validated_data['telefono']
+            )
+            return Response({"mensaje": "Perfil completado exitosamente."}, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            return Response({"detail": e.messages if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 from users_app.selectors import filtrar_usuarios

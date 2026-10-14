@@ -8,7 +8,8 @@ from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
 from users_app.selectors import (
     obtener_usuario_por_email, email_existe, get_rol_cliente, 
     obtener_token_valido, obtener_configuracion_bool,
-    obtener_perfil_usuario, email_existe_excluyendo_usuario
+    obtener_perfil_usuario, email_existe_excluyendo_usuario,
+    perfil_esta_completo
 )
 from core_app.models import LogSistema, Notificacion
 from google.oauth2 import id_token
@@ -123,17 +124,46 @@ def autenticar_con_google(google_token: str) -> Dict[str, Any]:
             "usuario": {
                 "id_usuario": usuario.id_usuario,
                 "email": usuario.email,
-                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None
+                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+                "perfil_completo": perfil_esta_completo(usuario.id_usuario)
             }
         }
     except ValueError as e:
         raise ValueError("Token de Google inválido o expirado.") from e
+
+def completar_perfil_onboarding(*, id_usuario: int, dni: str, telefono: str) -> None:
+    """Completa el perfil del usuario luego de un inicio de sesión con Google (Onboarding)."""
+    with transaction.atomic():
+        if PerfilUsuario.objects.filter(dni=dni).exclude(id_usuario=id_usuario).exists():
+            raise ValidationError("El DNI ingresado ya pertenece a otra cuenta.")
+            
+        usuario = Usuario.objects.get(id_usuario=id_usuario)
+        
+        perfil, created = PerfilUsuario.objects.get_or_create(
+            id_usuario=usuario,
+            defaults={'dni': dni, 'telefono': telefono, 'nombre': '', 'apellido': ''}
+        )
+        if not created:
+            perfil.dni = dni
+            perfil.telefono = telefono
+            perfil.save()
+            
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
+            accion="Completado de perfil por Onboarding de Google",
+            tipo="INFO",
+            modulo_origen="Usuarios",
+            tabla_afectada="perfil_usuario",
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
+        )
 
 def registrar_cuenta_publica(
     *, 
     nombre: str, 
     apellido: str, 
     email: str, 
+    dni: str,
     telefono: str, 
     contrasena: str, 
     captcha_token: str, 
@@ -159,6 +189,7 @@ def registrar_cuenta_publica(
             id_usuario=usuario,
             nombre=nombre,
             apellido=apellido,
+            dni=dni,
             telefono=telefono,
             telefono_alt=telefono_alt
         )
@@ -228,7 +259,7 @@ def registrar_cuenta_interna(
         )
         
         Notificacion.objects.create(
-            mensaje=f"Tu cuenta ha sido creada. Tus credenciales son email: {email}",
+            mensaje=f"Tu cuenta ha sido creada. Tus credenciales son, email: {email}, contraseña: {contrasena}",
             tipo="INFO_CUENTA",
             fecha_envio=datetime.now(timezone.utc).date(),
             leida=False,

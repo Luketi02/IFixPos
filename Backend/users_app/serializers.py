@@ -17,10 +17,25 @@ class RegistroPublicoInputSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=100, required=True)
     apellido = serializers.CharField(max_length=100, required=True)
     email = serializers.EmailField(required=True)
+    dni = serializers.CharField(max_length=50, required=True)
     telefono = serializers.CharField(max_length=50, required=True)
     contrasena = serializers.CharField(required=True, write_only=True)
     captcha_token = serializers.CharField(required=True)
     telefono_alt = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
+
+class CompletarOnboardingInputSerializer(serializers.Serializer):
+    dni = serializers.CharField(required=True)
+    telefono = serializers.CharField(required=True)
+    
+    def validate_dni(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("El DNI no puede estar vacío.")
+        return value
+        
+    def validate_telefono(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("El teléfono no puede estar vacío.")
+        return value
 
 class RegistroInternoInputSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=100, required=True)

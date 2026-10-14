@@ -75,6 +75,17 @@ def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
         raise ValidationError("El perfil de usuario no existe.")
 
 
+def perfil_esta_completo(id_usuario: int) -> bool:
+    """Verifica si el PerfilUsuario tiene dni y telefono completos."""
+    try:
+        perfil = PerfilUsuario.objects.get(id_usuario=id_usuario)
+        if perfil.dni and perfil.dni.strip() and perfil.telefono and perfil.telefono.strip():
+            return True
+        return False
+    except PerfilUsuario.DoesNotExist:
+        return False
+
+
 def email_existe_excluyendo_usuario(email: str, id_usuario_excluido: int) -> bool:
     """Verifica si un email existe excluyendo un ID de usuario en particular."""
     return Usuario.objects.filter(email=email).exclude(id_usuario=id_usuario_excluido).exists()

@@ -149,3 +149,6 @@ MAILERS = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]
+
+# Simula el envío de correos imprimiéndolos en la consola
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

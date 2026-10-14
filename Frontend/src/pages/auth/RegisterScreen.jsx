@@ -91,13 +91,13 @@ const RegisterScreen = () => {
         dni: formData.dni,
         nombre: formData.nombre,
         apellido: formData.apellido,
-        telefono_primario: formData.telefonoPrimario,
-        telefono_alternativo: formData.telefonoAlternativo,
-        password: formData.password,
-        captchaToken: captchaToken
+        telefono: formData.telefonoPrimario,
+        telefono_alt: formData.telefonoAlternativo,
+        contrasena: formData.password,
+        captcha_token: captchaToken
       };
 
-      const response = await axios.post('http://localhost:8000/api/users/register/', payload);
+      const response = await axios.post('http://localhost:8000/api/auth/registro/publico/', payload);
 
       console.log('Registro exitoso:', response.data);
       setSuccessMsg('¡Usuario registrado con éxito! Redirigiendo...');
@@ -380,7 +380,7 @@ const RegisterScreen = () => {
                 setIsLoading(true);
                 setErrorMsg('');
                 try {
-                  const respuesta = await axios.post("http://localhost:8000/api/users/register/google/", {
+                  const respuesta = await axios.post("http://localhost:8000/api/auth/login/google/", {
                     google_token: credentialResponse.credential
                   });
                   console.log('Google Register exitoso:', respuesta.data);
