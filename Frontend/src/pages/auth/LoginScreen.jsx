@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { GoogleLogin } from '@react-oauth/google';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import ReCAPTCHA from 'react-google-recaptcha';
 import { motion } from 'framer-motion';
+import useAuth from '../../context/useAuth';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const LoginScreen = () => {
+  const navigate = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -55,16 +60,23 @@ const LoginScreen = () => {
     setErrorMsg('');
 
     try {
-      const response = await axios.post('http://localhost:8000/api/auth/login/', {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/login/`, {
         email,
         password,
         captchaToken // Enviamos el token del captcha al backend
       });
 
-      console.log('Login exitoso:', response.data);
-      // TODO: Guardar token y redirigir
-      // localStorage.setItem('token', response.data.access);
-      // window.location.href = '/dashboard';
+      const tokens = response.data?.tokens;
+      const usuario = response.data?.usuario;
+
+      login(tokens, usuario);
+
+      // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard
+      if (usuario && !usuario.perfil_completo) {
+        navigate('/completar-perfil', { replace: true });
+      } else {
+        navigate('/', { replace: true });
+      }
 
     } catch (error) {
       if (error.response && error.response.status === 401) {
@@ -189,12 +201,23 @@ const LoginScreen = () => {
                 setIsLoading(true);
                 setErrorMsg('');
                 try {
-                  const respuesta = await axios.post("http://localhost:8000/api/auth/login/google/", {
+                  const respuesta = await axios.post(`${API_BASE_URL}/api/auth/login/google/`, {
                     google_token: credentialResponse.credential
                   });
-                  console.log('Google Login exitoso:', respuesta.data);
-                  // TODO: Guardar token y redirigir
+                  
+                  const tokens = respuesta.data?.tokens;
+                  const usuario = respuesta.data?.usuario;
+
+                  login(tokens, usuario);
+
+                  // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard
+                  if (usuario && !usuario.perfil_completo) {
+                    navigate('/completar-perfil', { replace: true });
+                  } else {
+                    navigate('/', { replace: true });
+                  }
                 } catch (error) {
+                  console.error('Error al iniciar sesión con Google:', error);
                   setErrorMsg(`Error al iniciar sesión con Google. Si el problema persiste, contacte a: ${supportEmail}`);
                 } finally {
                   setIsLoading(false);

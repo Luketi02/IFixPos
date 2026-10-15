@@ -10,14 +10,15 @@ from users_app.serializers import (
     GenerarTokenInputSerializer, RestablecerCredencialesInputSerializer,
     RecuperarContrasenaInputSerializer,
     EditarPerfilInputSerializer, PerfilOutputSerializer,
-    CompletarOnboardingInputSerializer
+    CompletarOnboardingInputSerializer,
+    ValidarCodigoInputSerializer
 )
 from users_app.services import (
     autenticar_y_obtener_tokens, autenticar_con_google, CredencialesInvalidasError,
     registrar_cuenta_publica, registrar_cuenta_interna, cerrar_sesion_usuario,
     generar_token_seguridad, validar_y_restablecer_credencial,
     solicitar_recuperacion_contrasena, editar_perfil_usuario,
-    completar_perfil_onboarding
+    completar_perfil_onboarding, verificar_y_activar_usuario
 )
 
 
@@ -86,6 +87,30 @@ class RegistroPublicoApi(APIView):
             
         output_serializer = UsuarioOutputSerializer(usuario)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class VerificarCorreoApi(APIView):
+    """
+    Endpoint público para validar el código OTP de verificación de correo y activar la cuenta.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ValidarCodigoInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            resultado = verificar_y_activar_usuario(
+                email=serializer.validated_data['email'],
+                codigo=serializer.validated_data['codigo']
+            )
+            return Response(resultado, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            return Response(
+                {"detail": e.messages if hasattr(e, 'messages') else str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class RegistroInternoApi(APIView):
@@ -248,12 +273,15 @@ class CompletarOnboardingApi(APIView):
             return Response({"detail": "Usuario no autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
             
         try:
-            completar_perfil_onboarding(
+            resultado = completar_perfil_onboarding(
                 id_usuario=id_usuario,
                 dni=serializer.validated_data['dni'],
-                telefono=serializer.validated_data['telefono']
+                telefono=serializer.validated_data['telefono'],
+                nombre=serializer.validated_data.get('nombre'),
+                apellido=serializer.validated_data.get('apellido'),
+                telefono_alt=serializer.validated_data.get('telefono_alt')
             )
-            return Response({"mensaje": "Perfil completado exitosamente."}, status=status.HTTP_200_OK)
+            return Response(resultado, status=status.HTTP_200_OK)
         except ValidationError as e:
             return Response({"detail": e.messages if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

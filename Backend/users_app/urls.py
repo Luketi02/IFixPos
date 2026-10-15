@@ -10,7 +10,8 @@ from users_app.apis import (
     SolicitarRecuperacionContrasenaApi,
     EditarPerfilApi,
     FiltrarUsuariosApi,
-    CompletarOnboardingApi
+    CompletarOnboardingApi,
+    VerificarCorreoApi
 )
 
 urlpatterns = [
@@ -18,6 +19,7 @@ urlpatterns = [
     path('login/google/', GoogleLoginApi.as_view(), name='api_login_google'),
     path('logout/', LogoutApi.as_view(), name='api_logout'),
     path('registro/publico/', RegistroPublicoApi.as_view(), name='api_registro_publico'),
+    path('verificar-correo/', VerificarCorreoApi.as_view(), name='api_verificar_correo'),
     path('registro/interno/', RegistroInternoApi.as_view(), name='api_registro_interno'),
     path('token/generar/', GenerarTokenSeguridadApi.as_view(), name='api_generar_token'),
     path('token/restablecer/', RestablecerCredencialesApi.as_view(), name='api_restablecer_credenciales'),
@@ -25,4 +27,5 @@ urlpatterns = [
     path('perfil/editar/', EditarPerfilApi.as_view(), name='api_editar_perfil'),
     path('filtrar/', FiltrarUsuariosApi.as_view(), name='api_filtrar_usuarios'),
     path('onboarding/completar/', CompletarOnboardingApi.as_view(), name='api_completar_onboarding'),
+    path('onboarding/', CompletarOnboardingApi.as_view(), name='api_onboarding'),
 ]

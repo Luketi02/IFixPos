@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 class RolUsuario(models.Model):
@@ -56,6 +57,20 @@ class Usuario(models.Model):
         db_column='id_rol', 
         help_text='Identificador único del rol.'
     )
+    is_active = models.BooleanField(
+        default=True, 
+        help_text='Indica si la cuenta del usuario está activa y verificada.'
+    )
+
+    @property
+    def is_authenticated(self):
+        """Requerido por Django REST Framework para verificaciones IsAuthenticated."""
+        return True
+
+    @property
+    def is_anonymous(self):
+        """Requerido por Django REST Framework para compatibilidad con auth."""
+        return False
 
     class Meta:
         db_table = 'usuario'
@@ -140,8 +155,13 @@ class PreferenciasUsuario(models.Model):
 
 class TokenSeguridad(models.Model):
     """
-    Tokens de seguridad para validaciones.
+    Tokens y códigos de seguridad para validaciones (activación de cuenta, recuperación, etc.).
     """
+    TIPO_CHOICES = (
+        ('ACTIVACION', 'Activación de cuenta'),
+        ('RECUPERACION', 'Recuperación de contraseña'),
+    )
+
     id_token = models.AutoField(
         primary_key=True,
         help_text='Identificador único del token.'
@@ -150,13 +170,24 @@ class TokenSeguridad(models.Model):
         max_length=50,
         help_text='Código generado para validación.'
     )
-    fecha_expiracion = models.TimeField(
-        help_text='Fecha y hora de expiración del token.'
+    tipo = models.CharField(
+        max_length=20,
+        choices=TIPO_CHOICES,
+        default='RECUPERACION',
+        help_text='Propósito o contexto del token de seguridad.'
+    )
+    fecha_expiracion = models.DateTimeField(
+        help_text='Fecha y hora exacta de expiración del token.'
     )
     utilizado = models.BooleanField(
+        default=False,
         help_text='Indica si el token ya fue canjeado.'
     )
-    fecha_desbloq = models.TimeField(
+    creado_en = models.DateTimeField(
+        default=timezone.now,
+        help_text='Fecha y hora de generación del token.'
+    )
+    fecha_desbloq = models.DateTimeField(
         null=True,
         blank=True,
         help_text='Fecha y hora de desbloqueo por intentos.'
@@ -165,8 +196,12 @@ class TokenSeguridad(models.Model):
         Usuario,
         on_delete=models.CASCADE,
         db_column='id_usuario',
+        related_name='tokens_seguridad',
         help_text='Identificador único del usuario.'
     )
 
     class Meta:
         db_table = 'token_seguridad'
+        ordering = ['-creado_en']
+
+

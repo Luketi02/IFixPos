@@ -39,19 +39,23 @@ def get_rol_cliente() -> int:
         raise RuntimeError("El rol 'Cliente' no existe en la base de datos.")
 
 
-def obtener_token_valido(*, id_usuario: int, codigo: str) -> TokenSeguridad:
+def obtener_token_valido(*, id_usuario: int, codigo: str, tipo: str = 'RECUPERACION') -> TokenSeguridad:
     """Valida la existencia, no uso y vigencia del TokenSeguridad."""
-    try:
-        token = TokenSeguridad.objects.get(id_usuario=id_usuario, codigo=codigo)
-    except TokenSeguridad.DoesNotExist:
-        raise ValidationError("Token inválido.")
+    from django.utils import timezone as django_timezone
+    token = TokenSeguridad.objects.filter(
+        id_usuario=id_usuario, 
+        codigo=codigo, 
+        tipo=tipo, 
+        utilizado=False
+    ).order_by('-creado_en').first()
+    
+    if not token:
+        raise ValidationError("Token inválido o inexistente.")
         
     if token.utilizado:
         raise ValidationError("El token ya fue utilizado.")
         
-    # Asumiendo que fecha_expiracion es un TimeField, se compara la hora.
-    # En un caso real con cruce de días se prefiere DateTimeField.
-    if token.fecha_expiracion < datetime.now(timezone.utc).time():
+    if token.fecha_expiracion < django_timezone.now():
         raise ValidationError("El token ha expirado.")
         
     return token
@@ -65,6 +69,16 @@ def obtener_configuracion_bool(clave: str) -> bool:
         return val in ('true', '1', 't', 'y', 'yes')
     except ConfiguracionSistema.DoesNotExist:
         return False
+
+
+def obtener_configuracion_texto(clave: str, fallback: str = "noreply@ifixpos.com") -> str:
+    """Obtiene un valor de texto de ConfiguracionSistema. Fail-safe a fallback."""
+    try:
+        config = ConfiguracionSistema.objects.get(clave=clave)
+        val = str(config.valor).strip()
+        return val if val and val != "S/N" else fallback
+    except ConfiguracionSistema.DoesNotExist:
+        return fallback
 
 
 def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
@@ -113,7 +127,7 @@ def filtrar_usuarios(
         qs = qs.filter(id_rol=id_rol)
     
     if activo is not None:
-        pass 
+        qs = qs.filter(is_active=activo)
         
     if id_ciudad is not None:
         qs = qs.filter(direccion__id_ciudad=id_ciudad)
@@ -123,3 +137,4 @@ def filtrar_usuarios(
         qs = qs.filter(direccion__id_ciudad__id_provincia__id_pais=id_pais)
         
     return qs.distinct()
+

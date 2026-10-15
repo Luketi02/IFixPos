@@ -1,13 +1,19 @@
 import jwt
+import secrets
+import os
 from datetime import datetime, timedelta, timezone
+from email.mime.image import MIMEImage
 from typing import Dict, Any, Optional
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.mail import send_mail, EmailMultiAlternatives
+from django.utils import timezone as django_timezone
 from django.utils.crypto import get_random_string
 from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
 from users_app.selectors import (
     obtener_usuario_por_email, email_existe, get_rol_cliente, 
     obtener_token_valido, obtener_configuracion_bool,
+    obtener_configuracion_texto,
     obtener_perfil_usuario, email_existe_excluyendo_usuario,
     perfil_esta_completo
 )
@@ -77,7 +83,7 @@ def generar_tokens_jwt(usuario: Usuario) -> Dict[str, str]:
     return {"access": access_token, "refresh": refresh_token}
 
 def autenticar_y_obtener_tokens(email: str, password_plano: str) -> Dict[str, Any]:
-    """Busca al usuario, valida su contraseña y genera los tokens JWT."""
+    """Busca al usuario, valida su contraseña y estado activo, y genera los tokens JWT."""
     try:
         usuario = obtener_usuario_por_email(email)
     except ValidationError:
@@ -85,37 +91,91 @@ def autenticar_y_obtener_tokens(email: str, password_plano: str) -> Dict[str, An
         
     if not check_password(password_plano, usuario.contrasena):
         raise CredencialesInvalidasError("Correo o contraseña incorrectos.")
+        
+    if not usuario.is_active:
+        raise CredencialesInvalidasError("Tu cuenta no ha sido verificada. Por favor, revisa tu correo electrónico para activarla.")
+
     tokens = generar_tokens_jwt(usuario)
+    perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
     return {
         "tokens": tokens,
         "usuario": {
             "id_usuario": usuario.id_usuario,
             "email": usuario.email,
-            "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None
+            "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+            "nombre": perfil.nombre if perfil and perfil.nombre else "",
+            "apellido": perfil.apellido if perfil and perfil.apellido else "",
+            "dni": perfil.dni if perfil and perfil.dni else "",
+            "telefono": perfil.telefono if perfil and perfil.telefono else "",
+            "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
+            "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else "",
+            "perfil_completo": perfil_esta_completo(usuario.id_usuario)
         }
     }
 
 def autenticar_con_google(google_token: str) -> Dict[str, Any]:
-    """Valida un token de Google y autentica o registra."""
+    """Valida un token de Google, extrae datos del perfil y autentica o registra."""
     try:
         client_id = getattr(settings, 'GOOGLE_CLIENT_ID', None)
         idinfo = id_token.verify_oauth2_token(google_token, requests.Request(), client_id)
         email = idinfo.get('email')
-        try:
-            usuario = obtener_usuario_por_email(email)
-        except ValidationError:
-            usuario = None
         
-        if not usuario:
-            rol_cliente, _ = RolUsuario.objects.get_or_create(
-                nombre_rol='Cliente',
-                defaults={'descripcion': 'Rol generado automáticamente'}
+        # Extraer datos de perfil del payload de Google
+        given_name = idinfo.get('given_name') or ''
+        family_name = idinfo.get('family_name') or ''
+        picture = idinfo.get('picture') or ''
+
+        with transaction.atomic():
+            try:
+                usuario = obtener_usuario_por_email(email)
+            except ValidationError:
+                usuario = None
+            
+            if not usuario:
+                rol_cliente, _ = RolUsuario.objects.get_or_create(
+                    nombre_rol='Cliente',
+                    defaults={'descripcion': 'Rol generado automáticamente'}
+                )
+                usuario = Usuario.objects.create(
+                    email=email,
+                    contrasena=make_password(None),
+                    id_rol=rol_cliente,
+                    fecha_registro=datetime.now(timezone.utc).date(),
+                    is_active=True
+                )
+            
+            # Obtener o crear PerfilUsuario e inyectar given_name, family_name y picture
+            perfil, created = PerfilUsuario.objects.get_or_create(
+                id_usuario=usuario,
+                defaults={
+                    'nombre': given_name,
+                    'apellido': family_name,
+                    'foto_perfil': picture
+                }
             )
-            usuario = Usuario.objects.create(
-                email=email,
-                contrasena=make_password(None),
-                id_rol=rol_cliente,
-                fecha_registro=datetime.now(timezone.utc).date()
+            
+            if not created:
+                modificado = False
+                if given_name and perfil.nombre != given_name:
+                    perfil.nombre = given_name
+                    modificado = True
+                if family_name and perfil.apellido != family_name:
+                    perfil.apellido = family_name
+                    modificado = True
+                if picture and perfil.foto_perfil != picture:
+                    perfil.foto_perfil = picture
+                    modificado = True
+                if modificado:
+                    perfil.save()
+
+            registrar_log_condicional(
+                clave_switch="log_seguridad_accesos",
+                accion="Autenticación con Google exitosa",
+                tipo="INFO",
+                modulo_origen="Autenticación",
+                tabla_afectada="usuario",
+                id_registro_afectado=usuario.id_usuario,
+                id_usuario=usuario.id_usuario
             )
             
         tokens = generar_tokens_jwt(usuario)
@@ -125,27 +185,53 @@ def autenticar_con_google(google_token: str) -> Dict[str, Any]:
                 "id_usuario": usuario.id_usuario,
                 "email": usuario.email,
                 "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+                "nombre": perfil.nombre if perfil and perfil.nombre else "",
+                "apellido": perfil.apellido if perfil and perfil.apellido else "",
+                "dni": perfil.dni if perfil and perfil.dni else "",
+                "telefono": perfil.telefono if perfil and perfil.telefono else "",
+                "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
+                "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else picture,
                 "perfil_completo": perfil_esta_completo(usuario.id_usuario)
             }
         }
     except ValueError as e:
         raise ValueError("Token de Google inválido o expirado.") from e
 
-def completar_perfil_onboarding(*, id_usuario: int, dni: str, telefono: str) -> None:
+def completar_perfil_onboarding(
+    *, 
+    id_usuario: int, 
+    dni: str, 
+    telefono: str,
+    nombre: Optional[str] = None,
+    apellido: Optional[str] = None,
+    telefono_alt: Optional[str] = None
+) -> Dict[str, Any]:
     """Completa el perfil del usuario luego de un inicio de sesión con Google (Onboarding)."""
     with transaction.atomic():
         if PerfilUsuario.objects.filter(dni=dni).exclude(id_usuario=id_usuario).exists():
             raise ValidationError("El DNI ingresado ya pertenece a otra cuenta.")
             
-        usuario = Usuario.objects.get(id_usuario=id_usuario)
+        usuario = Usuario.objects.select_related('id_rol').get(id_usuario=id_usuario)
         
         perfil, created = PerfilUsuario.objects.get_or_create(
             id_usuario=usuario,
-            defaults={'dni': dni, 'telefono': telefono, 'nombre': '', 'apellido': ''}
+            defaults={
+                'dni': dni, 
+                'telefono': telefono, 
+                'nombre': nombre or '', 
+                'apellido': apellido or '',
+                'telefono_alt': telefono_alt or ''
+            }
         )
         if not created:
             perfil.dni = dni
             perfil.telefono = telefono
+            if nombre is not None:
+                perfil.nombre = nombre
+            if apellido is not None:
+                perfil.apellido = apellido
+            if telefono_alt is not None:
+                perfil.telefono_alt = telefono_alt
             perfil.save()
             
         registrar_log_condicional(
@@ -157,6 +243,161 @@ def completar_perfil_onboarding(*, id_usuario: int, dni: str, telefono: str) -> 
             id_registro_afectado=usuario.id_usuario,
             id_usuario=usuario.id_usuario
         )
+
+        return {
+            "mensaje": "Perfil completado exitosamente.",
+            "usuario": {
+                "id_usuario": usuario.id_usuario,
+                "email": usuario.email,
+                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+                "nombre": perfil.nombre or "",
+                "apellido": perfil.apellido or "",
+                "dni": perfil.dni,
+                "telefono": perfil.telefono,
+                "telefono_alt": perfil.telefono_alt or "",
+                "foto_perfil": perfil.foto_perfil or "",
+                "perfil_completo": True
+            }
+        }
+
+def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[str] = None) -> TokenSeguridad:
+    """
+    Genera un código OTP de 6 dígitos único en TokenSeguridad (tipo='ACTIVACION'),
+    lo guarda con vigencia de 15 minutos y despacha el correo electrónico de verificación.
+    """
+    codigo_otp = f"{secrets.randbelow(1000000):06d}"
+    expiracion = django_timezone.now() + timedelta(minutes=15)
+    
+    # Invalida códigos previos de activación sin utilizar
+    TokenSeguridad.objects.filter(id_usuario=usuario, tipo='ACTIVACION', utilizado=False).update(utilizado=True)
+    
+    token_obj = TokenSeguridad.objects.create(
+        id_usuario=usuario,
+        codigo=codigo_otp,
+        tipo='ACTIVACION',
+        fecha_expiracion=expiracion,
+        utilizado=False
+    )
+    
+    if not nombre:
+        try:
+            perfil = PerfilUsuario.objects.get(id_usuario=usuario)
+            nombre = perfil.nombre or ""
+        except PerfilUsuario.DoesNotExist:
+            nombre = ""
+
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    email_emisor = obtener_configuracion_texto(
+        'emailInfo', 
+        fallback=getattr(settings, 'DEFAULT_FROM_EMAIL', 'lucas.mino1508@gmail.com')
+    )
+    if not email_emisor or email_emisor == 'S/N' or '@' not in email_emisor:
+        email_emisor = getattr(settings, 'DEFAULT_FROM_EMAIL', 'lucas.mino1508@gmail.com')
+    
+    asunto = "🔐 Código de verificación - IFixPos"
+    cuerpo = (
+        f"{saludo}\n\n"
+        f"Gracias por registrarte en IFixPos.\n"
+        f"Tu código de verificación es: {codigo_otp}\n\n"
+        f"Este código expirará en 15 minutos.\n"
+        f"Si no solicitaste este registro, por favor ignora este mensaje.\n\n"
+        f"Atentamente,\n"
+        f"El equipo de IFixPos"
+    )
+
+    cuerpo_html = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Verificación de Correo - IFixPos</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #0B1120; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #F8FAFC;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #0B1120; padding: 40px 10px;">
+        <tr>
+          <td align="center">
+            <!-- Contenedor Principal / Tarjeta -->
+            <table role="presentation" width="100%" style="max-width: 520px; background-color: #1E293B; border-radius: 16px; border: 1px solid rgba(6, 182, 212, 0.4); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); overflow: hidden;">
+              
+              <!-- Header con Logo y Acento Neón -->
+              <tr>
+                <td style="padding: 32px 32px 16px 32px; text-align: center; border-bottom: 1px solid rgba(51, 65, 85, 0.6);">
+                  <div style="display: inline-block; padding: 12px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: 12px; margin-bottom: 12px;">
+                    <img src="cid:logo_ifixpos" alt="Logo IFixPos" width="323" height="131" style="display: block; border: 0; margin: 0 auto;" />
+                  </div>
+                  <h1 style="margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px; color: #F8FAFC;">
+                    IFix<span style="color: #06B6D4;">Pos</span>
+                  </h1>
+                  <p style="margin: 6px 0 0 0; font-size: 13px; color: #94A3B8; letter-spacing: 0.5px; text-transform: uppercase;">
+                    Verificación de Seguridad
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Cuerpo Principal -->
+              <tr>
+                <td style="padding: 32px 32px 24px 32px; text-align: center;">
+                  <h2 style="margin: 0 0 12px 0; font-size: 20px; font-weight: 600; color: #F8FAFC;">
+                    {saludo}
+                  </h2>
+                  <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #CBD5E1;">
+                    Gracias por unirte a <strong>IFixPos</strong>. Para activar tu cuenta de forma segura, ingresa el siguiente código de verificación de un solo uso (OTP):
+                  </p>
+
+                  <!-- Caja Destacada del Código OTP -->
+                  <div style="background-color: #0F172A; border: 2px dashed #8B5CF6; border-radius: 12px; padding: 20px; margin: 24px 0; display: inline-block; width: 80%;">
+                    <span style="font-family: 'Courier New', Courier, monospace; font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #06B6D4; display: block;">
+                      {codigo_otp}
+                    </span>
+                  </div>
+
+                  <!-- Información de Expiración -->
+                  <p style="margin: 0 0 16px 0; font-size: 13px; color: #94A3B8;">
+                    ⏳ Este código es válido durante los próximos <strong style="color: #E2E8F0;">15 minutos</strong>.
+                  </p>
+                  <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #64748B;">
+                    Si no creaste una cuenta en IFixPos, puedes desestimar este mensaje de forma segura.
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="padding: 20px 32px; background-color: #0F172A; text-align: center; border-top: 1px solid rgba(51, 65, 85, 0.6);">
+                  <p style="margin: 0; font-size: 12px; color: #64748B;">
+                    © 2026 IFixPos ERP — Sistema de Gestión Integral de Reparaciones y POS.
+                  </p>
+                </td>
+              </tr>
+
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+    
+    email_msg = EmailMultiAlternatives(
+        subject=asunto,
+        body=cuerpo,
+        from_email=email_emisor,
+        to=[usuario.email]
+    )
+    email_msg.attach_alternative(cuerpo_html, "text/html")
+
+    # Incrustar el logo local vía CID (Content-ID) para visualización sin depender de servidores externos ni bloqueos
+    logo_path = os.path.join(settings.BASE_DIR.parent, 'Frontend', 'src', 'assets', 'img', 'LogoIFixPos.png')
+    if os.path.exists(logo_path):
+        with open(logo_path, 'rb') as f_img:
+            mime_logo = MIMEImage(f_img.read())
+            mime_logo.add_header('Content-ID', '<logo_ifixpos>')
+            mime_logo.add_header('Content-Disposition', 'inline', filename='LogoIFixPos.png')
+            email_msg.attach(mime_logo)
+    email_msg.send(fail_silently=False)
+    
+    return token_obj
 
 def registrar_cuenta_publica(
     *, 
@@ -173,38 +414,75 @@ def registrar_cuenta_publica(
         raise ValueError("El captcha_token es inválido o nulo.")
         
     with transaction.atomic():
-        if email_existe(email):
-            raise ValidationError("El correo electrónico ya se encuentra registrado")
+        usuario_existente = Usuario.objects.filter(email=email).first()
+        if usuario_existente:
+            if usuario_existente.is_active:
+                raise ValidationError("El correo electrónico ya se encuentra registrado")
             
-        rol_cliente_id = get_rol_cliente()
-        
-        usuario = Usuario.objects.create(
-            email=email,
-            contrasena=make_password(contrasena),
-            fecha_registro=datetime.now(timezone.utc).date(),
-            id_rol_id=rol_cliente_id
-        )
-        
-        PerfilUsuario.objects.create(
-            id_usuario=usuario,
-            nombre=nombre,
-            apellido=apellido,
-            dni=dni,
-            telefono=telefono,
-            telefono_alt=telefono_alt
-        )
-        
-        registrar_log_condicional(
-            clave_switch="log_seguridad_accesos",
-            accion="Registro de cuenta pública",
-            tipo="INFO",
-            modulo_origen="Usuarios",
-            tabla_afectada="usuario",
-            id_registro_afectado=usuario.id_usuario,
-            id_usuario=usuario.id_usuario
-        )
-        
-    return usuario
+            # Cuenta previa aún no verificada (is_active=False): Actualizar datos para permitir corrección
+            usuario = usuario_existente
+            usuario.contrasena = make_password(contrasena)
+            usuario.fecha_registro = datetime.now(timezone.utc).date()
+            usuario.save(update_fields=['contrasena', 'fecha_registro'])
+            
+            PerfilUsuario.objects.update_or_create(
+                id_usuario=usuario,
+                defaults={
+                    'nombre': nombre,
+                    'apellido': apellido,
+                    'dni': dni,
+                    'telefono': telefono,
+                    'telefono_alt': telefono_alt
+                }
+            )
+            
+            # Generar y enviar nuevo código numérico de 6 dígitos (15 min)
+            generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
+            
+            registrar_log_condicional(
+                clave_switch="log_seguridad_accesos",
+                accion="Actualización de datos y reenvío de OTP para cuenta no verificada",
+                tipo="INFO",
+                modulo_origen="Usuarios",
+                tabla_afectada="usuario",
+                id_registro_afectado=usuario.id_usuario,
+                id_usuario=usuario.id_usuario
+            )
+        else:
+            rol_cliente_id = get_rol_cliente()
+            
+            # El usuario se crea inactivo (is_active=False) hasta validar su correo
+            usuario = Usuario.objects.create(
+                email=email,
+                contrasena=make_password(contrasena),
+                fecha_registro=datetime.now(timezone.utc).date(),
+                id_rol_id=rol_cliente_id,
+                is_active=False
+            )
+            
+            PerfilUsuario.objects.create(
+                id_usuario=usuario,
+                nombre=nombre,
+                apellido=apellido,
+                dni=dni,
+                telefono=telefono,
+                telefono_alt=telefono_alt
+            )
+            
+            # Generar y enviar código numérico de 6 dígitos (15 min)
+            generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
+            
+            registrar_log_condicional(
+                clave_switch="log_seguridad_accesos",
+                accion="Registro de cuenta pública y envío de código OTP",
+                tipo="INFO",
+                modulo_origen="Usuarios",
+                tabla_afectada="usuario",
+                id_registro_afectado=usuario.id_usuario,
+                id_usuario=usuario.id_usuario
+            )
+            
+        return usuario
 
 def registrar_cuenta_interna(
     *, 
@@ -299,11 +577,13 @@ def generar_token_seguridad(*, email: str) -> str:
     with transaction.atomic():
         usuario = obtener_usuario_por_email(email)
         codigo = get_random_string(length=6).upper()
-        ahora = datetime.now(timezone.utc)
-        expiracion = (ahora + timedelta(minutes=5)).time()
+        expiracion = django_timezone.now() + timedelta(minutes=15)
+        
+        TokenSeguridad.objects.filter(id_usuario=usuario, tipo='RECUPERACION', utilizado=False).update(utilizado=True)
         
         TokenSeguridad.objects.create(
             codigo=codigo,
+            tipo='RECUPERACION',
             fecha_expiracion=expiracion,
             utilizado=False,
             id_usuario=usuario
@@ -317,7 +597,7 @@ def validar_y_restablecer_credencial(*, email: str, token: str, nueva_contrasena
     """Valida el token y restablece la contraseña del usuario."""
     with transaction.atomic():
         usuario = obtener_usuario_por_email(email)
-        token_obj = obtener_token_valido(id_usuario=usuario.id_usuario, codigo=token)
+        token_obj = obtener_token_valido(id_usuario=usuario.id_usuario, codigo=token, tipo='RECUPERACION')
         
         usuario.contrasena = make_password(nueva_contrasena)
         usuario.save()
@@ -409,3 +689,69 @@ def editar_perfil_usuario(
             "telefono_alt": perfil.telefono_alt,
             "foto_perfil": perfil.foto_perfil
         }
+
+def verificar_y_activar_usuario(email: str, codigo: str) -> Dict[str, Any]:
+    """
+    Valida el código de 6 dígitos OTP de verificación. Si es válido y no expiró,
+    activa la cuenta del usuario (is_active = True), invalida el código y retorna los tokens JWT.
+    """
+    with transaction.atomic():
+        try:
+            usuario = obtener_usuario_por_email(email)
+        except ValidationError:
+            raise ValidationError("No existe ningún usuario registrado con el correo electrónico proporcionado.")
+            
+        if usuario.is_active:
+            raise ValidationError("La cuenta ya se encuentra activa y verificada.")
+            
+        token_obj = TokenSeguridad.objects.filter(
+            id_usuario=usuario,
+            codigo=codigo,
+            tipo='ACTIVACION',
+            utilizado=False
+        ).order_by('-creado_en').first()
+        
+        if not token_obj:
+            raise ValidationError("El código de verificación es inválido o incorrecto.")
+            
+        if token_obj.fecha_expiracion < django_timezone.now():
+            raise ValidationError("El código de verificación ha expirado. Por favor, solicita uno nuevo.")
+            
+        # Activar la cuenta
+        usuario.is_active = True
+        usuario.save(update_fields=['is_active'])
+        
+        # Invalidar el token utilizado
+        token_obj.utilizado = True
+        token_obj.save(update_fields=['utilizado'])
+        
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
+            accion="Verificación de correo y activación de cuenta",
+            tipo="SEGURIDAD",
+            modulo_origen="Autenticación",
+            tabla_afectada="usuario",
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
+        )
+        
+        tokens = generar_tokens_jwt(usuario)
+        perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
+        
+        return {
+            "mensaje": "Cuenta verificada y activada exitosamente.",
+            "tokens": tokens,
+            "usuario": {
+                "id_usuario": usuario.id_usuario,
+                "email": usuario.email,
+                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+                "nombre": perfil.nombre if perfil and perfil.nombre else "",
+                "apellido": perfil.apellido if perfil and perfil.apellido else "",
+                "dni": perfil.dni if perfil and perfil.dni else "",
+                "telefono": perfil.telefono if perfil and perfil.telefono else "",
+                "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
+                "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else "",
+                "perfil_completo": perfil_esta_completo(usuario.id_usuario)
+            }
+        }
+
