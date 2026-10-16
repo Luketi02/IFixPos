@@ -39,3 +39,15 @@ def obtener_notificacion_por_id(id_notificacion: int) -> Optional[Notificacion]:
         return Notificacion.objects.get(id_notificacion=id_notificacion)
     except Notificacion.DoesNotExist:
         return None
+
+def obtener_todas_las_configuraciones() -> dict:
+    """
+    Consulta todos los registros de ConfiguracionSistema y
+    retorna un diccionario simple: {clave: valor} para poblar el frontend.
+    """
+    configuraciones = ConfiguracionSistema.objects.all()
+    return {
+        config.clave: config.valor
+        for config in configuraciones
+        if config.clave is not None
+    }

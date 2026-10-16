@@ -6,7 +6,7 @@ from django.db import transaction
 from django.utils import timezone as django_timezone
 from email.mime.image import MIMEImage
 
-from core_app.models import Notificacion
+from core_app.models import Notificacion, ConfiguracionSistema, LogSistema
 from core_app.selectors import obtener_email_emisor
 
 def enmascarar_contenido_sensible(texto: str, codigo_sensible: Optional[str] = None) -> str:
@@ -107,3 +107,115 @@ def marcar_ultima_notificacion_como_leida(*, usuario: Any, tipo: str) -> Optiona
             notificacion.leida = True
             notificacion.save(update_fields=['leida'])
         return notificacion
+
+
+@transaction.atomic
+def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict) -> dict:
+    """
+    Actualiza de forma transaccional los parámetros en ConfiguracionSistema
+    y registra el evento de auditoría en LogSistema (CU-42).
+    """
+    ahora = django_timezone.now()
+    claves_alteradas = []
+
+    for clave, valor in datos_validados.items():
+        if clave is None:
+            continue
+        config = ConfiguracionSistema.objects.filter(clave=clave).first()
+        if config:
+            config.valor = str(valor) if valor is not None else ""
+            config.ultima_modif = ahora
+            config.save()
+            claves_alteradas.append(clave)
+
+    # Detalle descriptivo de auditoría
+    if claves_alteradas:
+        resumen_claves = ", ".join(claves_alteradas)
+        detalle_log = f"Claves modificadas ({len(claves_alteradas)}): {resumen_claves}"
+    else:
+        detalle_log = "Sin modificaciones registradas en configuración del sistema."
+
+    # Respetar el límite de max_length=1000 del campo detalle en LogSistema
+    detalle_log = detalle_log[:1000]
+
+    # Auditoría (LogSistema)
+    LogSistema.objects.create(
+        fecha_hora=ahora.time(),
+        accion="Actualización de Configuración Global del Sistema",
+        detalle=detalle_log,
+        tipo="AUDITORIA_SISTEMA",
+        modulo_origen="core_app",
+        tabla_afectada="configuracion_sistema",
+        id_usuario=usuario_admin
+    )
+
+    return {
+        "mensaje": "Configuraciones globales actualizadas exitosamente.",
+        "claves_actualizadas": claves_alteradas,
+        "total": len(claves_alteradas)
+    }
+
+
+def guardar_logo_empresa(*, archivo: Any, usuario_admin: Any) -> str:
+    """
+    Valida y guarda un archivo de imagen para el logo oficial de la empresa
+    en MEDIA_ROOT/empresa/. Actualiza el parámetro 'imagenLocal' en ConfiguracionSistema
+    y registra el evento de auditoría en LogSistema.
+    """
+    from django.core.exceptions import ValidationError
+
+    if not archivo:
+        raise ValidationError("No se proporcionó ningún archivo de imagen.")
+
+    # Validar extensión
+    ext = os.path.splitext(archivo.name)[1].lower()
+    formatos_permitidos = ['.png', '.jpg', '.jpeg', '.webp', '.svg']
+    if ext not in formatos_permitidos:
+        raise ValidationError(f"Formato no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
+
+    # Validar tamaño (máximo 5 MB)
+    if archivo.size > 5 * 1024 * 1024:
+        raise ValidationError("El archivo supera el tamaño máximo permitido de 5 MB.")
+
+    carpeta_destino = os.path.join(settings.MEDIA_ROOT, 'empresa')
+    os.makedirs(carpeta_destino, exist_ok=True)
+
+    timestamp = int(django_timezone.now().timestamp())
+    nombre_archivo = f"logo_empresa_{timestamp}{ext}"
+    ruta_completa = os.path.join(carpeta_destino, nombre_archivo)
+
+    with open(ruta_completa, 'wb+') as destino:
+        for chunk in archivo.chunks():
+            destino.write(chunk)
+
+    url_relativa = f"/media/empresa/{nombre_archivo}"
+
+    # Actualizar en ConfiguracionSistema de forma atómica
+    with transaction.atomic():
+        ahora = django_timezone.now()
+        config = ConfiguracionSistema.objects.filter(clave='imagenLocal').first()
+        if config:
+            config.valor = url_relativa
+            config.ultima_modif = ahora
+            config.save(update_fields=['valor', 'ultima_modif'])
+        else:
+            ConfiguracionSistema.objects.create(
+                clave='imagenLocal',
+                descripcion='Logo o isotipo de la empresa',
+                valor=url_relativa,
+                ultima_modif=ahora
+            )
+
+        # Auditoría
+        LogSistema.objects.create(
+            fecha_hora=ahora.time(),
+            accion="Actualización de Logo Institucional",
+            detalle=f"Archivo guardado como {url_relativa}",
+            tipo="AUDITORIA_SISTEMA",
+            modulo_origen="core_app",
+            tabla_afectada="configuracion_sistema",
+            id_usuario=usuario_admin
+        )
+
+    return url_relativa
+

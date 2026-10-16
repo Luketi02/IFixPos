@@ -24,7 +24,7 @@ class ConfiguracionSistema(models.Model):
         help_text='Descripción del parámetro de configuración.'
     )
     valor = models.CharField(
-        max_length=10,
+        max_length=255,
         null=True,
         blank=True,
         help_text='Valor asignado al parámetro.'

@@ -16,6 +16,8 @@ import EditProfileScreen from './pages/auth/EditProfileScreen';
 import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
 import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
 import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
+import AdminConfigScreen from './pages/admin/AdminConfigScreen';
+import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH2_CLIENT_ID || '';
 
@@ -50,9 +52,11 @@ function App() {
                 <Route path="/tareas-tecnico" element={<TechnicianTasksScreen />} />
               </Route>
 
-              {/* Vista de Administrador (/admin/dashboard): Exclusivo Administradores */}
+              {/* Vistas de Administrador: Exclusivo Administradores */}
               <Route element={<RoleRoute allowedRoles={['admin']} />}>
                 <Route path="/admin/dashboard" element={<AdminDashboardScreen />} />
+                <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
+                <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
               </Route>
 
               {/* Edición de Perfil (CU-05): Accesible para todo usuario autenticado */}

@@ -92,6 +92,16 @@ export default function EditProfileScreen() {
     }
   }, [serverError]);
 
+  // Auto-ocultar mensaje de éxito tras 5 segundos
+  useEffect(() => {
+    if (successMsg) {
+      const timer = setTimeout(() => {
+        setSuccessMsg('');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMsg]);
+
   // Validaciones en tiempo real
   const validateField = (name, value) => {
     const val = typeof value === 'string' ? value.trim() : '';
@@ -194,7 +204,7 @@ export default function EditProfileScreen() {
     });
 
     if (!isFormValid()) {
-      setServerError('Por favor, revisa y corrige los campos resaltados.');
+      setServerError('No fue posible guardar: Por favor, revisa y corrige los campos resaltados en rojo.');
       return;
     }
 
@@ -232,32 +242,38 @@ export default function EditProfileScreen() {
         }
       );
 
-      setSuccessMsg('¡Perfil actualizado exitosamente!');
+      setSuccessMsg('Datos guardados con éxito');
 
-      // Actualizar estado en el AuthContext
+      // Actualizar estado en el AuthContext para reflejar nombre y datos actualizados
       updateUser(response.data);
 
-      // Retorno suave tras 1.5s
-      setTimeout(() => {
-        const dashboardPath = getDashboardPath(user?.rol);
-        navigate(dashboardPath, { replace: true });
-      }, 1500);
+      // El usuario permanece en la pestaña de editar perfil (sin redirección automática)
 
     } catch (error) {
       console.error('Error al editar perfil:', error);
       if (error.response?.data) {
         const data = error.response.data;
-        if (typeof data === 'string') {
+        const newServerErrors = {};
+        ['nombre', 'apellido', 'email', 'dni', 'telefono', 'telefono_alt'].forEach((field) => {
+          if (data[field]) {
+            newServerErrors[field] = Array.isArray(data[field]) ? data[field][0] : data[field];
+          }
+        });
+
+        if (Object.keys(newServerErrors).length > 0) {
+          setErrors((prev) => ({ ...prev, ...newServerErrors }));
+          setServerError('No se pudo guardar: Hay campos no válidos resaltados en el formulario.');
+        } else if (typeof data === 'string') {
           setServerError(data);
         } else if (data.detail) {
           setServerError(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
         } else if (data.email) {
           setServerError(Array.isArray(data.email) ? data.email[0] : data.email);
         } else {
-          setServerError('Ocurrió un error al actualizar los datos. Revisa el formulario.');
+          setServerError('Ocurrió un error al actualizar los datos. Revisa los campos resaltados.');
         }
       } else {
-        setServerError('No fue posible contactar al servidor. Revisa tu conexión.');
+        setServerError('No fue posible contactar al servidor. Revisa tu conexión de red.');
       }
     } finally {
       setIsLoading(false);
@@ -291,6 +307,33 @@ export default function EditProfileScreen() {
           </div>
         </div>
       </header>
+
+      {/* Toast Flotante de Éxito al Guardar */}
+      <AnimatePresence>
+        {successMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            transition={{ duration: 0.25 }}
+            className="fixed top-20 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-slate-900/95 border border-emerald-500/60 shadow-[0_10px_35px_rgba(16,185,129,0.3)] text-white backdrop-blur-xl"
+          >
+            <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 text-lg font-bold">
+              ✓
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white tracking-tight">Datos Guardados</p>
+              <p className="text-xs text-emerald-300 font-mono">{successMsg}</p>
+            </div>
+            <button
+              onClick={() => setSuccessMsg('')}
+              className="text-slate-400 hover:text-white text-xs ml-2 font-mono"
+            >
+              ✕
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Contenedor Principal */}
       <main className="flex-1 max-w-4xl mx-auto px-4 py-8 sm:py-12 w-full">
@@ -451,11 +494,18 @@ export default function EditProfileScreen() {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     placeholder="Tu nombre"
-                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                      errors.nombre ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none transition-all ${
+                      errors.nombre
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                        : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                     }`}
                   />
-                  {errors.nombre && <p className="text-[11px] text-rose-400 mt-1">{errors.nombre}</p>}
+                  {errors.nombre && (
+                    <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      <span>{errors.nombre}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -471,11 +521,18 @@ export default function EditProfileScreen() {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     placeholder="Tu apellido"
-                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                      errors.apellido ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none transition-all ${
+                      errors.apellido
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                        : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                     }`}
                   />
-                  {errors.apellido && <p className="text-[11px] text-rose-400 mt-1">{errors.apellido}</p>}
+                  {errors.apellido && (
+                    <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      <span>{errors.apellido}</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -494,11 +551,18 @@ export default function EditProfileScreen() {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     placeholder="Solo números (ej: 42123456)"
-                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                      errors.dni ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none transition-all ${
+                      errors.dni
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                        : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                     }`}
                   />
-                  {errors.dni && <p className="text-[11px] text-rose-400 mt-1">{errors.dni}</p>}
+                  {errors.dni && (
+                    <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      <span>{errors.dni}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -534,11 +598,18 @@ export default function EditProfileScreen() {
                   onChange={handleChange}
                   onBlur={handleBlur}
                   placeholder="tu@correo.com"
-                  className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                    errors.email ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                  className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none transition-all ${
+                    errors.email
+                      ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                      : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                   }`}
                 />
-                {errors.email && <p className="text-[11px] text-rose-400 mt-1">{errors.email}</p>}
+                {errors.email && (
+                  <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                    <span>⚠️</span>
+                    <span>{errors.email}</span>
+                  </p>
+                )}
                 <p className="text-[11px] text-slate-400 mt-1">
                   Este correo se utiliza para recibir notificaciones y códigos temporales de seguridad.
                 </p>
@@ -558,11 +629,18 @@ export default function EditProfileScreen() {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     placeholder="+5491112345678"
-                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                      errors.telefono ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none transition-all ${
+                      errors.telefono
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                        : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                     }`}
                   />
-                  {errors.telefono && <p className="text-[11px] text-rose-400 mt-1">{errors.telefono}</p>}
+                  {errors.telefono && (
+                    <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      <span>{errors.telefono}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -577,11 +655,18 @@ export default function EditProfileScreen() {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     placeholder="+5491187654321"
-                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all ${
-                      errors.telefono_alt ? 'border-rose-500/80' : 'border-slate-700 focus:border-cyan-500'
+                    className={`w-full px-4 py-2.5 bg-slate-900 border rounded-xl text-slate-100 placeholder-slate-500 text-sm font-mono focus:outline-none transition-all ${
+                      errors.telefono_alt
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 focus:border-rose-500 focus:ring-rose-500/40 bg-rose-950/15'
+                        : 'border-slate-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30'
                     }`}
                   />
-                  {errors.telefono_alt && <p className="text-[11px] text-rose-400 mt-1">{errors.telefono_alt}</p>}
+                  {errors.telefono_alt && (
+                    <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      <span>{errors.telefono_alt}</span>
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

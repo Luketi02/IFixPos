@@ -170,6 +170,38 @@ class GoogleLoginTestCase(TestCase):
         self.assertEqual(perfil.apellido, "Galperin")
         self.assertEqual(perfil.foto_perfil, "https://lh3.googleusercontent.com/photo.jpg")
 
+    @patch("users_app.services.id_token.verify_oauth2_token")
+    def test_google_login_usuario_existente_no_sobrescribe_datos_personalizados(self, mock_verify):
+        mock_verify.return_value = {
+            "email": "lucas@test.com",
+            "given_name": "Lucas",
+            "family_name": "GoogleApellido",
+            "picture": "https://google.com/otra_foto.jpg",
+        }
+
+        # 1. Crear el usuario inicialmente vía Google
+        autenticar_con_google("fake_google_token_1")
+        usuario = Usuario.objects.get(email="lucas@test.com")
+        perfil = PerfilUsuario.objects.get(id_usuario=usuario)
+
+        # 2. El usuario personaliza su nombre en 'Editar Perfil'
+        perfil.nombre = "Lucas Juan"
+        perfil.apellido = "Pérez"
+        perfil.foto_perfil = "https://miservidor.com/mi_foto_custom.jpg"
+        perfil.save()
+
+        # 3. El usuario vuelve a iniciar sesión con Google
+        resultado = autenticar_con_google("fake_google_token_2")
+
+        # 4. Verificar que se mantuvieron intactos los datos personalizados
+        perfil.refresh_from_db()
+        self.assertEqual(perfil.nombre, "Lucas Juan")
+        self.assertEqual(perfil.apellido, "Pérez")
+        self.assertEqual(perfil.foto_perfil, "https://miservidor.com/mi_foto_custom.jpg")
+        self.assertEqual(resultado["usuario"]["nombre"], "Lucas Juan")
+        self.assertEqual(resultado["usuario"]["apellido"], "Pérez")
+        self.assertEqual(resultado["usuario"]["foto_perfil"], "https://miservidor.com/mi_foto_custom.jpg")
+
 
 class VerificacionCorreoOTPTestCase(TestCase):
     """Pruebas unitarias para el Requerimiento 3: Flujo OTP y activación de cuenta vía TokenSeguridad."""

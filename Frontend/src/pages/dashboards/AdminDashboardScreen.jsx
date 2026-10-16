@@ -1,76 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  DashboardSquare01Icon,
-  Home01Icon,
-  Rocket01Icon,
-  UserGroupIcon,
-  PackageIcon,
-  Layers01Icon,
-  Settings02Icon,
-  ShoppingBag01Icon,
-  Notification03Icon,
-  CursorPointer01Icon
-} from '@hugeicons/core-free-icons';
 import useAuth from '../../context/useAuth';
-import BranchedMenu from '../../components/navigation/BranchedMenu';
+import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
-import logoEmpresa from '../../assets/img/itemLogoVentana.png';
-
-const ADMIN_MENU_ITEMS = [
-  {
-    label: 'Inicio & Métricas',
-    children: [
-      { value: 'overview', label: 'Panel Principal', icon: Home01Icon },
-      { value: 'kpis', label: 'Métricas Globales', icon: DashboardSquare01Icon },
-      { value: 'quick-actions', label: 'Acciones Rápidas', icon: Rocket01Icon }
-    ]
-  },
-  {
-    label: 'Gestión de Usuarios',
-    children: [
-      { value: 'users-list', label: 'Usuarios y Roles', icon: UserGroupIcon },
-      { value: 'users-clients', label: 'Cartera de Clientes', icon: UserGroupIcon },
-      { value: 'users-techs', label: 'Personal Técnico', icon: UserGroupIcon }
-    ]
-  },
-  {
-    label: 'Catálogo & Inventario',
-    children: [
-      { value: 'catalog-products', label: 'Productos & Repuestos', icon: PackageIcon },
-      { value: 'catalog-categories', label: 'Categorías y Familias', icon: Layers01Icon },
-      { value: 'inventory-stock', label: 'Control de Stock', icon: PackageIcon }
-    ]
-  },
-  {
-    label: 'Taller & Reparaciones',
-    children: [
-      { value: 'workshop-orders', label: 'Órdenes de Reparación', icon: Settings02Icon },
-      { value: 'workshop-diagnostics', label: 'Diagnósticos de Entrada', icon: CursorPointer01Icon },
-      { value: 'workshop-logs', label: 'Bitácoras Técnicas', icon: Layers01Icon }
-    ]
-  },
-  {
-    label: 'Ventas & Facturación',
-    children: [
-      { value: 'sales-pos', label: 'Punto de Venta (POS)', icon: ShoppingBag01Icon },
-      { value: 'sales-history', label: 'Historial de Ventas', icon: ShoppingBag01Icon },
-      { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon }
-    ]
-  },
-  {
-    label: 'Configuración del Sistema',
-    children: [
-      { value: 'config-general', label: 'Parámetros Globales', icon: Settings02Icon },
-      { value: 'config-notifications', label: 'Notificaciones & Correo', icon: Notification03Icon },
-      { value: 'config-audit', label: 'Auditoría & Logs', icon: Layers01Icon }
-    ]
-  }
-];
 
 export default function AdminDashboardScreen() {
   const { user, logout } = useAuth();
-  const [activeMenu, setActiveMenu] = useState('overview');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [activeMenu, setActiveMenu] = useState(location.state?.activeMenu || 'overview');
+
+  useEffect(() => {
+    if (location.state?.activeMenu) {
+      setActiveMenu(location.state.activeMenu);
+    }
+  }, [location.state?.activeMenu]);
 
   const nombreAdmin = user?.nombre || user?.email?.split('@')[0] || 'Administrador';
   const nombreCompleto = [user?.nombre, user?.apellido].filter(Boolean).join(' ') || user?.email || 'Administrador';
@@ -80,53 +25,16 @@ export default function AdminDashboardScreen() {
     <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
       
       {/* 1. BARRA LATERAL (SIDEBAR PERSISTENTE IZQUIERDO) */}
-      <aside className="w-full md:w-72 bg-[#1E293B] border-r border-slate-700/80 flex flex-col shrink-0 md:sticky md:top-0 md:h-screen z-40">
-        
-        {/* Cabecera del Sidebar: Logo IFixPos */}
-        <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img
-              src={logoEmpresa}
-              alt="Logo IFixPos"
-              className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(139,92,246,0.4)]"
-            />
-            <div>
-              <span className="font-extrabold text-lg tracking-tight text-white">
-                IFix<span className="text-[#06B6D4]">Pos</span>
-              </span>
-              <span className="text-[10px] ml-2 px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/30 uppercase font-mono tracking-wider font-semibold">
-                Admin ERP
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Navegación Vertical con BranchedMenu Adaptado */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 custom-scrollbar">
-          <p className="text-[11px] font-mono uppercase tracking-wider text-slate-400 px-3 mb-2 font-semibold">
-            Módulos del Sistema
-          </p>
-          
-          <BranchedMenu
-            items={ADMIN_MENU_ITEMS}
-            defaultOpen={[0, 1]}
-            defaultActive="overview"
-            onSelect={(val) => setActiveMenu(val)}
-            color="#94A3B8"
-            accentColor="#8B5CF6"
-            lineColor="#334155"
-            width={260}
-            rowHeight={38}
-            indent={36}
-            trunk={12}
-            radius={10}
-            lineWidth={1.5}
-            fontSize={13.5}
-            drawDuration={360}
-            foldDuration={260}
-          />
-        </div>
-      </aside>
+      <AdminSidebar
+        activeMenu={activeMenu}
+        onSelectMenu={(val) => {
+          if (val === 'config-general' || val === 'config-notifications' || val === 'config-audit') {
+            navigate('/admin/configuracion');
+          } else {
+            setActiveMenu(val);
+          }
+        }}
+      />
 
       {/* 2. ÁREA DE CONTENIDO PRINCIPAL (COLUMNA DERECHA) */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
@@ -275,7 +183,7 @@ export default function AdminDashboardScreen() {
                       Configuración general, motor central de notificaciones enmascaradas y auditoría de eventos.
                     </p>
                     <button
-                      onClick={() => setActiveMenu('config-general')}
+                      onClick={() => navigate('/admin/configuracion')}
                       className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
                     >
                       Configurar Sistema &rarr;

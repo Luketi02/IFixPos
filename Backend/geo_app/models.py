@@ -122,6 +122,10 @@ class Direccion(models.Model):
         db_column='id_usuario',
         help_text='Identificador único del usuario.'
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Indica si la dirección está activa (borrado lógico).'
+    )
 
     class Meta:
         db_table = 'direccion'

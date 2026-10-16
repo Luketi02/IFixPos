@@ -153,15 +153,17 @@ def autenticar_con_google(google_token: str) -> Dict[str, Any]:
                 }
             )
             
+            # Si el usuario ya existía, NO sobreescribimos los datos personalizados por el usuario.
+            # Únicamente completamos información si los campos actuales en la BD estuviesen vacíos.
             if not created:
                 modificado = False
-                if given_name and perfil.nombre != given_name:
+                if not perfil.nombre and given_name:
                     perfil.nombre = given_name
                     modificado = True
-                if family_name and perfil.apellido != family_name:
+                if not perfil.apellido and family_name:
                     perfil.apellido = family_name
                     modificado = True
-                if picture and perfil.foto_perfil != picture:
+                if not perfil.foto_perfil and picture:
                     perfil.foto_perfil = picture
                     modificado = True
                 if modificado:
