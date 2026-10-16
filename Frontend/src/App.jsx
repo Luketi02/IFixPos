@@ -6,6 +6,7 @@ import OnboardingGuard from './components/routes/OnboardingGuard';
 import PublicRoute from './components/routes/PublicRoute';
 import LoginScreen from './pages/auth/LoginScreen';
 import RegisterScreen from './pages/auth/RegisterScreen';
+import RecoverPasswordScreen from './pages/auth/RecoverPasswordScreen';
 import CompleteProfileScreen from './pages/auth/CompleteProfileScreen';
 import DashboardScreen from './pages/dashboard/DashboardScreen';
 
@@ -21,6 +22,7 @@ function App() {
             <Route element={<PublicRoute />}>
               <Route path="/login" element={<LoginScreen />} />
               <Route path="/register" element={<RegisterScreen />} />
+              <Route path="/recuperar-acceso" element={<RecoverPasswordScreen />} />
             </Route>
 
             {/* Ruta de Onboarding: Solo para autenticados pero incompletos (Blindaje Anti-Fugas) */}

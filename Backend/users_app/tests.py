@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
+from core_app.models import Notificacion
 from users_app.serializers import (
     RegistroPublicoInputSerializer,
     CompletarOnboardingInputSerializer,
@@ -381,5 +382,38 @@ class VerificacionCorreoOTPTestCase(TestCase):
                 contrasena="RiverPlate9!",
                 captcha_token="valid_captcha"
             )
+
+    def test_despacho_codigo_registra_notificacion_enmascarada_en_core(self):
+        """Verifica que al generar códigos OTP se cree el registro en Notificacion con el código enmascarado [******]."""
+        # 1. Registro público genera código de ACTIVACION y persiste en Notificacion
+        usuario = registrar_cuenta_publica(
+            nombre="Enzo",
+            apellido="Fernandez",
+            email="enzo@test.com",
+            dni="44332211",
+            telefono="+5491177889900",
+            contrasena="Chelsea2026!",
+            captcha_token="valid_captcha"
+        )
+        token_activacion = TokenSeguridad.objects.get(id_usuario=usuario, tipo='ACTIVACION', utilizado=False)
+        
+        # Debe existir registro en Notificacion de core_app para este usuario
+        notif_activacion = Notificacion.objects.filter(id_usuario=usuario, tipo='ACTIVACION').first()
+        self.assertIsNotNone(notif_activacion)
+        # El código real NO debe aparecer en el mensaje guardado en la base de datos
+        self.assertNotIn(token_activacion.codigo, notif_activacion.mensaje)
+        # El mensaje debe contener el enmascaramiento [******]
+        self.assertIn("[******]", notif_activacion.mensaje)
+        # La fecha de envío debe coincidir con la fecha actual
+        self.assertEqual(notif_activacion.fecha_envio, timezone.now().date())
+
+        # 2. Solicitud de código de RECUPERACION (CU-04 / CU-43)
+        codigo_recuperacion = generar_token_seguridad(email="enzo@test.com")
+        notif_recuperacion = Notificacion.objects.filter(id_usuario=usuario, tipo='RECUPERACION').first()
+        self.assertIsNotNone(notif_recuperacion)
+        # El código real alfanumérico NO debe figurar en texto plano en la tabla
+        self.assertNotIn(codigo_recuperacion, notif_recuperacion.mensaje)
+        self.assertIn("[******]", notif_recuperacion.mensaje)
+
 
 

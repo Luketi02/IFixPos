@@ -123,9 +123,17 @@ const LoginScreen = () => {
           </div>
 
           <div className="space-y-2 relative">
-            <label htmlFor="password" className="block text-sm font-medium text-slate-400">
-              Contraseña
-            </label>
+            <div className="flex justify-between items-center">
+              <label htmlFor="password" className="block text-sm font-medium text-slate-400">
+                Contraseña
+              </label>
+              <Link
+                to="/recuperar-acceso"
+                className="text-xs text-slate-400 hover:text-cyan-400 transition-colors duration-200 focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded font-medium"
+              >
+                ¿Problemas para Iniciar Sesión?
+              </Link>
+            </div>
             <div className="relative">
               <input
                 id="password"

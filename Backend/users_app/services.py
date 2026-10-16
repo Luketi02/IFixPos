@@ -2,11 +2,9 @@ import jwt
 import secrets
 import os
 from datetime import datetime, timedelta, timezone
-from email.mime.image import MIMEImage
 from typing import Dict, Any, Optional
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
-from django.core.mail import send_mail, EmailMultiAlternatives
 from django.utils import timezone as django_timezone
 from django.utils.crypto import get_random_string
 from users_app.models import Usuario, RolUsuario, PerfilUsuario, TokenSeguridad
@@ -18,6 +16,7 @@ from users_app.selectors import (
     perfil_esta_completo
 )
 from core_app.models import LogSistema, Notificacion
+from core_app.services import registrar_y_enviar_notificacion_correo
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from django.core.exceptions import ValidationError
@@ -287,13 +286,6 @@ def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[s
             nombre = ""
 
     saludo = f"Hola {nombre}," if nombre else "Hola,"
-    email_emisor = obtener_configuracion_texto(
-        'emailInfo', 
-        fallback=getattr(settings, 'DEFAULT_FROM_EMAIL', 'lucas.mino1508@gmail.com')
-    )
-    if not email_emisor or email_emisor == 'S/N' or '@' not in email_emisor:
-        email_emisor = getattr(settings, 'DEFAULT_FROM_EMAIL', 'lucas.mino1508@gmail.com')
-    
     asunto = "🔐 Código de verificación - IFixPos"
     cuerpo = (
         f"{saludo}\n\n"
@@ -378,24 +370,17 @@ def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[s
     </body>
     </html>
     """
-    
-    email_msg = EmailMultiAlternatives(
-        subject=asunto,
-        body=cuerpo,
-        from_email=email_emisor,
-        to=[usuario.email]
-    )
-    email_msg.attach_alternative(cuerpo_html, "text/html")
 
-    # Incrustar el logo local vía CID (Content-ID) para visualización sin depender de servidores externos ni bloqueos
-    logo_path = os.path.join(settings.BASE_DIR.parent, 'Frontend', 'src', 'assets', 'img', 'LogoIFixPos.png')
-    if os.path.exists(logo_path):
-        with open(logo_path, 'rb') as f_img:
-            mime_logo = MIMEImage(f_img.read())
-            mime_logo.add_header('Content-ID', '<logo_ifixpos>')
-            mime_logo.add_header('Content-Disposition', 'inline', filename='LogoIFixPos.png')
-            email_msg.attach(mime_logo)
-    email_msg.send(fail_silently=False)
+    # Despacho centralizado y registro en Notificacion con código enmascarado
+    registrar_y_enviar_notificacion_correo(
+        usuario=usuario,
+        asunto=asunto,
+        cuerpo_texto=cuerpo,
+        cuerpo_html=cuerpo_html,
+        tipo_notificacion="ACTIVACION",
+        codigo_sensible=codigo_otp,
+        adjuntar_logo=True
+    )
     
     return token_obj
 
@@ -536,12 +521,13 @@ def registrar_cuenta_interna(
             id_usuario=id_ejecutor
         )
         
-        Notificacion.objects.create(
-            mensaje=f"Tu cuenta ha sido creada. Tus credenciales son, email: {email}, contraseña: {contrasena}",
-            tipo="INFO_CUENTA",
-            fecha_envio=datetime.now(timezone.utc).date(),
-            leida=False,
-            id_usuario=usuario
+        registrar_y_enviar_notificacion_correo(
+            usuario=usuario,
+            asunto="Bienvenido a IFixPos - Cuenta Creada",
+            cuerpo_texto=f"Tu cuenta ha sido creada. Tus credenciales son, email: {email}, contraseña: {contrasena}",
+            tipo_notificacion="INFO_CUENTA",
+            codigo_sensible=contrasena,
+            adjuntar_logo=False
         )
         
     return usuario
@@ -573,22 +559,128 @@ def cerrar_sesion_usuario(*, id_usuario: int, refresh_token: str) -> None:
         )
 
 def generar_token_seguridad(*, email: str) -> str:
-    """Genera un token de restablecimiento de contraseña para un usuario dado."""
+    """Genera un token de restablecimiento de contraseña para un usuario dado (TTL 5 minutos CU-43)."""
     with transaction.atomic():
         usuario = obtener_usuario_por_email(email)
         codigo = get_random_string(length=6).upper()
-        expiracion = django_timezone.now() + timedelta(minutes=15)
+        expiracion = django_timezone.now() + timedelta(minutes=5)
         
         TokenSeguridad.objects.filter(id_usuario=usuario, tipo='RECUPERACION', utilizado=False).update(utilizado=True)
         
-        TokenSeguridad.objects.create(
+        token_obj = TokenSeguridad.objects.create(
             codigo=codigo,
             tipo='RECUPERACION',
             fecha_expiracion=expiracion,
             utilizado=False,
             id_usuario=usuario
         )
-        # Simulación de envío por correo o SMS
+        
+        # Obtener nombre del usuario si está disponible
+        nombre = ""
+        try:
+            perfil = PerfilUsuario.objects.get(id_usuario=usuario)
+            nombre = perfil.nombre or ""
+        except PerfilUsuario.DoesNotExist:
+            nombre = ""
+
+        saludo = f"Hola {nombre}," if nombre else "Hola,"
+        asunto = "🔑 Recuperación de contraseña - IFixPos"
+        cuerpo = (
+            f"{saludo}\n\n"
+            f"Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en IFixPos.\n"
+            f"Tu código de seguridad temporal es: {codigo}\n\n"
+            f"Este código es válido estrictamente durante los próximos 5 minutos.\n"
+            f"Si no solicitaste este cambio, por favor desestima este mensaje de forma segura.\n\n"
+            f"Atentamente,\n"
+            f"El equipo de IFixPos"
+        )
+
+        cuerpo_html = f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Recuperación de Contraseña - IFixPos</title>
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #0B1120; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #F8FAFC;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #0B1120; padding: 40px 10px;">
+            <tr>
+              <td align="center">
+                <!-- Contenedor Principal / Tarjeta -->
+                <table role="presentation" width="100%" style="max-width: 520px; background-color: #1E293B; border-radius: 16px; border: 1px solid rgba(6, 182, 212, 0.4); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); overflow: hidden;">
+                  
+                  <!-- Header con Logo y Acento Neón -->
+                  <tr>
+                    <td style="padding: 32px 32px 16px 32px; text-align: center; border-bottom: 1px solid rgba(51, 65, 85, 0.6);">
+                      <div style="display: inline-block; padding: 12px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(6, 182, 212, 0.3); border-radius: 12px; margin-bottom: 12px;">
+                        <img src="cid:logo_ifixpos" alt="Logo IFixPos" width="323" height="131" style="display: block; border: 0; margin: 0 auto;" />
+                      </div>
+                      <h1 style="margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px; color: #F8FAFC;">
+                        IFix<span style="color: #06B6D4;">Pos</span>
+                      </h1>
+                      <p style="margin: 6px 0 0 0; font-size: 13px; color: #94A3B8; letter-spacing: 0.5px; text-transform: uppercase;">
+                        Recuperación de Credenciales
+                      </p>
+                    </td>
+                  </tr>
+
+                  <!-- Cuerpo Principal -->
+                  <tr>
+                    <td style="padding: 32px 32px 24px 32px; text-align: center;">
+                      <h2 style="margin: 0 0 12px 0; font-size: 20px; font-weight: 600; color: #F8FAFC;">
+                        {saludo}
+                      </h2>
+                      <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #CBD5E1;">
+                        Hemos recibido una solicitud para restablecer tu contraseña. Ingresa el siguiente código de seguridad temporal para continuar:
+                      </p>
+
+                      <!-- Caja Destacada del Código -->
+                      <div style="background-color: #0F172A; border: 2px dashed #8B5CF6; border-radius: 12px; padding: 20px; margin: 24px 0; display: inline-block; width: 80%;">
+                        <span style="font-family: 'Courier New', Courier, monospace; font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #06B6D4; display: block;">
+                          {codigo}
+                        </span>
+                      </div>
+
+                      <!-- Información de Expiración (TTL 5 Minutos Estricto) -->
+                      <p style="margin: 0 0 16px 0; font-size: 13px; color: #94A3B8;">
+                        ⏳ Este código es válido estrictamente durante los próximos <strong style="color: #E2E8F0;">5 minutos</strong>.
+                      </p>
+                      <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #64748B;">
+                        Si tú no solicitaste este cambio, puedes desestimar este mensaje de forma segura. Tu contraseña actual no se modificará.
+                      </p>
+                    </td>
+                  </tr>
+
+                  <!-- Footer -->
+                  <tr>
+                    <td style="padding: 20px 32px; background-color: #0F172A; text-align: center; border-top: 1px solid rgba(51, 65, 85, 0.6);">
+                      <p style="margin: 0; font-size: 12px; color: #64748B;">
+                        © 2026 IFixPos ERP — Sistema de Gestión Integral de Reparaciones y POS.
+                      </p>
+                    </td>
+                  </tr>
+
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+        """
+
+        # Despacho centralizado y registro en Notificacion con código enmascarado
+        registrar_y_enviar_notificacion_correo(
+            usuario=usuario,
+            asunto=asunto,
+            cuerpo_texto=cuerpo,
+            cuerpo_html=cuerpo_html,
+            tipo_notificacion="RECUPERACION",
+            codigo_sensible=codigo,
+            adjuntar_logo=True
+        )
+
+        # Mensaje de simulación para auditoría y desarrollo local
         print(f"SIMULACIÓN: Enviando token {codigo} al correo {email}")
         
     return codigo

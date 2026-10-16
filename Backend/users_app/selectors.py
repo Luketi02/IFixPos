@@ -61,24 +61,7 @@ def obtener_token_valido(*, id_usuario: int, codigo: str, tipo: str = 'RECUPERAC
     return token
 
 
-def obtener_configuracion_bool(clave: str) -> bool:
-    """Obtiene un flag booleano de ConfiguracionSistema. Fail-safe a False."""
-    try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip().lower()
-        return val in ('true', '1', 't', 'y', 'yes')
-    except ConfiguracionSistema.DoesNotExist:
-        return False
-
-
-def obtener_configuracion_texto(clave: str, fallback: str = "noreply@ifixpos.com") -> str:
-    """Obtiene un valor de texto de ConfiguracionSistema. Fail-safe a fallback."""
-    try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip()
-        return val if val and val != "S/N" else fallback
-    except ConfiguracionSistema.DoesNotExist:
-        return fallback
+from core_app.selectors import obtener_configuracion_bool, obtener_configuracion_texto
 
 
 def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
