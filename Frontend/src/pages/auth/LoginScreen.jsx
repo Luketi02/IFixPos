@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import ReCAPTCHA from 'react-google-recaptcha';
 import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import { getDashboardPath } from '../../utils/roleRoutes';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -71,11 +72,11 @@ const LoginScreen = () => {
 
       login(tokens, usuario);
 
-      // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard
+      // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard según su rol
       if (usuario && !usuario.perfil_completo) {
         navigate('/completar-perfil', { replace: true });
       } else {
-        navigate('/', { replace: true });
+        navigate(getDashboardPath(usuario?.rol), { replace: true });
       }
 
     } catch (error) {
@@ -218,11 +219,11 @@ const LoginScreen = () => {
 
                   login(tokens, usuario);
 
-                  // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard
+                  // Si le faltan datos en el perfil, redirigir a Onboarding; si no, al Dashboard según su rol
                   if (usuario && !usuario.perfil_completo) {
                     navigate('/completar-perfil', { replace: true });
                   } else {
-                    navigate('/', { replace: true });
+                    navigate(getDashboardPath(usuario?.rol), { replace: true });
                   }
                 } catch (error) {
                   console.error('Error al iniciar sesión con Google:', error);

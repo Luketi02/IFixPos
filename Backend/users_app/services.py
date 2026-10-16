@@ -16,7 +16,7 @@ from users_app.selectors import (
     perfil_esta_completo
 )
 from core_app.models import LogSistema, Notificacion
-from core_app.services import registrar_y_enviar_notificacion_correo
+from core_app.services import registrar_y_enviar_notificacion_correo, marcar_ultima_notificacion_como_leida
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from django.core.exceptions import ValidationError
@@ -697,6 +697,9 @@ def validar_y_restablecer_credencial(*, email: str, token: str, nueva_contrasena
         token_obj.utilizado = True
         token_obj.save()
         
+        # Marcar como leída la última notificación de recuperación de contraseña
+        marcar_ultima_notificacion_como_leida(usuario=usuario, tipo='RECUPERACION')
+        
         registrar_log_condicional(
             clave_switch="log_seguridad_accesos",
             accion="Restablecimiento de credenciales vía Token",
@@ -817,6 +820,9 @@ def verificar_y_activar_usuario(email: str, codigo: str) -> Dict[str, Any]:
         token_obj.utilizado = True
         token_obj.save(update_fields=['utilizado'])
         
+        # Marcar como leída la última notificación de activación de cuenta
+        marcar_ultima_notificacion_como_leida(usuario=usuario, tipo='ACTIVACION')
+        
         registrar_log_condicional(
             clave_switch="log_seguridad_accesos",
             accion="Verificación de correo y activación de cuenta",
@@ -846,4 +852,43 @@ def verificar_y_activar_usuario(email: str, codigo: str) -> Dict[str, Any]:
                 "perfil_completo": perfil_esta_completo(usuario.id_usuario)
             }
         }
+
+def guardar_archivo_foto_perfil(*, id_usuario: int, archivo) -> str:
+    """
+    Valida y guarda un archivo de imagen para la foto de perfil en MEDIA_ROOT/perfiles.
+    Retorna la URL relativa al archivo guardado.
+    """
+    if not archivo:
+        raise ValidationError("No se proporcionó ningún archivo de imagen.")
+
+    # Validar extensión
+    ext = os.path.splitext(archivo.name)[1].lower()
+    formatos_permitidos = ['.png', '.jpg', '.jpeg', '.webp']
+    if ext not in formatos_permitidos:
+        raise ValidationError(f"Formato no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
+
+    # Validar tamaño (máximo 5 MB)
+    if archivo.size > 5 * 1024 * 1024:
+        raise ValidationError("El archivo supera el tamaño máximo permitido de 5 MB.")
+
+    carpeta_destino = os.path.join(settings.MEDIA_ROOT, 'perfiles')
+    os.makedirs(carpeta_destino, exist_ok=True)
+
+    timestamp = int(django_timezone.now().timestamp())
+    nombre_archivo = f"avatar_u{id_usuario}_{timestamp}{ext}"
+    ruta_completa = os.path.join(carpeta_destino, nombre_archivo)
+
+    with open(ruta_completa, 'wb+') as destino:
+        for chunk in archivo.chunks():
+            destino.write(chunk)
+
+    # Actualizar la foto en PerfilUsuario
+    perfil = PerfilUsuario.objects.filter(id_usuario__id_usuario=id_usuario).first()
+    url_relativa = f"/media/perfiles/{nombre_archivo}"
+    if perfil:
+        perfil.foto_perfil = url_relativa
+        perfil.save(update_fields=['foto_perfil'])
+
+    return url_relativa
+
 

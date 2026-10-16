@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import { getDashboardPath } from '../../utils/roleRoutes';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -172,9 +173,10 @@ const CompleteProfileScreen = () => {
         });
       }
 
-      // Redirigir al Dashboard tras breve feedback visual
+      // Redirigir al Dashboard según el rol tras breve feedback visual
       setTimeout(() => {
-        navigate('/', { replace: true });
+        const rolUsuario = response.data?.usuario?.rol || user?.rol;
+        navigate(getDashboardPath(rolUsuario), { replace: true });
       }, 1200);
 
     } catch (error) {

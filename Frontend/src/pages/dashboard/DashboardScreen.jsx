@@ -1,8 +1,10 @@
 import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const DashboardScreen = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
 
   const avatarUrl = user?.foto_perfil || user?.picture;
   const nombreCompleto = [user?.nombre, user?.apellido].filter(Boolean).join(' ') || user?.email || 'Usuario';
@@ -14,43 +16,21 @@ const DashboardScreen = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center font-black text-slate-950 shadow-md shadow-cyan-500/20">
-              IF
-            </div>
+            <img
+              src={logoEmpresa}
+              alt="Logo IFixPos"
+              className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(6,182,212,0.4)]"
+            />
             <div>
-              <span className="font-extrabold text-lg tracking-tight text-white">IFixPos</span>
+              <span className="font-extrabold text-lg tracking-tight text-white">IFix<span className="text-[#06B6D4]">Pos</span></span>
               <span className="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 uppercase font-mono tracking-widest">
                 ERP v1.0
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3 pr-4 border-r border-slate-700/60">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={nombreCompleto}
-                  className="w-9 h-9 rounded-full object-cover border border-cyan-400/50 shadow-sm shadow-cyan-500/30"
-                />
-              ) : (
-                <div className="w-9 h-9 rounded-full bg-slate-800 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold text-sm">
-                  {nombreCompleto.charAt(0).toUpperCase()}
-                </div>
-              )}
-              <div className="hidden sm:block text-left">
-                <p className="text-sm font-semibold text-slate-200 leading-none">{nombreCompleto}</p>
-                <p className="text-[11px] text-cyan-400 font-mono mt-1 leading-none">{user?.rol || 'Cliente'}</p>
-              </div>
-            </div>
-
-            <button
-              onClick={logout}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/40 transition-all duration-200"
-            >
-              Cerrar Sesión
-            </button>
-          </div>
+          {/* Menú Desplegable de Perfil con Cerrar Sesión */}
+          <UserProfileDropdown align="right" />
 
         </div>
       </header>

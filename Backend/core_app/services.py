@@ -87,3 +87,23 @@ def registrar_y_enviar_notificacion_correo(
             print(f"[Motor Notificaciones] Error o advertencia al enviar correo a {usuario.email}: {e}")
 
         return notificacion
+
+def marcar_ultima_notificacion_como_leida(*, usuario: Any, tipo: str) -> Optional[Notificacion]:
+    """
+    Marca como leída (leida=True) la última notificación pendiente (leida=False)
+    de un tipo específico para un usuario dado.
+    """
+    with transaction.atomic():
+        notificacion = (
+            Notificacion.objects.filter(
+                id_usuario=usuario,
+                tipo=tipo,
+                leida=False
+            )
+            .order_by('-id_notificacion')
+            .first()
+        )
+        if notificacion:
+            notificacion.leida = True
+            notificacion.save(update_fields=['leida'])
+        return notificacion

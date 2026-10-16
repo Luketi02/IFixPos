@@ -415,5 +415,44 @@ class VerificacionCorreoOTPTestCase(TestCase):
         self.assertNotIn(codigo_recuperacion, notif_recuperacion.mensaje)
         self.assertIn("[******]", notif_recuperacion.mensaje)
 
+    def test_marcado_leida_notificacion_al_validar_codigo(self):
+        """Verifica que al validar código OTP (activación o recuperación) la última notificación pase a leida=True."""
+        # 1. Crear usuario pendiente de activación
+        usuario = registrar_cuenta_publica(
+            nombre="Julián",
+            apellido="Álvarez",
+            email="spider@test.com",
+            dni="48991122",
+            telefono="+5491133221100",
+            contrasena="Atletico2026!",
+            captcha_token="valid_captcha"
+        )
+        token_act = TokenSeguridad.objects.get(id_usuario=usuario, tipo='ACTIVACION', utilizado=False)
+        notif_act = Notificacion.objects.filter(id_usuario=usuario, tipo='ACTIVACION').order_by('-id_notificacion').first()
+        
+        self.assertIsNotNone(notif_act)
+        self.assertFalse(notif_act.leida)  # Inicialmente no leída
+
+        # Activar cuenta ingresando el código OTP
+        verificar_y_activar_usuario(email="spider@test.com", codigo=token_act.codigo)
+        notif_act.refresh_from_db()
+        self.assertTrue(notif_act.leida)  # Debe pasar a leída
+
+        # 2. Solicitar código de recuperación de contraseña
+        codigo_rec = generar_token_seguridad(email="spider@test.com")
+        notif_rec = Notificacion.objects.filter(id_usuario=usuario, tipo='RECUPERACION').order_by('-id_notificacion').first()
+        
+        self.assertIsNotNone(notif_rec)
+        self.assertFalse(notif_rec.leida)  # Inicialmente no leída
+
+        # Restablecer contraseña ingresando el token y nueva clave
+        validar_y_restablecer_credencial(
+            email="spider@test.com",
+            token=codigo_rec,
+            nueva_contrasena="NuevaClave2026!"
+        )
+        notif_rec.refresh_from_db()
+        self.assertTrue(notif_rec.leida)  # Debe pasar a leída
+
 
 

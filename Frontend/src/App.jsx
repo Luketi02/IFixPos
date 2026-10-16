@@ -4,11 +4,18 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/routes/ProtectedRoute';
 import OnboardingGuard from './components/routes/OnboardingGuard';
 import PublicRoute from './components/routes/PublicRoute';
+import RoleRoute from './components/routes/RoleRoute';
+import DashboardRedirect from './components/routes/DashboardRedirect';
+
 import LoginScreen from './pages/auth/LoginScreen';
 import RegisterScreen from './pages/auth/RegisterScreen';
 import RecoverPasswordScreen from './pages/auth/RecoverPasswordScreen';
 import CompleteProfileScreen from './pages/auth/CompleteProfileScreen';
-import DashboardScreen from './pages/dashboard/DashboardScreen';
+import EditProfileScreen from './pages/auth/EditProfileScreen';
+
+import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
+import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
+import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH2_CLIENT_ID || '';
 
@@ -25,14 +32,31 @@ function App() {
               <Route path="/recuperar-acceso" element={<RecoverPasswordScreen />} />
             </Route>
 
-            {/* Ruta de Onboarding: Solo para autenticados pero incompletos (Blindaje Anti-Fugas) */}
+            {/* Ruta de Onboarding: Solo para autenticados pero con perfil incompleto */}
             <Route element={<OnboardingGuard />}>
               <Route path="/completar-perfil" element={<CompleteProfileScreen />} />
             </Route>
 
             {/* Rutas Protegidas: Requiere autenticación Y perfil 100% completo */}
             <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<DashboardScreen />} />
+              {/* Redirección dinámica desde la raíz hacia el dashboard según el rol */}
+              <Route path="/" element={<DashboardRedirect />} />
+
+              {/* Vista de Cliente (/tienda) */}
+              <Route path="/tienda" element={<ClientStoreScreen />} />
+
+              {/* Vista de Técnico (/tareas-tecnico): Técnicos y Administradores */}
+              <Route element={<RoleRoute allowedRoles={['tecnico', 'admin']} />}>
+                <Route path="/tareas-tecnico" element={<TechnicianTasksScreen />} />
+              </Route>
+
+              {/* Vista de Administrador (/admin/dashboard): Exclusivo Administradores */}
+              <Route element={<RoleRoute allowedRoles={['admin']} />}>
+                <Route path="/admin/dashboard" element={<AdminDashboardScreen />} />
+              </Route>
+
+              {/* Edición de Perfil (CU-05): Accesible para todo usuario autenticado */}
+              <Route path="/editar-perfil" element={<EditProfileScreen />} />
             </Route>
 
             {/* Ruta comodín / fallback */}

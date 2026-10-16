@@ -18,7 +18,8 @@ from users_app.services import (
     registrar_cuenta_publica, registrar_cuenta_interna, cerrar_sesion_usuario,
     generar_token_seguridad, validar_y_restablecer_credencial,
     solicitar_recuperacion_contrasena, editar_perfil_usuario,
-    completar_perfil_onboarding, verificar_y_activar_usuario
+    completar_perfil_onboarding, verificar_y_activar_usuario,
+    guardar_archivo_foto_perfil
 )
 
 
@@ -254,6 +255,29 @@ class EditarPerfilApi(APIView):
             
         output_serializer = PerfilOutputSerializer(datos_perfil)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class SubirFotoPerfilApi(APIView):
+    """
+    Endpoint para subir una imagen de perfil desde el dispositivo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        archivo = request.FILES.get('foto')
+        if not archivo:
+            return Response({"detail": "Debes adjuntar un archivo de imagen válido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        id_usuario = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
+        if not id_usuario:
+            return Response({"detail": "Usuario no autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            url_foto = guardar_archivo_foto_perfil(id_usuario=id_usuario, archivo=archivo)
+            return Response({"foto_url": url_foto, "mensaje": "Imagen subida exitosamente."}, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            return Response({"detail": e.messages if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 class CompletarOnboardingApi(APIView):
