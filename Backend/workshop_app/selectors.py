@@ -4,13 +4,47 @@ from django.db.models import QuerySet, Q
 from django.core.exceptions import ValidationError
 from workshop_app.models import Dispositivo
 from users_app.models import Usuario
-from catalog_app.models import ModeloDispositivo
+from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
 
 def obtener_usuario_por_id(id_usuario: int) -> Optional[Usuario]:
     return Usuario.objects.filter(pk=id_usuario).first()
 
 def obtener_modelo_por_id(id_modelo: int) -> Optional[ModeloDispositivo]:
     return ModeloDispositivo.objects.filter(pk=id_modelo).first()
+
+
+# ==============================================================================
+# CATÁLOGOS PARA REGISTRO DE DISPOSITIVOS (CU-06)
+# ==============================================================================
+
+def obtener_tipos_dispositivos(*, solo_activos: bool = True) -> QuerySet[TipoDispositivo]:
+    """
+    Retorna el listado de tipos de dispositivos registrados en el catálogo.
+    """
+    qs = TipoDispositivo.objects.all().order_by('nombre')
+    if solo_activos:
+        qs = qs.filter(estado_activo=True)
+    return qs
+
+
+def obtener_marcas(*, solo_activas: bool = True) -> QuerySet[Marca]:
+    """
+    Retorna el listado de marcas comerciales registradas en el catálogo.
+    """
+    qs = Marca.objects.all().order_by('nombre')
+    if solo_activas:
+        qs = qs.filter(estado_activo=True)
+    return qs
+
+
+def obtener_modelos_por_marca(id_marca: int, *, solo_activos: bool = True) -> QuerySet[ModeloDispositivo]:
+    """
+    Retorna los modelos de dispositivos asociados a una marca específica.
+    """
+    qs = ModeloDispositivo.objects.filter(id_marca_id=id_marca).order_by('nombre')
+    if solo_activos:
+        qs = qs.filter(estado_activo=True)
+    return qs
 
 
 def filtrar_dispositivos_taller(

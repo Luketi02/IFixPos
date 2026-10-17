@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminSidebar from '../../components/navigation/AdminSidebar';
 import { formatearNombreConInicial } from '../../utils/roleRoutes';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
@@ -10,34 +11,39 @@ export default function ClientStoreScreen() {
   const nombreCliente = formatearNombreConInicial(user, 'Cliente');
 
   return (
-    <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Header Superior Cyber-Tech */}
-      <header className="border-b border-slate-800 bg-[#1E293B]/85 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          
-          {/* Logo y Marca Oficial */}
-          <div className="flex items-center gap-3">
-            <img
-              src={logoEmpresa}
-              alt="Logo IFixPos"
-              className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(6,182,212,0.4)]"
-            />
-            <div>
-              <span className="font-extrabold text-lg tracking-tight text-white">IFix<span className="text-[#06B6D4]">Pos</span></span>
-              <span className="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 uppercase font-mono tracking-widest">
-                Tienda Oficial
-              </span>
+    <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
+      {/* Barra de Navegación Lateral (Rol Cliente) */}
+      <AdminSidebar activeMenu="client-store" role="cliente" />
+
+      {/* Contenedor Principal */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        {/* Header Superior Cyber-Tech */}
+        <header className="border-b border-slate-800 bg-[#1E293B]/85 backdrop-blur-md sticky top-0 z-30">
+          <div className="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            
+            {/* Logo y Marca Oficial */}
+            <div className="flex items-center gap-3">
+              <img
+                src={logoEmpresa}
+                alt="Logo IFixPos"
+                className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(6,182,212,0.4)]"
+              />
+              <div>
+                <span className="font-extrabold text-lg tracking-tight text-white">IFix<span className="text-[#06B6D4]">Pos</span></span>
+                <span className="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 uppercase font-mono tracking-widest">
+                  Tienda Oficial
+                </span>
+              </div>
             </div>
+
+            {/* Menú Desplegable de Perfil con Cerrar Sesión */}
+            <UserProfileDropdown align="right" />
+
           </div>
+        </header>
 
-          {/* Menú Desplegable de Perfil con Cerrar Sesión */}
-          <UserProfileDropdown align="right" />
-
-        </div>
-      </header>
-
-      {/* Contenido Principal */}
-      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full flex flex-col justify-center">
+        {/* Contenido Principal */}
+        <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full flex flex-col justify-center">
         <motion.div
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
@@ -98,6 +104,7 @@ export default function ClientStoreScreen() {
           </div>
         </motion.div>
       </main>
+      </div>
     </div>
   );
 }

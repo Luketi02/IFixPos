@@ -18,6 +18,7 @@ import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
 import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
 import AdminConfigScreen from './pages/admin/AdminConfigScreen';
 import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
+import RegisterDeviceScreen from './pages/client/RegisterDeviceScreen';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH2_CLIENT_ID || '';
 
@@ -46,6 +47,9 @@ function App() {
 
               {/* Vista de Cliente (/tienda) */}
               <Route path="/tienda" element={<ClientStoreScreen />} />
+
+              {/* Registro de Dispositivo (Cliente / Técnico / Admin) */}
+              <Route path="/cliente/dispositivos/nuevo" element={<RegisterDeviceScreen />} />
 
               {/* Vista de Técnico (/tareas-tecnico): Técnicos y Administradores */}
               <Route element={<RoleRoute allowedRoles={['tecnico', 'admin']} />}>

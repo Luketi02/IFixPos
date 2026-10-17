@@ -7,12 +7,8 @@ import { getDashboardPath } from '../../utils/roleRoutes';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-const AVATARES_PREDETERMINADOS = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80'
-];
+// Galería de 60 avatares locales predeterminados (/avatars/avatar1.png ... /avatars/avatar60.png)
+const AVATARES_PREDETERMINADOS = Array.from({ length: 60 }, (_, i) => `/avatars/avatar${i + 1}.png`);
 
 export default function EditProfileScreen() {
   const { user, token, updateUser } = useAuth();
@@ -451,24 +447,44 @@ export default function EditProfileScreen() {
                     )}
                   </div>
 
-                  <p className="text-[11px] text-slate-400">
-                    Formatos aceptados: PNG, JPG o WEBP (máx. 5 MB). O selecciona un avatar predeterminado:
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-slate-400">
+                      Formatos: PNG, JPG o WEBP (máx. 5 MB). O selecciona un avatar de la galería (60 disponibles):
+                    </p>
+                    {formData.foto_perfil && formData.foto_perfil.startsWith('/avatars/') && (
+                      <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/30">
+                        Avatar seleccionado
+                      </span>
+                    )}
+                  </div>
 
-                  {/* Avatares rápidos */}
-                  <div className="flex items-center justify-center sm:justify-start gap-2.5 pt-1">
-                    {AVATARES_PREDETERMINADOS.map((url, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setFormData((prev) => ({ ...prev, foto_perfil: url }))}
-                        className={`w-9 h-9 rounded-full overflow-hidden border-2 transition-transform hover:scale-110 cursor-pointer ${
-                          formData.foto_perfil === url ? 'border-cyan-400 scale-105' : 'border-slate-600 opacity-60'
-                        }`}
-                      >
-                        <img src={url} alt={`Opción ${idx}`} className="w-full h-full object-cover" />
-                      </button>
-                    ))}
+                  {/* Galería de Avatares Predeterminados */}
+                  <div className="max-h-48 overflow-y-auto p-3 rounded-2xl bg-slate-900/80 border border-slate-700/70 custom-scrollbar shadow-inner">
+                    <div className="grid grid-cols-6 sm:grid-cols-10 md:grid-cols-12 gap-2.5">
+                      {AVATARES_PREDETERMINADOS.map((url, idx) => {
+                        const isSelected = formData.foto_perfil === url;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setFormData((prev) => ({ ...prev, foto_perfil: url }))}
+                            title={`Avatar ${idx + 1}`}
+                            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full overflow-hidden border-2 transition-all duration-200 hover:scale-110 cursor-pointer flex items-center justify-center ${
+                              isSelected
+                                ? 'border-[#06B6D4] ring-2 ring-[#06B6D4]/40 scale-105 shadow-[0_0_12px_rgba(6,182,212,0.5)]'
+                                : 'border-slate-700 hover:border-slate-500 opacity-75 hover:opacity-100 bg-slate-800'
+                            }`}
+                          >
+                            <img
+                              src={url}
+                              alt={`Avatar ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                              loading="lazy"
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

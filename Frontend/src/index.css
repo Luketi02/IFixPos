@@ -3,3 +3,93 @@
 @theme {
   --font-sans: "Lexend", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
+
+/* ==============================================================================
+   ESTILOS GLOBALES CYBER-TECH PARA BARRAS DE DESPLAZAMIENTO (Scrollbars)
+   ============================================================================== */
+
+/* Estándar W3C moderno (Firefox y Chromium moderno) para todo el documento y elementos */
+html,
+body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0F172A;
+}
+
+/* WebKit (Chrome, Edge, Safari, Opera) a nivel global en todas las pantallas y listas */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+  border: 2px solid #0F172A;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #06B6D4;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #8B5CF6;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
+}
+
+::-webkit-scrollbar-corner {
+  background: #0F172A;
+}
+
+/* Variantes utilitarias para contenedores compactos, listas, tablas y avatares */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0F172A;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #0F172A;
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+  border: 1px solid rgba(6, 182, 212, 0.2);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #06B6D4;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+}
+
+.custom-scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.custom-scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+
+.custom-scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #06B6D4;
+}
+
