@@ -12,13 +12,28 @@ import RegisterScreen from './pages/auth/RegisterScreen';
 import RecoverPasswordScreen from './pages/auth/RecoverPasswordScreen';
 import CompleteProfileScreen from './pages/auth/CompleteProfileScreen';
 import EditProfileScreen from './pages/auth/EditProfileScreen';
+import UserAddressesScreen from './pages/profile/UserAddressesScreen';
 
 import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
 import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
 import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
 import AdminConfigScreen from './pages/admin/AdminConfigScreen';
 import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
+import AdminInventoryScreen from './pages/admin/AdminInventoryScreen';
+import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
+import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
+import TiposDispositivoScreen from './pages/admin/catalogs/TiposDispositivoScreen';
+import CategoriasProductoScreen from './pages/admin/catalogs/CategoriasProductoScreen';
+import CategoriasReparacionScreen from './pages/admin/catalogs/CategoriasReparacionScreen';
 import RegisterDeviceScreen from './pages/client/RegisterDeviceScreen';
+import MisDispositivos from './pages/client/MisDispositivos';
+import DispositivoDetalle from './pages/client/DispositivoDetalle';
+import ReparacionDetalle from './pages/client/ReparacionDetalle';
+import SessionExpiredModal from './components/auth/SessionExpiredModal';
+import { instalarInterceptorSesion } from './utils/sesionExpirada';
+
+// Interceptor global de axios: token inválido/expirado -> modal de sesión expirada
+instalarInterceptorSesion();
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH2_CLIENT_ID || '';
 
@@ -27,6 +42,7 @@ function App() {
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
         <Router>
+          <SessionExpiredModal />
           <Routes>
             {/* Rutas Públicas: Redirigen si ya existe una sesión activa */}
             <Route element={<PublicRoute />}>
@@ -48,8 +64,11 @@ function App() {
               {/* Vista de Cliente (/tienda) */}
               <Route path="/tienda" element={<ClientStoreScreen />} />
 
-              {/* Registro de Dispositivo (Cliente / Técnico / Admin) */}
+              {/* Dispositivos y Reparaciones del Cliente */}
+              <Route path="/cliente/dispositivos" element={<MisDispositivos />} />
               <Route path="/cliente/dispositivos/nuevo" element={<RegisterDeviceScreen />} />
+              <Route path="/cliente/dispositivos/:id_dispositivo" element={<DispositivoDetalle />} />
+              <Route path="/cliente/reparaciones/:id_reparacion" element={<ReparacionDetalle />} />
 
               {/* Vista de Técnico (/tareas-tecnico): Técnicos y Administradores */}
               <Route element={<RoleRoute allowedRoles={['tecnico', 'admin']} />}>
@@ -61,10 +80,18 @@ function App() {
                 <Route path="/admin/dashboard" element={<AdminDashboardScreen />} />
                 <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
                 <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
+                <Route path="/admin/inventario" element={<AdminInventoryScreen />} />
+                {/* Catálogos y Taxonomías Base */}
+                <Route path="/admin/catalogos/marcas" element={<MarcasScreen />} />
+                <Route path="/admin/catalogos/modelos" element={<ModelosScreen />} />
+                <Route path="/admin/catalogos/tipos-dispositivo" element={<TiposDispositivoScreen />} />
+                <Route path="/admin/catalogos/categorias-producto" element={<CategoriasProductoScreen />} />
+                <Route path="/admin/catalogos/categorias-reparacion" element={<CategoriasReparacionScreen />} />
               </Route>
 
-              {/* Edición de Perfil (CU-05): Accesible para todo usuario autenticado */}
+              {/* Edición de Perfil (CU-05) y Libreta de Direcciones (CU-47, CU-48, CU-49): Accesible para todo usuario autenticado */}
               <Route path="/editar-perfil" element={<EditProfileScreen />} />
+              <Route path="/perfil/direcciones" element={<UserAddressesScreen />} />
             </Route>
 
             {/* Ruta comodín / fallback */}

@@ -1,0 +1,131 @@
+from rest_framework import serializers
+from catalog_app.models import Producto
+
+
+class ProductoStockOutputSerializer(serializers.ModelSerializer):
+    """
+    Serializador de salida para el inventario de productos y su stock disponible (CU-35).
+    """
+    id_categoria = serializers.IntegerField(source='id_categoria_id', read_only=True)
+    categoria = serializers.CharField(source='id_categoria.nombre', read_only=True, default='')
+    id_marca = serializers.IntegerField(source='id_marca_id', read_only=True, default=None, allow_null=True)
+    marca = serializers.CharField(source='id_marca.nombre', read_only=True, default='', allow_null=True)
+    id_modelo = serializers.IntegerField(source='id_modelo_id', read_only=True, default=None, allow_null=True)
+    modelo = serializers.CharField(source='id_modelo.nombre', read_only=True, default='', allow_null=True)
+    id_tipo_dispositivo = serializers.IntegerField(source='id_tipo_dispositivo_id', read_only=True, default=None, allow_null=True)
+    tipo_dispositivo = serializers.CharField(source='id_tipo_dispositivo.nombre', read_only=True, default='', allow_null=True)
+    id_stock = serializers.IntegerField(read_only=True, default=None)
+    stock_minimo = serializers.IntegerField(read_only=True, default=0)
+    cantidad_actual = serializers.IntegerField(read_only=True, default=0)
+    nivel_stock = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Producto
+        fields = [
+            'id_producto',
+            'nombre',
+            'descripcion',
+            'precio_venta',
+            'estado',
+            'apto_venta',
+            'apto_reparacion',
+            'apto_consumible',
+            'imagen_principal',
+            'id_categoria',
+            'categoria',
+            'id_marca',
+            'marca',
+            'id_modelo',
+            'modelo',
+            'id_tipo_dispositivo',
+            'tipo_dispositivo',
+            'id_stock',
+            'stock_minimo',
+            'cantidad_actual',
+            'nivel_stock',
+        ]
+
+    def get_nivel_stock(self, obj) -> str:
+        cant = getattr(obj, 'cantidad_actual', 0) or 0
+        minimo = getattr(obj, 'stock_minimo', 0) or 0
+        if cant <= 0:
+            return 'Crítico / Agotado'
+        elif cant <= minimo:
+            return 'Alerta de Mínimo'
+        return 'Normal'
+
+
+class ActualizarStockInputSerializer(serializers.Serializer):
+    """
+    La Aduana para el ajuste manual de inventario (CU-13).
+    """
+    id_producto = serializers.IntegerField(
+        required=True,
+        error_messages={'required': 'El ID del producto es obligatorio.'}
+    )
+    tipo_operacion = serializers.ChoiceField(
+        choices=['INGRESO', 'EGRESO', 'ingreso', 'egreso'],
+        required=True,
+        error_messages={
+            'required': 'El tipo de operación es obligatorio (INGRESO o EGRESO).',
+            'invalid_choice': 'Operación inválida. Debe ser INGRESO o EGRESO.'
+        }
+    )
+    cantidad = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'La cantidad es obligatoria.',
+            'min_value': 'La cantidad debe ser estrictamente mayor a cero.'
+        }
+    )
+    motivo = serializers.CharField(
+        max_length=500,
+        required=True,
+        allow_blank=False,
+        error_messages={
+            'required': 'El motivo de la actualización es obligatorio.',
+            'blank': 'El motivo no puede estar vacío.'
+        }
+    )
+    usado_taller = serializers.BooleanField(
+        required=False,
+        default=False
+    )
+
+    def validate_motivo(self, value):
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El motivo de la actualización no puede estar vacío.')
+        return val
+
+    def validate(self, attrs):
+        from catalog_app.models import Producto
+
+        # Normalizar tipo de operación a mayúsculas
+        operacion = str(attrs.get('tipo_operacion') or '').strip().upper()
+        attrs['tipo_operacion'] = operacion
+
+        # Validar existencia de Producto
+        id_prod = attrs.get('id_producto')
+        try:
+            prod = Producto.objects.get(id_producto=id_prod)
+            attrs['producto'] = prod
+        except Producto.DoesNotExist:
+            raise serializers.ValidationError({'id_producto': 'El producto especificado no existe.'})
+
+        return attrs
+
+
+class ActualizarStockOutputSerializer(serializers.Serializer):
+    """Serializador de salida tras el ajuste manual de stock."""
+    id_stock = serializers.IntegerField()
+    id_producto = serializers.IntegerField(source='id_producto_id')
+    producto_nombre = serializers.CharField()
+    tipo_operacion = serializers.CharField()
+    cantidad = serializers.IntegerField()
+    stock_anterior = serializers.IntegerField()
+    stock_nuevo = serializers.IntegerField()
+    motivo = serializers.CharField()
+    usado_taller = serializers.BooleanField()
+    fecha = serializers.DateField()

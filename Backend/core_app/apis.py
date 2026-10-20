@@ -19,16 +19,8 @@ class SupportEmailApi(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        try:
-            # Buscar por id=23 o clave='emailSoporte'
-            config = ConfiguracionSistema.objects.get(id_config=23)
-            return Response({"email": config.valor})
-        except ConfiguracionSistema.DoesNotExist:
-            try:
-                config = ConfiguracionSistema.objects.get(clave='emailSoporte')
-                return Response({"email": config.valor})
-            except ConfiguracionSistema.DoesNotExist:
-                return Response({"email": "soporte@ifixnet.com"})  # Fallback de la BD
+        from core_app.selectors import obtener_email_soporte
+        return Response({"email": obtener_email_soporte()})
 
 
 class ConfiguracionGlobalApi(APIView):

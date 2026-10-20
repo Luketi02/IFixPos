@@ -155,6 +155,22 @@ export default function UserProfileDropdown({ align = 'right' }) {
                 <span>Editar Perfil</span>
               </button>
 
+              {/* Opción Activa: Libreta de Direcciones */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  navigate('/perfil/direcciones');
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/40 hover:bg-slate-800 border border-slate-700/60 hover:border-cyan-500/40 transition-all duration-180 group cursor-pointer"
+              >
+                <svg className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span>Libreta de Direcciones</span>
+              </button>
+
               <button
                 type="button"
                 disabled

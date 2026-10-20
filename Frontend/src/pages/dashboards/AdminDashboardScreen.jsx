@@ -27,9 +27,17 @@ export default function AdminDashboardScreen() {
       {/* 1. BARRA LATERAL (SIDEBAR PERSISTENTE IZQUIERDO) */}
       <AdminSidebar
         activeMenu={activeMenu}
-        onSelectMenu={(val) => {
-          if (val === 'config-general' || val === 'config-notifications' || val === 'config-audit') {
+        onSelectMenu={(val, item) => {
+          if (item?.route && item.route !== '/admin/dashboard') {
+            navigate(item.route);
+            return;
+          }
+          if (val === 'admin-inventory' || val === 'catalog-categories' || val === 'inventory-stock') {
+            navigate('/admin/inventario');
+          } else if (val === 'config-general' || val === 'config-notifications' || val === 'config-audit') {
             navigate('/admin/configuracion');
+          } else if (val === 'config-zones') {
+            navigate('/admin/zonas-cobertura');
           } else {
             setActiveMenu(val);
           }

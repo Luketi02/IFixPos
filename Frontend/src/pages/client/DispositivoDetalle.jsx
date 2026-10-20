@@ -1,0 +1,380 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import axios from 'axios';
+import { motion, AnimatePresence } from 'framer-motion';
+import useAuth from '../../context/useAuth';
+import AdminSidebar from '../../components/navigation/AdminSidebar';
+import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import { resolverUrlImagen } from '../../utils/imagenes';
+import { formatearFecha } from '../../utils/fechas';
+import logoEmpresa from '../../assets/img/itemLogoVentana.png';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+export default function DispositivoDetalle() {
+  const { id_dispositivo } = useParams();
+  const navigate = useNavigate();
+  const { token } = useAuth();
+
+  const [dispositivo, setDispositivo] = useState(null);
+  const [cargadoId, setCargadoId] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const isLoading = cargadoId !== id_dispositivo;
+
+  // Auto-ocultamiento de errores a los 6 segundos
+  useEffect(() => {
+    if (!errorMessage) return undefined;
+    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    return () => clearTimeout(timer);
+  }, [errorMessage]);
+
+  useEffect(() => {
+    let activo = true;
+
+    axios
+      .get(`${API_BASE_URL}/api/workshop/dispositivos/${id_dispositivo}/detalles/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .then((res) => {
+        if (!activo) return;
+        setDispositivo(res.data);
+      })
+      .catch((err) => {
+        if (!activo) return;
+        console.error('Error al consultar detalles del dispositivo:', err);
+        const status = err.response?.status;
+        const data = err.response?.data;
+        const msg = data?.detail || data?.error || (Array.isArray(data) ? data.join(' ') : null);
+
+        if (status === 404) {
+          setErrorMessage('Dispositivo no encontrado. Verifica el identificador del equipo.');
+        } else if (status === 403) {
+          setErrorMessage(msg || 'Acceso Denegado: No posees permisos para consultar este equipo.');
+        } else {
+          setErrorMessage(msg || 'No fue posible cargar los detalles del dispositivo.');
+        }
+      })
+      .finally(() => {
+        if (activo) setCargadoId(id_dispositivo);
+      });
+
+    return () => {
+      activo = false;
+    };
+  }, [id_dispositivo, token]);
+
+  const imagenUrl = resolverUrlImagen(dispositivo?.imagen);
+
+  return (
+    <div className="min-h-screen bg-[#0F172A] text-[#F8FAFC] font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
+      <AdminSidebar activeMenu="client-devices-list" />
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        {/* Header Superior */}
+        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
+          <div className="flex items-center gap-3">
+            <img
+              src={logoEmpresa}
+              alt="Logo IFixPos"
+              className="w-8 h-8 object-contain drop-shadow-[0_2px_8px_rgba(6,182,212,0.4)]"
+            />
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <Link to="/cliente/dispositivos" className="text-slate-400 hover:text-cyan-400 transition-colors">
+                Mis Dispositivos
+              </Link>
+              <span className="text-slate-600">/</span>
+              <span className="text-cyan-400 font-semibold truncate max-w-[160px] sm:max-w-xs">
+                {dispositivo ? `${dispositivo.marca} ${dispositivo.modelo}` : 'Detalles'}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <UserProfileDropdown align="right" />
+          </div>
+        </header>
+
+        <main className="flex-1 p-6 sm:p-10 max-w-5xl mx-auto w-full">
+          {/* Botón Volver sutil */}
+          <div className="mb-6">
+            <Link
+              to="/cliente/dispositivos"
+              className="inline-flex items-center gap-2 text-xs font-semibold text-[#94A3B8] hover:text-[#06B6D4] transition-colors group"
+            >
+              <svg
+                className="w-4 h-4 transition-transform group-hover:-translate-x-1"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              Volver a Mis Dispositivos
+            </Link>
+          </div>
+
+          {/* Alerta de Error con fade-out */}
+          <AnimatePresence>
+            {errorMessage && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25 }}
+                role="alert"
+                className="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-start gap-3 shadow-lg shadow-rose-950/20"
+              >
+                <span className="text-rose-400 font-bold mt-0.5">!</span>
+                <span className="flex-1">{errorMessage}</span>
+                <button
+                  type="button"
+                  onClick={() => setErrorMessage('')}
+                  className="text-rose-400 hover:text-rose-200 text-xs font-mono"
+                >
+                  ✕
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Estado de Carga: Skeleton Cyber-Tech */}
+          {isLoading ? (
+            <div className="space-y-6">
+              {/* Skeleton Ficha */}
+              <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row gap-6 animate-pulse">
+                <div className="w-36 h-36 rounded-2xl bg-slate-900 shrink-0" />
+                <div className="flex-1 space-y-3">
+                  <div className="h-5 bg-slate-800 rounded w-1/4" />
+                  <div className="h-8 bg-slate-800 rounded w-2/3" />
+                  <div className="h-4 bg-slate-800 rounded w-1/2" />
+                  <div className="h-4 bg-slate-800 rounded w-1/3" />
+                </div>
+              </div>
+              {/* Skeleton Secciones */}
+              <div className="h-48 rounded-2xl bg-[#1E293B]/70 border border-slate-800 animate-pulse" />
+              <div className="h-64 rounded-2xl bg-[#1E293B]/70 border border-slate-800 animate-pulse" />
+            </div>
+          ) : !dispositivo ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center py-16 bg-[#1E293B]/50 border border-dashed border-slate-700 rounded-2xl"
+            >
+              <p className="text-slate-200 font-semibold">No se pudo cargar la información del equipo.</p>
+              <button
+                type="button"
+                onClick={() => navigate('/cliente/dispositivos')}
+                className="mt-4 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-cyan-400 border border-slate-700 font-semibold transition-colors"
+              >
+                Regresar al listado
+              </button>
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+              className="space-y-6"
+            >
+              {/* 1. FICHA TÉCNICA (Tarjeta Superior) */}
+              <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+                  {/* Foto del Equipo */}
+                  <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                    {imagenUrl ? (
+                      <img
+                        src={imagenUrl}
+                        alt={`${dispositivo.marca} ${dispositivo.modelo}`}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <svg
+                        className="w-16 h-16 text-slate-700"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.4}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"
+                        />
+                      </svg>
+                    )}
+                  </div>
+
+                  {/* Datos del Dispositivo */}
+                  <div className="flex-1 text-center sm:text-left space-y-3">
+                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[11px] font-mono font-semibold uppercase">
+                        {dispositivo.tipo || 'Dispositivo'}
+                      </span>
+                      <span className="text-xs text-slate-400 font-mono">
+                        ID: <span className="text-slate-200">#{dispositivo.id_dispositivo}</span>
+                      </span>
+                    </div>
+
+                    <div>
+                      <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC] tracking-tight">
+                        {dispositivo.marca}{' '}
+                        <span className="text-slate-300 font-semibold">{dispositivo.modelo}</span>
+                      </h1>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-700/60 text-xs">
+                      <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                        <span className="text-slate-400 block text-[11px] font-mono uppercase tracking-wider">
+                          Número de Serie / IMEI
+                        </span>
+                        <span className="font-mono text-slate-100 font-semibold text-xs">
+                          {dispositivo.numero_serie || 'No registrado (S/N)'}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
+                        <span className="text-slate-400 block text-[11px] font-mono uppercase tracking-wider">
+                          Fecha de Ingreso
+                        </span>
+                        <span className="font-mono text-slate-100 font-semibold text-xs">
+                          {formatearFecha(dispositivo.fecha_registro)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. SECCIÓN REPARACIÓN ACTIVA (Destacada con Borde Brillante) */}
+              {dispositivo.reparacion_activa && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.98 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.3 }}
+                  className="relative rounded-2xl p-6 sm:p-7 bg-gradient-to-r from-cyan-950/30 via-[#1E293B] to-slate-900 border-2 border-[#06B6D4] shadow-[0_0_30px_rgba(6,182,212,0.18)]"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#06B6D4] animate-ping" />
+                        <span className="text-[11px] font-mono font-bold tracking-wider text-cyan-400 uppercase">
+                          Servicio Técnico en Curso
+                        </span>
+                      </div>
+                      <h2 className="text-xl font-black text-white">
+                        Orden #{dispositivo.reparacion_activa.id_reparacion}
+                      </h2>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 font-mono font-semibold">
+                          {dispositivo.reparacion_activa.etapa}
+                        </span>
+                        <span className="text-slate-400 font-mono">
+                          Iniciada el {formatearFecha(dispositivo.reparacion_activa.fecha_inicio)}
+                        </span>
+                      </div>
+                      {dispositivo.reparacion_activa.desc_cliente && (
+                        <p className="text-xs text-slate-300 mt-2 italic bg-slate-950/40 p-3 rounded-xl border border-slate-800">
+                          &ldquo;{dispositivo.reparacion_activa.desc_cliente}&rdquo;
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(`/cliente/reparaciones/${dispositivo.reparacion_activa.id_reparacion}`)
+                      }
+                      className="px-5 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] shrink-0 self-start sm:self-center flex items-center gap-2"
+                    >
+                      <span>Ver Estado de Reparación</span>
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                      </svg>
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* 3. HISTORIAL DE REPARACIONES PREVIAS */}
+              <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 space-y-4">
+                <div className="border-b border-slate-700/60 pb-3 flex items-center justify-between">
+                  <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-[#8B5CF6]" />
+                    Historial de Reparaciones
+                  </h2>
+                  <span className="text-xs font-mono text-slate-400">
+                    {dispositivo.historial_reparaciones?.length || 0} registro(s)
+                  </span>
+                </div>
+
+                {!dispositivo.historial_reparaciones || dispositivo.historial_reparaciones.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-6 text-center italic">
+                    Este equipo aún no posee registros de reparaciones anteriores en su historial.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    {dispositivo.historial_reparaciones.map((rep) => (
+                      <div
+                        key={rep.id_reparacion}
+                        className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between gap-3 group"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-bold text-white font-mono">
+                              Orden #{rep.id_reparacion}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono">
+                              {rep.etapa}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            Inicio: {formatearFecha(rep.fecha_inicio)} {rep.fecha_entrega ? `• Entrega: ${formatearFecha(rep.fecha_entrega)}` : ''}
+                          </p>
+
+                          {rep.tecnico && (
+                            <p className="text-[11px] text-slate-400">
+                              Técnico: <span className="text-slate-300">{rep.tecnico}</span>
+                            </p>
+                          )}
+
+                          {rep.resumen_diagnostico && (
+                            <p className="text-xs text-slate-300 line-clamp-2">
+                              {rep.resumen_diagnostico}
+                            </p>
+                          )}
+
+                          {rep.calificacion && (
+                            <div className="flex items-center gap-1.5 text-xs text-amber-400 pt-1">
+                              <span>{'★'.repeat(rep.calificacion.puntuacion || 0)}</span>
+                              <span className="text-[11px] text-slate-400 font-mono">
+                                ({rep.calificacion.puntuacion}/5)
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-800/80 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/cliente/reparaciones/${rep.id_reparacion}`)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-[#8B5CF6]/20 text-slate-300 hover:text-[#C4B5FD] text-xs font-semibold border border-slate-700 hover:border-[#8B5CF6]/50 transition-all flex items-center gap-1"
+                          >
+                            <span>Ver Historial</span>
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}

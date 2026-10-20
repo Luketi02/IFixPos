@@ -27,18 +27,44 @@ class CiudadOutputSerializer(serializers.ModelSerializer):
         fields = ['id_ciudad', 'nombre_ciudad', 'cobertura_habilitada', 'id_provincia']
 
 
+class PaisNestedSerializer(serializers.Serializer):
+    """Serializador anidado ligero para País."""
+    id_pais = serializers.IntegerField(read_only=True)
+    nombre_pais = serializers.CharField(read_only=True)
+    nombre = serializers.CharField(source='nombre_pais', read_only=True)
+
+
+class ProvinciaNestedSerializer(serializers.Serializer):
+    """Serializador anidado ligero para Provincia."""
+    id_provincia = serializers.IntegerField(read_only=True)
+    nombre_provincia = serializers.CharField(read_only=True)
+    nombre = serializers.CharField(source='nombre_provincia', read_only=True)
+    pais = PaisNestedSerializer(source='id_pais', read_only=True)
+
+
+class CiudadNestedSerializer(serializers.Serializer):
+    """Serializador anidado ligero para Ciudad."""
+    id_ciudad = serializers.IntegerField(read_only=True)
+    nombre_ciudad = serializers.CharField(read_only=True)
+    nombre = serializers.CharField(source='nombre_ciudad', read_only=True)
+    provincia = ProvinciaNestedSerializer(source='id_provincia', read_only=True)
+
+
 class DireccionOutputSerializer(serializers.ModelSerializer):
     """
-    Serializador de salida para la entidad Dirección.
-    Incluye datos anidados de Ciudad, Provincia y País para simplificar
-    el consumo y renderizado inmediato en el Frontend.
+    Serializador de salida para la entidad Dirección (CU-47, CU-48, CU-49).
+    Mapea los datos de la dirección e incluye serializadores anidados ligeros
+    para exponer el nombre de la Ciudad, Provincia y País.
     """
+    ciudad_detalle = CiudadNestedSerializer(source='id_ciudad', read_only=True)
+    ciudad_info = CiudadNestedSerializer(source='id_ciudad', read_only=True)
+
     ciudad = serializers.CharField(source='id_ciudad.nombre_ciudad', read_only=True)
     id_provincia = serializers.IntegerField(source='id_ciudad.id_provincia.id_provincia', read_only=True)
     provincia = serializers.CharField(source='id_ciudad.id_provincia.nombre_provincia', read_only=True)
     id_pais = serializers.IntegerField(source='id_ciudad.id_provincia.id_pais.id_pais', read_only=True)
     pais = serializers.CharField(source='id_ciudad.id_provincia.id_pais.nombre_pais', read_only=True)
-    
+
     calle_numero = serializers.CharField(source='nro_calle', read_only=True)
     barrio = serializers.CharField(source='nombre_barrio', read_only=True)
 
@@ -56,6 +82,8 @@ class DireccionOutputSerializer(serializers.ModelSerializer):
             'is_active',
             'id_ciudad',
             'ciudad',
+            'ciudad_detalle',
+            'ciudad_info',
             'id_provincia',
             'provincia',
             'id_pais',
@@ -70,7 +98,13 @@ class DireccionOutputSerializer(serializers.ModelSerializer):
 class DireccionInputSerializer(serializers.Serializer):
     """
     Validador estricto de entrada para Registrar o Modificar Direcciones (CU-47 / CU-48).
-    Valida la existencia relacional de la Ciudad en la base de datos y normaliza los campos requeridos.
+    Campos esperados:
+      - id_ciudad (requerido): valida automáticamente que la ciudad exista por FK.
+      - alias (opcional).
+      - nro_calle (requerido).
+      - nombre_barrio (requerido).
+      - nro_dpto (opcional).
+      - piso (opcional).
     """
     id_ciudad = serializers.IntegerField(
         required=True,
@@ -81,32 +115,29 @@ class DireccionInputSerializer(serializers.Serializer):
     )
     alias = serializers.CharField(
         max_length=100,
-        required=True,
-        allow_blank=False,
-        error_messages={
-            'required': 'El alias de la dirección es obligatorio.',
-            'blank': 'El alias no puede estar en blanco.'
-        }
-    )
-    calle_numero = serializers.CharField(
-        max_length=255,
         required=False,
-        allow_blank=False
+        allow_blank=True,
+        allow_null=True
     )
     nro_calle = serializers.CharField(
         max_length=255,
         required=False,
-        allow_blank=False
+        allow_blank=True
     )
-    barrio = serializers.CharField(
-        max_length=150,
+    calle_numero = serializers.CharField(
+        max_length=255,
         required=False,
-        allow_blank=False
+        allow_blank=True
     )
     nombre_barrio = serializers.CharField(
         max_length=150,
         required=False,
-        allow_blank=False
+        allow_blank=True
+    )
+    barrio = serializers.CharField(
+        max_length=150,
+        required=False,
+        allow_blank=True
     )
     piso = serializers.IntegerField(
         required=False,
@@ -133,24 +164,28 @@ class DireccionInputSerializer(serializers.Serializer):
         return ciudad
 
     def validate(self, attrs):
-        # Resolver calle_numero / nro_calle
-        calle = attrs.get('calle_numero') or attrs.get('nro_calle')
+        # Resolver nro_calle / calle_numero
+        calle = attrs.get('nro_calle') or attrs.get('calle_numero')
         if not calle or not calle.strip():
             raise serializers.ValidationError({
-                'calle_numero': 'Debe especificar el nombre y número de la calle.'
+                'nro_calle': 'El campo nro_calle es obligatorio.'
             })
         attrs['nro_calle'] = calle.strip()
 
-        # Resolver barrio / nombre_barrio
-        barrio = attrs.get('barrio') or attrs.get('nombre_barrio')
+        # Resolver nombre_barrio / barrio
+        barrio = attrs.get('nombre_barrio') or attrs.get('barrio')
         if not barrio or not barrio.strip():
             raise serializers.ValidationError({
-                'barrio': 'Debe especificar el barrio de la dirección.'
+                'nombre_barrio': 'El campo nombre_barrio es obligatorio.'
             })
         attrs['nombre_barrio'] = barrio.strip()
 
-        # Normalizar alias
-        attrs['alias'] = attrs['alias'].strip()
+        # Normalizar alias (opcional)
+        alias = attrs.get('alias')
+        if alias:
+            attrs['alias'] = alias.strip()
+        else:
+            attrs['alias'] = ''
 
         # Manejar piso_dpto si se proporciona
         piso_dpto = attrs.get('piso_dpto')

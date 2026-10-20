@@ -149,7 +149,7 @@ export default function AdminConfigScreen() {
     if (idDir && idDir !== 'S/N' && !isNaN(Number(idDir)) && Number(idDir) > 0) {
       setIsLoadingDireccion(true);
       axios
-        .get(`${API_BASE_URL}/api/geo/mis-direcciones/${idDir}/`, {
+        .get(`${API_BASE_URL}/api/geo/direccion-sede/`, {
           headers: { Authorization: `Bearer ${token}` }
         })
         .then((res) => {
@@ -175,30 +175,12 @@ export default function AdminConfigScreen() {
     };
   }, [formData.direccionLocal, token]);
 
-  // Callback al guardar o seleccionar una dirección desde el modal de geo_app
-  const handleAddressSaved = async (savedAddress) => {
+  // Callback al guardar la dirección de la sede (el backend ya actualizó 'direccionLocal')
+  const handleAddressSaved = (savedAddress) => {
     if (!savedAddress || !savedAddress.id_direccion) return;
-    const nuevoIdStr = String(savedAddress.id_direccion);
-
     setDireccionSede(savedAddress);
-    setFormData((prev) => ({ ...prev, direccionLocal: nuevoIdStr }));
-
-    try {
-      await axios.put(
-        `${API_BASE_URL}/api/core/configuraciones/`,
-        { direccionLocal: nuevoIdStr },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      setSuccessMsg('Dirección de la sede actualizada y vinculada exitosamente.');
-    } catch (err) {
-      console.error('Error al sincronizar direccionLocal:', err);
-      setSuccessMsg('Dirección guardada. Pulsa "Guardar Configuraciones" para sincronizar todos los parámetros.');
-    }
+    setFormData((prev) => ({ ...prev, direccionLocal: String(savedAddress.id_direccion) }));
+    setSuccessMsg('Dirección de la sede actualizada y vinculada exitosamente.');
   };
 
   // Manejador para subir o reemplazar el archivo del logo de la empresa
@@ -408,13 +390,21 @@ export default function AdminConfigScreen() {
       {/* 1. Barra Lateral de Navegación Izquierda Persistente */}
       <AdminSidebar
         activeMenu="config-general"
-        onSelectMenu={(val) => {
+        onSelectMenu={(val, item) => {
+          if (item?.route && item.route !== '/admin/configuracion') {
+            navigate(item.route);
+            return;
+          }
           if (val === 'config-general') {
             setSelectedCategory('all');
           } else if (val === 'config-notifications') {
             setSelectedCategory('institucional');
           } else if (val === 'config-audit') {
             setSelectedCategory('auditoria');
+          } else if (val === 'admin-inventory' || val === 'catalog-categories' || val === 'inventory-stock') {
+            navigate('/admin/inventario');
+          } else if (val === 'config-zones') {
+            navigate('/admin/zonas-cobertura');
           } else {
             navigate('/admin/dashboard', { state: { activeMenu: val } });
           }
@@ -1714,6 +1704,7 @@ export default function AdminConfigScreen() {
         title={direccionSede && addressModalMode === 'edit' ? 'Modificar Dirección de la Sede' : 'Asignar Dirección de la Sede'}
         token={token}
         permitirTodosPaises={true}
+        modoSede={true}
       />
 
     </div>

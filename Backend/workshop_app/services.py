@@ -3,7 +3,7 @@ from django.conf import settings
 from django.utils import timezone as django_timezone
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
-from workshop_app.models import Dispositivo
+from workshop_app.models import Dispositivo, CategoriaReparacion
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
 from core_app.models import LogSistema
@@ -153,6 +153,20 @@ def evaluar_y_promover_catalogo_8_usos(*, modelo: ModeloDispositivo, usuario_eje
             )
 
 
+def validar_imagen_dispositivo(archivo) -> None:
+    """Valida formato y peso de la imagen; lanza ValidationError con mensaje claro."""
+    if not archivo or not hasattr(archivo, 'name'):
+        return
+
+    ext = os.path.splitext(archivo.name)[1].lower()
+    formatos_permitidos = ['.png', '.jpg', '.jpeg', '.webp', '.jfif', '.avif', '.heic', '.heif']
+    if ext not in formatos_permitidos:
+        raise ValidationError(f"Formato de imagen no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
+
+    if hasattr(archivo, 'size') and archivo.size > 5 * 1024 * 1024:
+        raise ValidationError("El archivo de imagen supera el tamaño máximo permitido de 5 MB.")
+
+
 def guardar_archivo_imagen_dispositivo(*, archivo, id_propietario: int) -> str:
     """
     Valida y guarda un archivo binario de imagen para el dispositivo en MEDIA_ROOT/dispositivos.
@@ -161,13 +175,8 @@ def guardar_archivo_imagen_dispositivo(*, archivo, id_propietario: int) -> str:
     if not archivo:
         return None
 
+    validar_imagen_dispositivo(archivo)
     ext = os.path.splitext(archivo.name)[1].lower()
-    formatos_permitidos = ['.png', '.jpg', '.jpeg', '.webp']
-    if ext not in formatos_permitidos:
-        raise ValidationError(f"Formato no permitido. Solo se admiten imágenes: {', '.join(formatos_permitidos)}")
-
-    if hasattr(archivo, 'size') and archivo.size > 5 * 1024 * 1024:
-        raise ValidationError("El archivo de imagen supera el tamaño máximo permitido de 5 MB.")
 
     carpeta_destino = os.path.join(settings.MEDIA_ROOT, 'dispositivos')
     os.makedirs(carpeta_destino, exist_ok=True)
@@ -205,6 +214,9 @@ def registrar_dispositivo(*, usuario_ejecutor: Usuario, datos_validados: dict) -
     """
     if not usuario_ejecutor:
         raise ValidationError("No se pudo identificar al usuario ejecutor de la acción.")
+
+    # 0. Validar la imagen antes de crear cualquier registro de catálogo
+    validar_imagen_dispositivo(datos_validados.get('imagen'))
 
     # 1. Determinar el rol del usuario ejecutor
     rol_codigo = ''
@@ -307,3 +319,141 @@ def crear_dispositivo(
             'imagen': imagen
         }
     )
+
+
+@transaction.atomic
+def editar_dispositivo_cliente(*, usuario_cliente: Usuario, id_dispositivo: int, datos_validados: dict) -> Dispositivo:
+    """
+    CU-07: Editar Dispositivo (autogestión del Cliente).
+
+    - Valida propiedad del equipo (PermissionDenied si no es suyo).
+    - Bloquea la edición si posee historial de reparaciones (auditoría).
+    - Actualiza solo nro_serie, imagen, marca/modelo y registra LogSistema.
+    """
+    from rest_framework.exceptions import PermissionDenied
+    from workshop_app.selectors import dispositivo_tiene_reparaciones
+
+    dispositivo = Dispositivo.objects.select_for_update().filter(pk=id_dispositivo).first()
+    if not dispositivo:
+        raise ValidationError("El dispositivo especificado no existe.")
+
+    if dispositivo.id_usuario_id != usuario_cliente.id_usuario:
+        raise PermissionDenied("No tienes permisos sobre este equipo")
+
+    if dispositivo_tiene_reparaciones(id_dispositivo):
+        raise ValidationError("El equipo posee historial técnico y no puede ser alterado por normativas de auditoría")
+
+    campos = []
+    if 'id_modelo' in datos_validados:
+        modelo = ModeloDispositivo.objects.filter(pk=datos_validados['id_modelo']).first()
+        if not modelo:
+            raise ValidationError("El modelo de dispositivo especificado no existe.")
+        if 'id_marca' in datos_validados and modelo.id_marca_id != datos_validados['id_marca']:
+            raise ValidationError("El modelo no pertenece a la marca seleccionada.")
+        dispositivo.id_modelo = modelo
+        campos.append('id_modelo')
+
+    if 'nro_serie' in datos_validados:
+        nro_serie = datos_validados['nro_serie']
+        dispositivo.numero_serie = (str(nro_serie).strip() or None) if nro_serie is not None else None
+        campos.append('numero_serie')
+
+    if 'imagen' in datos_validados:
+        imagen = datos_validados['imagen']
+        if imagen and (hasattr(imagen, 'chunks') or hasattr(imagen, 'read')):
+            dispositivo.imagen = guardar_archivo_imagen_dispositivo(
+                archivo=imagen, id_propietario=usuario_cliente.id_usuario
+            )
+        elif isinstance(imagen, str) and imagen.strip():
+            dispositivo.imagen = imagen.strip()
+        else:
+            dispositivo.imagen = None
+        campos.append('imagen')
+
+    dispositivo.save(update_fields=campos or None)
+
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion=f"Edición de dispositivo {dispositivo.id_dispositivo}",
+        detalle=f"El cliente ID {usuario_cliente.id_usuario} modificó su dispositivo (campos: {', '.join(campos) or 'ninguno'}).",
+        tipo="INFO",
+        modulo_origen="workshop_app",
+        tabla_afectada="dispositivo",
+        id_registro_afectado=str(dispositivo.id_dispositivo),
+        id_usuario=usuario_cliente
+    )
+
+    return dispositivo
+
+
+# ==============================================================================
+# GESTIÓN DE CATEGORÍAS DE REPARACIÓN (CU-62, CU-63)
+# ==============================================================================
+
+@transaction.atomic
+def crear_categoria_reparacion(
+    *,
+    usuario_admin: Usuario,
+    nombre: str
+) -> CategoriaReparacion:
+    """
+    CU-62: Crear Categoría de Reparación.
+    Instancia y guarda un nuevo registro de CategoriaReparacion con estado_activo = True,
+    generando la correspondiente traza de auditoría en LogSistema.
+    """
+    nombre_limpio = normalizar_nombre(nombre)
+
+    categoria = CategoriaReparacion.objects.create(
+        nombre=nombre_limpio,
+        estado_activo=True
+    )
+
+    email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Alta de Categoría de Reparación (CU-62)",
+        detalle=f"Alta de categoría de reparación '{categoria.nombre}' (ID: {categoria.id_categoria}) por {email_admin}.",
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="categoria_reparacion",
+        id_registro_afectado=str(categoria.id_categoria),
+        id_usuario=usuario_admin
+    )
+
+    return categoria
+
+
+@transaction.atomic
+def cambiar_estado_categoria_reparacion(
+    *,
+    usuario_admin: Usuario,
+    id_categoria: int
+) -> CategoriaReparacion:
+    """
+    CU-63: Cambiar Estado de Categoría de Reparación.
+    Recupera la categoría por su ID, invierte el valor de estado_activo (Soft Delete / Restauración),
+    guarda en base de datos y genera el LogSistema documentando el cambio de estado.
+    """
+    from workshop_app.selectors import obtener_categoria_reparacion
+
+    categoria = obtener_categoria_reparacion(id_categoria)
+
+    # Invertir el valor de estado_activo
+    categoria.estado_activo = not categoria.estado_activo
+    categoria.save(update_fields=['estado_activo'])
+
+    operacion = "Restauración (Activo)" if categoria.estado_activo else "Soft Delete (Inactivo)"
+    email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
+
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Cambio de Estado de Categoría de Reparación (CU-63)",
+        detalle=f"Cambio de estado de categoría de reparación '{categoria.nombre}' (ID: {categoria.id_categoria}) a {operacion} por {email_admin}.",
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="categoria_reparacion",
+        id_registro_afectado=str(categoria.id_categoria),
+        id_usuario=usuario_admin
+    )
+
+    return categoria

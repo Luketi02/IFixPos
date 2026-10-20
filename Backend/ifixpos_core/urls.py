@@ -27,6 +27,8 @@ urlpatterns = [
     path('api/geo/', include('geo_app.urls')),
     path('api/workshop/', include('workshop_app.urls')),
     path('api/catalog/', include('catalog_app.urls')),
+    path('api/inventory/', include('inventory_app.urls')),
+    path('api/sales/', include('sales_app.urls')),
 ]
 
 if settings.DEBUG:

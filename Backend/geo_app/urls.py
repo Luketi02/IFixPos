@@ -4,7 +4,9 @@ from geo_app.apis import (
     ProvinciasListApi,
     CiudadesListApi,
     MisDireccionesApi,
+    MisDireccionesDetalleApi,
     DireccionDetalleApi,
+    DireccionSedeApi,
     ZonasCoberturaApi
 )
 
@@ -19,7 +21,10 @@ urlpatterns = [
     path('provincias/<int:id_provincia>/ciudades/', CiudadesListApi.as_view(), name='api_provincias_ciudades_list'),
     path('ciudades/', CiudadesListApi.as_view(), name='api_ciudades_list'),
 
+    # Dirección física de la sede (direccionLocal), independiente de la libreta personal
+    path('direccion-sede/', DireccionSedeApi.as_view(), name='api_direccion_sede'),
+
     # Libreta de Direcciones Personales (CU-47, CU-48, CU-49)
     path('mis-direcciones/', MisDireccionesApi.as_view(), name='api_mis_direcciones'),
-    path('mis-direcciones/<int:id_direccion>/', DireccionDetalleApi.as_view(), name='api_direccion_detalle'),
+    path('mis-direcciones/<int:id_direccion>/', MisDireccionesDetalleApi.as_view(), name='api_mis_direcciones_detalle'),
 ]

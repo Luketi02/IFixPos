@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import useAuth from '../../context/useAuth';
 import { normalizeRole } from '../../utils/roleRoutes';
 import BranchedMenu from './BranchedMenu';
@@ -40,9 +40,19 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Catálogo & Inventario',
     children: [
-      { value: 'catalog-products', label: 'Productos & Repuestos', icon: PackageIcon },
-      { value: 'catalog-categories', label: 'Categorías y Familias', icon: Layers01Icon },
-      { value: 'inventory-stock', label: 'Control de Stock', icon: PackageIcon }
+      { value: 'admin-inventory', label: 'Catálogo e Inventario', icon: PackageIcon, route: '/admin/inventario' },
+      { value: 'catalog-categories', label: 'Categorías y Familias', icon: Layers01Icon, route: '/admin/inventario' },
+      { value: 'inventory-stock', label: 'Control de Stock', icon: PackageIcon, route: '/admin/inventario' }
+    ]
+  },
+  {
+    label: 'Catálogos y Taxonomías',
+    children: [
+      { value: 'catalog-marcas', label: 'Marcas', icon: Layers01Icon, route: '/admin/catalogos/marcas' },
+      { value: 'catalog-modelos', label: 'Modelos de Dispositivo', icon: SmartPhone01Icon, route: '/admin/catalogos/modelos' },
+      { value: 'catalog-tipos-dispositivo', label: 'Tipos de Dispositivo', icon: SmartPhone01Icon, route: '/admin/catalogos/tipos-dispositivo' },
+      { value: 'catalog-categorias-producto', label: 'Categorías de Producto', icon: PackageIcon, route: '/admin/catalogos/categorias-producto' },
+      { value: 'catalog-categorias-reparacion', label: 'Categorías de Reparación', icon: Settings02Icon, route: '/admin/catalogos/categorias-reparacion' }
     ]
   },
   {
@@ -86,8 +96,7 @@ export const CLIENT_MENU_ITEMS = [
   {
     label: 'Mis Dispositivos',
     children: [
-      { value: 'client-devices-new', label: 'Registrar Dispositivo', icon: SmartPhone01Icon, route: '/cliente/dispositivos/nuevo' },
-      { value: 'client-devices-list', label: 'Mis Equipos Registrados', icon: PackageIcon, route: '/tienda' }
+      { value: 'client-devices-list', label: 'Mis Dispositivos', icon: SmartPhone01Icon, route: '/cliente/dispositivos' }
     ]
   },
   {
@@ -114,9 +123,11 @@ export const TECH_MENU_ITEMS = [
 export default function AdminSidebar({
   activeMenu = 'overview',
   onSelectMenu,
+  onNavigate,
   role: roleProp
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
 
   // Determinar rol efectivo: prop role o el del usuario autenticado
@@ -140,11 +151,24 @@ export default function AdminSidebar({
   }
 
   const handleSelect = (val, item) => {
+    // 1. Si el ítem tiene una ruta explícita y es diferente a la ruta actual, navegar directamente
+    if (item?.route && item.route !== location.pathname) {
+      navigate(item.route);
+      return;
+    }
+
+    // 2. Si el contenedor padre maneja la selección interna (ej. tabs o secciones en la misma página)
     if (onSelectMenu) {
       onSelectMenu(val, item);
       return;
     }
 
+    if (onNavigate) {
+      onNavigate(val, item);
+      return;
+    }
+
+    // 3. Fallbacks si no había handler padre
     if (item?.route) {
       navigate(item.route);
       return;
@@ -159,6 +183,18 @@ export default function AdminSidebar({
       navigate('/admin/configuracion');
     } else if (val === 'config-zones') {
       navigate('/admin/zonas-cobertura');
+    } else if (val === 'admin-inventory' || val === 'catalog-products' || val === 'catalog-categories' || val === 'inventory-stock') {
+      navigate('/admin/inventario');
+    } else if (val === 'catalog-marcas') {
+      navigate('/admin/catalogos/marcas');
+    } else if (val === 'catalog-modelos') {
+      navigate('/admin/catalogos/modelos');
+    } else if (val === 'catalog-tipos-dispositivo') {
+      navigate('/admin/catalogos/tipos-dispositivo');
+    } else if (val === 'catalog-categorias-producto') {
+      navigate('/admin/catalogos/categorias-producto');
+    } else if (val === 'catalog-categorias-reparacion') {
+      navigate('/admin/catalogos/categorias-reparacion');
     } else {
       if (effectiveRole === 'cliente') {
         navigate('/tienda');
@@ -170,8 +206,15 @@ export default function AdminSidebar({
     }
   };
 
-  // Todas las secciones colapsadas por defecto según preferencia de UX
-  const defaultOpenIndices = [];
+  // Expandir automáticamente la categoría padre que contenga la opción o ruta activa (Punto 3)
+  const activeSectionIndex = items.findIndex((section) =>
+    section.children?.some(
+      (kid) =>
+        kid.value === activeMenu ||
+        (kid.route && (location.pathname === kid.route || (kid.route !== '/admin/dashboard' && kid.route !== '/tienda' && location.pathname.startsWith(kid.route))))
+    )
+  );
+  const defaultOpenIndices = activeSectionIndex >= 0 ? [activeSectionIndex] : [];
 
   return (
     <aside className="w-full md:w-72 bg-[#1E293B] border-r border-slate-700/80 flex flex-col shrink-0 md:sticky md:top-0 md:h-screen z-40">

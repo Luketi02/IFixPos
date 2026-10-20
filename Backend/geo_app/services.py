@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from django.db import transaction
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist, ValidationError
 from geo_app.models import Direccion, Ciudad, Pais, Provincia
+from geo_app.selectors import obtener_direccion_usuario
 from users_app.models import Usuario
 from core_app.models import LogSistema
 
@@ -32,23 +33,30 @@ def _registrar_auditoria_personal(*, usuario: Usuario, accion: str, id_registro:
 
 
 @transaction.atomic
-def registrar_direccion(*, usuario: Usuario, datos: Dict[str, Any]) -> Direccion:
+def registrar_direccion(
+    *,
+    usuario: Usuario,
+    datos_validados: Optional[Dict[str, Any]] = None,
+    datos: Optional[Dict[str, Any]] = None
+) -> Direccion:
     """
     CU-47: Registrar Dirección.
-    Crea y persiste una nueva dirección vinculada al usuario autenticado.
+    Crea una instancia de Direccion vinculada a usuario.id, la persiste y retorna.
     """
-    ciudad = datos.get('id_ciudad')
+    payload = datos_validados if datos_validados is not None else (datos or {})
+
+    ciudad = payload.get('id_ciudad')
     if isinstance(ciudad, int):
         ciudad = Ciudad.objects.get(id_ciudad=ciudad)
 
     direccion = Direccion.objects.create(
         id_usuario=usuario,
         id_ciudad=ciudad,
-        alias=datos.get('alias', '').strip(),
-        nro_calle=(datos.get('nro_calle') or datos.get('calle_numero', '')).strip(),
-        nombre_barrio=(datos.get('nombre_barrio') or datos.get('barrio', '')).strip(),
-        nro_dpto=datos.get('nro_dpto') or datos.get('piso_dpto') or None,
-        piso=datos.get('piso'),
+        alias=(payload.get('alias') or '').strip() if payload.get('alias') else None,
+        nro_calle=(payload.get('nro_calle') or payload.get('calle_numero') or '').strip(),
+        nombre_barrio=(payload.get('nombre_barrio') or payload.get('barrio') or '').strip() if (payload.get('nombre_barrio') or payload.get('barrio')) else None,
+        nro_dpto=payload.get('nro_dpto') or payload.get('piso_dpto') or None,
+        piso=payload.get('piso'),
         is_active=True
     )
 
@@ -56,47 +64,58 @@ def registrar_direccion(*, usuario: Usuario, datos: Dict[str, Any]) -> Direccion
         usuario=usuario,
         accion="Registrar Dirección (CU-47)",
         id_registro=direccion.id_direccion,
-        detalle=f"Dirección creada con alias '{direccion.alias}' en ciudad '{ciudad.nombre_ciudad}'"
+        detalle=f"Dirección creada con alias '{direccion.alias}' en ciudad '{ciudad.nombre_ciudad if ciudad else ''}'"
     )
 
     return direccion
 
 
 @transaction.atomic
-def modificar_direccion(*, usuario: Usuario, id_direccion: int, datos: Dict[str, Any]) -> Direccion:
+def modificar_direccion(
+    *,
+    usuario: Usuario,
+    id_direccion: int,
+    datos_validados: Optional[Dict[str, Any]] = None,
+    datos: Optional[Dict[str, Any]] = None
+) -> Direccion:
     """
     CU-48: Modificar Dirección.
-    Busca la dirección, asegura que pertenezca al usuario (o administrador) y actualiza sus campos.
+    Utiliza obtener_direccion_usuario para recuperar y validar propiedad.
+    Sobrescribe los campos provistos en datos_validados y guarda.
     """
-    try:
-        direccion = Direccion.objects.select_related('id_usuario', 'id_ciudad').get(id_direccion=id_direccion)
-    except Direccion.DoesNotExist:
-        raise ObjectDoesNotExist(f"No se encontró la dirección con ID {id_direccion}.")
+    payload = datos_validados if datos_validados is not None else (datos or {})
 
-    # Verificación de propiedad del registro
     rol_codigo = ''
     if hasattr(usuario, 'id_rol') and usuario.id_rol and hasattr(usuario.id_rol, 'codigo'):
         rol_codigo = (usuario.id_rol.codigo or '').upper()
+    elif hasattr(usuario, 'rol') and usuario.rol and hasattr(usuario.rol, 'codigo'):
+        rol_codigo = (usuario.rol.codigo or '').upper()
 
-    if direccion.id_usuario_id != usuario.id_usuario and rol_codigo != 'ADMIN':
-        raise PermissionDenied("No tienes permisos para modificar esta dirección.")
+    user_id = getattr(usuario, 'id_usuario', getattr(usuario, 'id', None))
+    es_admin = rol_codigo == 'ADMIN'
 
-    ciudad = datos.get('id_ciudad')
+    # Recupera y valida propiedad mediante el selector
+    direccion = obtener_direccion_usuario(id_direccion=id_direccion, id_usuario=user_id, es_admin=es_admin)
+
+    ciudad = payload.get('id_ciudad')
     if ciudad is not None:
         if isinstance(ciudad, int):
             ciudad = Ciudad.objects.get(id_ciudad=ciudad)
         direccion.id_ciudad = ciudad
 
-    if 'alias' in datos:
-        direccion.alias = datos['alias'].strip()
-    if 'nro_calle' in datos or 'calle_numero' in datos:
-        direccion.nro_calle = (datos.get('nro_calle') or datos.get('calle_numero', '')).strip()
-    if 'nombre_barrio' in datos or 'barrio' in datos:
-        direccion.nombre_barrio = (datos.get('nombre_barrio') or datos.get('barrio', '')).strip()
-    if 'nro_dpto' in datos or 'piso_dpto' in datos:
-        direccion.nro_dpto = datos.get('nro_dpto') or datos.get('piso_dpto') or None
-    if 'piso' in datos:
-        direccion.piso = datos['piso']
+    if 'alias' in payload:
+        direccion.alias = (payload['alias'] or '').strip() if payload['alias'] else None
+    if 'nro_calle' in payload or 'calle_numero' in payload:
+        calle = payload.get('nro_calle') or payload.get('calle_numero')
+        if calle:
+            direccion.nro_calle = calle.strip()
+    if 'nombre_barrio' in payload or 'barrio' in payload:
+        barrio = payload.get('nombre_barrio') or payload.get('barrio')
+        direccion.nombre_barrio = barrio.strip() if barrio else None
+    if 'nro_dpto' in payload or 'piso_dpto' in payload:
+        direccion.nro_dpto = payload.get('nro_dpto') or payload.get('piso_dpto') or None
+    if 'piso' in payload:
+        direccion.piso = payload['piso']
 
     direccion.save()
 
@@ -114,22 +133,22 @@ def modificar_direccion(*, usuario: Usuario, id_direccion: int, datos: Dict[str,
 def cambiar_estado_direccion(*, usuario: Usuario, id_direccion: int) -> Direccion:
     """
     CU-49: Cambiar Estado de Dirección (Borrado Lógico / Recuperación).
-    Busca la dirección, asegura propiedad e invierte su valor is_active (de True a False o viceversa).
+    Utiliza obtener_direccion_usuario para recuperar y validar propiedad.
+    Invierte el valor del campo booleano: si is_active es True, pasa a False; si es False, pasa a True. Guarda el cambio.
     """
-    try:
-        direccion = Direccion.objects.select_related('id_usuario').get(id_direccion=id_direccion)
-    except Direccion.DoesNotExist:
-        raise ObjectDoesNotExist(f"No se encontró la dirección con ID {id_direccion}.")
-
-    # Verificación de propiedad
     rol_codigo = ''
     if hasattr(usuario, 'id_rol') and usuario.id_rol and hasattr(usuario.id_rol, 'codigo'):
         rol_codigo = (usuario.id_rol.codigo or '').upper()
+    elif hasattr(usuario, 'rol') and usuario.rol and hasattr(usuario.rol, 'codigo'):
+        rol_codigo = (usuario.rol.codigo or '').upper()
 
-    if direccion.id_usuario_id != usuario.id_usuario and rol_codigo != 'ADMIN':
-        raise PermissionDenied("No tienes permisos para cambiar el estado de esta dirección.")
+    user_id = getattr(usuario, 'id_usuario', getattr(usuario, 'id', None))
+    es_admin = rol_codigo == 'ADMIN'
 
-    # Conmutar estado lógico
+    # Recupera y valida propiedad mediante el selector
+    direccion = obtener_direccion_usuario(id_direccion=id_direccion, id_usuario=user_id, es_admin=es_admin)
+
+    # Conmutar estado lógico (Soft-Delete / Restore)
     direccion.is_active = not direccion.is_active
     direccion.save(update_fields=['is_active'])
 
@@ -139,6 +158,81 @@ def cambiar_estado_direccion(*, usuario: Usuario, id_direccion: int) -> Direccio
         accion=f"Cambiar Estado Dirección a {estado_str} (CU-49)",
         id_registro=direccion.id_direccion,
         detalle=f"Estado de dirección {direccion.id_direccion} cambiado a is_active={direccion.is_active}"
+    )
+
+    return direccion
+
+
+@transaction.atomic
+def guardar_direccion_sede(*, usuario_admin: Usuario, datos_validados: Dict[str, Any]) -> Direccion:
+    """
+    Crea o actualiza la dirección física de la sede y la vincula en el parámetro
+    'direccionLocal' de ConfiguracionSistema.
+
+    - La dirección de la sede NO pertenece a ningún usuario (id_usuario=NULL), por lo que
+      es independiente de la libreta de direcciones personal del administrador.
+    - Si 'direccionLocal' apunta a una dirección personal de un usuario (datos heredados),
+      no se modifica esa dirección: se crea una nueva exclusiva de la sede y se repunta.
+    """
+    from core_app.models import ConfiguracionSistema
+    from django.utils import timezone as dj_timezone
+
+    ciudad = datos_validados.get('id_ciudad')
+    if isinstance(ciudad, int):
+        ciudad = Ciudad.objects.get(id_ciudad=ciudad)
+
+    nro_calle = (datos_validados.get('nro_calle') or datos_validados.get('calle_numero') or '').strip()
+    barrio = (datos_validados.get('nombre_barrio') or datos_validados.get('barrio') or '').strip() or None
+    alias = (datos_validados.get('alias') or '').strip() or None
+    nro_dpto = datos_validados.get('nro_dpto') or datos_validados.get('piso_dpto') or None
+    piso = datos_validados.get('piso')
+
+    config = ConfiguracionSistema.objects.filter(clave='direccionLocal').first()
+    valor_actual = (config.valor or '').strip() if config else ''
+    direccion = None
+    if valor_actual.isdigit():
+        direccion = Direccion.objects.filter(id_direccion=int(valor_actual)).first()
+
+    # Solo se reutiliza si ya es exclusiva de la sede (sin usuario dueño)
+    if direccion is not None and direccion.id_usuario_id is None:
+        direccion.id_ciudad = ciudad
+        direccion.alias = alias
+        direccion.nro_calle = nro_calle
+        direccion.nombre_barrio = barrio
+        direccion.nro_dpto = nro_dpto
+        direccion.piso = piso
+        direccion.is_active = True
+        direccion.save()
+    else:
+        direccion = Direccion.objects.create(
+            id_usuario=None,
+            id_ciudad=ciudad,
+            alias=alias,
+            nro_calle=nro_calle,
+            nombre_barrio=barrio,
+            nro_dpto=nro_dpto,
+            piso=piso,
+            is_active=True
+        )
+
+    ahora = dj_timezone.now()
+    if config:
+        config.valor = str(direccion.id_direccion)
+        config.ultima_modif = ahora
+        config.save(update_fields=['valor', 'ultima_modif'])
+    else:
+        ConfiguracionSistema.objects.create(
+            clave='direccionLocal',
+            descripcion='ID de la dirección física de la sede',
+            valor=str(direccion.id_direccion),
+            ultima_modif=ahora
+        )
+
+    _registrar_auditoria_personal(
+        usuario=usuario_admin,
+        accion="Actualizar Dirección de la Sede",
+        id_registro=direccion.id_direccion,
+        detalle=f"direccionLocal vinculada a la dirección {direccion.id_direccion}"
     )
 
     return direccion

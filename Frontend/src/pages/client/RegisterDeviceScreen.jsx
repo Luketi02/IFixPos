@@ -144,9 +144,10 @@ export default function RegisterDeviceScreen() {
   const handleFileSelect = (file) => {
     if (!file) return;
 
-    const extensionesValidas = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-    if (!extensionesValidas.includes(file.type)) {
-      setErrorMessage('Formato no soportado. Por favor selecciona una imagen PNG, JPG, JPEG o WEBP.');
+    const extensionesValidas = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/jfif', 'image/avif', 'image/heic', 'image/heif'];
+    const extensionValida = /\.(png|jpe?g|webp|jfif|avif|heic|heif)$/i.test(file.name);
+    if (!extensionValida || (!extensionesValidas.includes(file.type) && !file.type.startsWith('image/'))) {
+      setErrorMessage('Formato de imagen no permitido. Se admiten: PNG, JPG, JPEG, WEBP, JFIF, AVIF, HEIC/HEIF.');
       return;
     }
 
@@ -731,7 +732,7 @@ export default function RegisterDeviceScreen() {
                     type="file"
                     ref={fileInputRef}
                     onChange={handleInputChange}
-                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    accept="image/png,image/jpeg,image/jpg,image/webp,image/jfif,image/avif,image/heic,image/heif,.jfif,.avif,.heic,.heif"
                     className="hidden"
                   />
 
@@ -761,7 +762,7 @@ export default function RegisterDeviceScreen() {
                           </span>
                         </p>
                         <p className="text-[11px] text-slate-400 mt-1 font-mono">
-                          Formatos admitidos: PNG, JPG, JPEG, WEBP (Hasta 5 MB)
+                          Formatos admitidos: PNG, JPG, JPEG, WEBP, JFIF, AVIF, HEIC (Hasta 5 MB)
                         </p>
                       </div>
 

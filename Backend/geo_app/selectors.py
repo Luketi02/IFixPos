@@ -1,6 +1,6 @@
 from typing import Optional
 from django.db.models import QuerySet
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 from geo_app.models import Pais, Provincia, Ciudad, Direccion
 
 
@@ -45,15 +45,26 @@ def obtener_ciudades_por_provincia(id_provincia: int, *, solo_habilitadas: bool 
     return qs
 
 
+def obtener_direcciones_usuario(id_usuario: int, *, solo_activas: bool = False) -> QuerySet[Direccion]:
+    """
+    CU-47, CU-48, CU-49: Retorna todas las direcciones asociadas a ese usuario,
+    usando select_related('id_ciudad__id_provincia__id_pais') para optimizar la consulta.
+    Si solo_activas=True, filtra únicamente las que tienen is_active=True.
+    """
+    qs = Direccion.objects.filter(
+        id_usuario_id=id_usuario
+    ).select_related('id_ciudad__id_provincia__id_pais').order_by('-id_direccion')
+    if solo_activas:
+        qs = qs.filter(is_active=True)
+    return qs
+
+
 def obtener_direcciones_activas_usuario(id_usuario: int) -> QuerySet[Direccion]:
     """
     Retorna únicamente las direcciones vigentes (is_active=True) de un usuario.
     Aplica select_related para traer en un solo query Ciudad, Provincia y País.
     """
-    return Direccion.objects.filter(
-        id_usuario_id=id_usuario,
-        is_active=True
-    ).select_related('id_ciudad__id_provincia__id_pais').order_by('-id_direccion')
+    return obtener_direcciones_usuario(id_usuario, solo_activas=True)
 
 
 def obtener_todas_direcciones_usuario(id_usuario: int) -> QuerySet[Direccion]:
@@ -61,9 +72,41 @@ def obtener_todas_direcciones_usuario(id_usuario: int) -> QuerySet[Direccion]:
     Retorna el historial completo de direcciones de un usuario (activas e inactivas).
     Aplica select_related para optimizar la carga relacional.
     """
-    return Direccion.objects.filter(
-        id_usuario_id=id_usuario
-    ).select_related('id_ciudad__id_provincia__id_pais').order_by('-id_direccion')
+    return obtener_direcciones_usuario(id_usuario, solo_activas=False)
+
+
+def obtener_direccion_usuario(id_direccion: int, id_usuario: int, *, es_admin: bool = False) -> Direccion:
+    """
+    Retorna una dirección específica. Si no existe o no pertenece al usuario,
+    levanta ObjectDoesNotExist o PermissionDenied.
+    """
+    try:
+        direccion = Direccion.objects.select_related(
+            'id_ciudad__id_provincia__id_pais'
+        ).get(id_direccion=id_direccion)
+    except Direccion.DoesNotExist:
+        raise ObjectDoesNotExist(f"No se encontró la dirección con ID {id_direccion}.")
+
+    if not es_admin and direccion.id_usuario_id != id_usuario:
+        raise PermissionDenied("No tienes permisos para acceder a esta dirección.")
+
+    return direccion
+
+
+def obtener_direccion_sede() -> Optional[Direccion]:
+    """
+    Retorna la dirección física de la sede de la empresa, referenciada por el parámetro
+    de configuración 'direccionLocal' (ID de la tabla Dirección). None si no está definida.
+    """
+    from core_app.models import ConfiguracionSistema
+
+    config = ConfiguracionSistema.objects.filter(clave='direccionLocal').first()
+    valor = (config.valor or '').strip() if config else ''
+    if not valor.isdigit():
+        return None
+    return Direccion.objects.select_related(
+        'id_ciudad__id_provincia__id_pais'
+    ).filter(id_direccion=int(valor)).first()
 
 
 def obtener_direccion_por_id(id_direccion: int) -> Optional[Direccion]:

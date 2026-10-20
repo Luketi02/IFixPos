@@ -11,7 +11,8 @@ export default function AddressManagementModal({
   initialAddress = null,
   title = 'Gestión de Dirección - Sede Central',
   token,
-  permitirTodosPaises = true
+  permitirTodosPaises = true,
+  modoSede = false
 }) {
   const [activeTab, setActiveTab] = useState('form'); // 'form' | 'list'
   
@@ -68,7 +69,7 @@ export default function AddressManagementModal({
         setPaises(listaPaises);
 
         // Cargar direcciones existentes del usuario autenticado
-        if (token) {
+        if (token && !modoSede) {
           try {
             const resDirs = await axios.get(`${API_BASE_URL}/api/geo/mis-direcciones/?todas=true`, {
               headers: { Authorization: `Bearer ${token}` }
@@ -146,7 +147,7 @@ export default function AddressManagementModal({
     };
 
     cargarDatosIniciales();
-  }, [isOpen, initialAddress, token, permitirTodosPaises]);
+  }, [isOpen, initialAddress, token, permitirTodosPaises, modoSede]);
 
   // Manejo de cambio de país
   const handlePaisChange = async (e) => {
@@ -242,7 +243,19 @@ export default function AddressManagementModal({
 
     try {
       let response;
-      if (initialAddress && initialAddress.id_direccion) {
+      if (modoSede) {
+        // Dirección de la sede: independiente de la libreta personal; vincula direccionLocal
+        response = await axios.put(
+          `${API_BASE_URL}/api/geo/direccion-sede/`,
+          payload,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+      } else if (initialAddress && initialAddress.id_direccion) {
         // Modificar dirección existente
         response = await axios.put(
           `${API_BASE_URL}/api/geo/mis-direcciones/${initialAddress.id_direccion}/`,
@@ -355,7 +368,7 @@ export default function AddressManagementModal({
               <span>{initialAddress?.id_direccion ? 'Modificar Dirección' : 'Nueva Dirección'}</span>
             </button>
 
-            {misDirecciones.length > 0 && (
+            {misDirecciones.length > 0 && !modoSede && (
               <button
                 type="button"
                 onClick={() => setActiveTab('list')}

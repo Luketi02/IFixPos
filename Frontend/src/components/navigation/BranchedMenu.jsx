@@ -1,4 +1,4 @@
-import { isValidElement, useLayoutEffect, useRef, useState } from 'react';
+import { isValidElement, useLayoutEffect, useRef, useState, useEffect } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import './BranchedMenu.css';
 
@@ -39,6 +39,23 @@ export default function BranchedMenu({
     const first = items.find((it, i) => it.children && toSet(defaultOpen).has(i));
     return first?.children?.[0]?.value ?? '';
   });
+
+  useEffect(() => {
+    if (defaultActive) {
+      setActive(defaultActive);
+    }
+  }, [defaultActive]);
+
+  useEffect(() => {
+    const nextSet = toSet(defaultOpen);
+    if (nextSet.size > 0) {
+      setOpen((prev) => {
+        const copy = new Set(prev);
+        nextSet.forEach((idx) => copy.add(idx));
+        return copy;
+      });
+    }
+  }, [defaultOpen]);
 
   const navRef = useRef(null);
   const heads = useRef([]);

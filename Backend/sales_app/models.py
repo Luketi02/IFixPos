@@ -42,6 +42,14 @@ class Venta(models.Model):
         db_column='id_usuario',
         help_text='Identificador único del usuario.'
     )
+    id_direccion_envio = models.ForeignKey(
+        'geo_app.Direccion',
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        db_column='id_direccion_envio',
+        help_text='Dirección de entrega asignada para envíos a domicilio.'
+    )
 
     class Meta:
         db_table = 'venta'
@@ -211,6 +219,10 @@ class CarritoProducto(models.Model):
         on_delete=models.RESTRICT,
         db_column='id_producto',
         help_text='Identificador del producto en el carrito.'
+    )
+    cantidad = models.IntegerField(
+        default=1,
+        help_text='Cantidad de unidades del producto en el carrito.'
     )
 
     class Meta:

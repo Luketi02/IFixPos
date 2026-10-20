@@ -23,6 +23,15 @@ class CategoriaProducto(models.Model):
         help_text='Indica si la categoría está activa para nuevos productos.'
     )
 
+    @property
+    def estado_activo(self) -> bool:
+        """Alias para compatibilidad con el atributo de negocio estado_activo."""
+        return self.estado
+
+    @estado_activo.setter
+    def estado_activo(self, value: bool):
+        self.estado = value
+
     class Meta:
         db_table = 'categoria_producto'
 
@@ -71,9 +80,68 @@ class Producto(models.Model):
         db_column='id_categoria',
         help_text='Identificador único de la categoría de producto.'
     )
+    id_marca = models.ForeignKey(
+        'Marca',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='id_marca',
+        help_text='Identificador único de la marca del fabricante si aplica.'
+    )
+    id_modelo = models.ForeignKey(
+        'ModeloDispositivo',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='id_modelo',
+        help_text='Identificador único del modelo comercial si aplica.'
+    )
+    id_tipo_dispositivo = models.ForeignKey(
+        'TipoDispositivo',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='id_tipo_dispositivo',
+        help_text='Identificador único del tipo de dispositivo si aplica.'
+    )
+    imagen_principal = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='URL de la imagen representativa principal del producto.'
+    )
 
     class Meta:
         db_table = 'producto'
+
+
+class ImagenProducto(models.Model):
+    """
+    Imágenes complementarias y galería asociada a un producto del catálogo.
+    """
+    id_imagen = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único de la imagen del producto.'
+    )
+    id_producto = models.ForeignKey(
+        Producto,
+        on_delete=models.CASCADE,
+        related_name='imagenes',
+        db_column='id_producto',
+        help_text='Producto al que se vincula la imagen.'
+    )
+    url_imagen = models.CharField(
+        max_length=500,
+        help_text='URL o ruta de acceso a la imagen.'
+    )
+    orden = models.PositiveIntegerField(
+        default=0,
+        help_text='Orden de visualización dentro de la galería del producto.'
+    )
+
+    class Meta:
+        db_table = 'producto_imagen'
+        ordering = ['orden', 'id_imagen']
 
 
 class TipoDispositivo(models.Model):

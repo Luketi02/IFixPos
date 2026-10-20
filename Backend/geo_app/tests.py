@@ -10,16 +10,18 @@ from geo_app.selectors import (
     obtener_paises,
     obtener_provincias_por_pais,
     obtener_ciudades_por_provincia,
+    obtener_direcciones_usuario,
     obtener_direcciones_activas_usuario,
     obtener_todas_direcciones_usuario,
-    obtener_direccion_por_id
+    obtener_direccion_por_id,
+    obtener_direccion_usuario
 )
 from geo_app.services import (
     registrar_direccion,
     modificar_direccion,
     cambiar_estado_direccion
 )
-from geo_app.serializers import DireccionInputSerializer
+from geo_app.serializers import DireccionInputSerializer, DireccionOutputSerializer
 
 
 class GeoAppCasosDeUsoTestCase(TestCase):
@@ -529,5 +531,192 @@ class GeoAppCasosDeUsoTestCase(TestCase):
         self.assertFalse(prov.cobertura_habilitada)
         # Y como era la única provincia de Bolivia, Bolivia se desactiva automáticamente
         self.assertFalse(pais.cobertura_habilitada)
+
+    # ==========================================================================
+    # PRUEBAS ESPECÍFICAS DE NUEVOS CONTRATOS CU-47, CU-48, CU-49
+    # ==========================================================================
+
+    def test_obtener_direccion_usuario_selector(self):
+        dir_creada = registrar_direccion(
+            usuario=self.cliente,
+            datos_validados={
+                'id_ciudad': self.ciudad.id_ciudad,
+                'alias': 'Mi Casa',
+                'nro_calle': 'Calle 5 #500',
+                'nombre_barrio': 'Tolosa'
+            }
+        )
+
+        # 1. Recuperación exitosa por propietario
+        d = obtener_direccion_usuario(dir_creada.id_direccion, self.cliente.id_usuario)
+        self.assertEqual(d.id_direccion, dir_creada.id_direccion)
+
+        # 2. Dirección inexistente levanta ObjectDoesNotExist
+        with self.assertRaises(ObjectDoesNotExist):
+            obtener_direccion_usuario(999999, self.cliente.id_usuario)
+
+        # 3. Usuario ajeno levanta PermissionDenied
+        with self.assertRaises(PermissionDenied):
+            obtener_direccion_usuario(dir_creada.id_direccion, self.otro_cliente.id_usuario)
+
+        # 4. Admin puede acceder si es_admin=True
+        d_admin = obtener_direccion_usuario(dir_creada.id_direccion, self.admin.id_usuario, es_admin=True)
+        self.assertEqual(d_admin.id_direccion, dir_creada.id_direccion)
+
+    def test_direccion_input_serializer_alias_opcional_y_requeridos(self):
+        # Alias es opcional: debe ser válido sin él
+        valido = DireccionInputSerializer(data={
+            'id_ciudad': self.ciudad.id_ciudad,
+            'nro_calle': 'Av. 13 #1200',
+            'nombre_barrio': 'Casco Urbano'
+        })
+        self.assertTrue(valido.is_valid(), valido.errors)
+        self.assertEqual(valido.validated_data['alias'], '')
+
+        # Sin nro_calle debe fallar
+        invalido_calle = DireccionInputSerializer(data={
+            'id_ciudad': self.ciudad.id_ciudad,
+            'nombre_barrio': 'Casco Urbano'
+        })
+        self.assertFalse(invalido_calle.is_valid())
+        self.assertIn('nro_calle', invalido_calle.errors)
+
+        # Sin nombre_barrio debe fallar
+        invalido_barrio = DireccionInputSerializer(data={
+            'id_ciudad': self.ciudad.id_ciudad,
+            'nro_calle': 'Av. 13 #1200'
+        })
+        self.assertFalse(invalido_barrio.is_valid())
+        self.assertIn('nombre_barrio', invalido_barrio.errors)
+
+        # Ciudad inexistente debe fallar
+        invalido_ciudad = DireccionInputSerializer(data={
+            'id_ciudad': 99999,
+            'nro_calle': 'Av. 13 #1200',
+            'nombre_barrio': 'Centro'
+        })
+        self.assertFalse(invalido_ciudad.is_valid())
+        self.assertIn('id_ciudad', invalido_ciudad.errors)
+
+    def test_direccion_output_serializer_anidado(self):
+        dir_creada = registrar_direccion(
+            usuario=self.cliente,
+            datos_validados={
+                'id_ciudad': self.ciudad.id_ciudad,
+                'alias': 'Depto Centro',
+                'nro_calle': 'Calle 50 #600',
+                'nombre_barrio': 'Centro',
+                'piso': 4,
+                'nro_dpto': 'A'
+            }
+        )
+        serializado = DireccionOutputSerializer(dir_creada).data
+        self.assertEqual(serializado['alias'], 'Depto Centro')
+        self.assertEqual(serializado['nro_calle'], 'Calle 50 #600')
+        self.assertEqual(serializado['nombre_barrio'], 'Centro')
+        self.assertEqual(serializado['ciudad'], 'La Plata')
+        self.assertEqual(serializado['provincia'], 'Buenos Aires')
+        self.assertEqual(serializado['pais'], 'Argentina')
+        self.assertIn('ciudad_detalle', serializado)
+        self.assertEqual(serializado['ciudad_detalle']['nombre'], 'La Plata')
+        self.assertEqual(serializado['ciudad_detalle']['provincia']['nombre'], 'Buenos Aires')
+        self.assertEqual(serializado['ciudad_detalle']['provincia']['pais']['nombre'], 'Argentina')
+
+    def test_auditoria_tecnico_en_servicios(self):
+        # Crear rol y usuario técnico
+        rol_tecnico = RolUsuario.objects.create(
+            codigo='TECNICO',
+            nombre_rol='Técnico',
+            descripcion='Técnico del sistema'
+        )
+        tecnico = Usuario.objects.create(
+            email='tecnico.geo@test.com',
+            contrasena='hash_pwd',
+            id_rol=rol_tecnico,
+            fecha_registro='2026-10-16',
+            is_active=True
+        )
+
+        # Registrar dirección como técnico debe auditar
+        direccion = registrar_direccion(
+            usuario=tecnico,
+            datos_validados={
+                'id_ciudad': self.ciudad.id_ciudad,
+                'alias': 'Taller Auxiliar',
+                'nro_calle': 'Av. 44 #2000',
+                'nombre_barrio': 'San Carlos'
+            }
+        )
+        log_creacion = LogSistema.objects.filter(
+            tabla_afectada='direccion',
+            id_registro_afectado=str(direccion.id_direccion)
+        ).first()
+        self.assertIsNotNone(log_creacion)
+        self.assertEqual(log_creacion.id_usuario, tecnico)
+
+        # Modificar como técnico
+        modificar_direccion(
+            usuario=tecnico,
+            id_direccion=direccion.id_direccion,
+            datos_validados={'alias': 'Taller Central'}
+        )
+        logs_mod = LogSistema.objects.filter(
+            tabla_afectada='direccion',
+            id_registro_afectado=str(direccion.id_direccion)
+        ).count()
+        self.assertGreaterEqual(logs_mod, 2)
+
+        # Cambiar estado como técnico
+        cambiar_estado_direccion(usuario=tecnico, id_direccion=direccion.id_direccion)
+        logs_total = LogSistema.objects.filter(
+            tabla_afectada='direccion',
+            id_registro_afectado=str(direccion.id_direccion)
+        ).count()
+        self.assertGreaterEqual(logs_total, 3)
+
+    def test_direccion_sede_independiente_de_direccion_del_admin(self):
+        from core_app.models import ConfiguracionSistema
+        from geo_app.selectors import obtener_direccion_sede
+        from geo_app.services import guardar_direccion_sede
+
+        # Dirección personal del admin, apuntada (dato heredado) por direccionLocal
+        personal = registrar_direccion(
+            usuario=self.admin,
+            datos_validados={'id_ciudad': self.ciudad, 'alias': 'Casa Admin', 'nro_calle': 'Calle 1 100', 'nombre_barrio': 'Centro'}
+        )
+        ConfiguracionSistema.objects.create(
+            clave='direccionLocal', descripcion='sede', valor=str(personal.id_direccion)
+        )
+
+        sede = guardar_direccion_sede(
+            usuario_admin=self.admin,
+            datos_validados={'id_ciudad': self.ciudad2, 'alias': 'Sede', 'nro_calle': 'Av. Siempre Viva 742', 'nombre_barrio': 'Norte'}
+        )
+
+        # La dirección personal no se altera y la sede no pertenece a ningún usuario
+        personal.refresh_from_db()
+        self.assertEqual(personal.alias, 'Casa Admin')
+        self.assertNotEqual(sede.id_direccion, personal.id_direccion)
+        self.assertIsNone(sede.id_usuario_id)
+        self.assertEqual(
+            ConfiguracionSistema.objects.get(clave='direccionLocal').valor, str(sede.id_direccion)
+        )
+        self.assertEqual(obtener_direccion_sede().id_direccion, sede.id_direccion)
+
+        # La sede no aparece en la libreta del administrador
+        ids_admin = [d.id_direccion for d in obtener_direcciones_usuario(self.admin.id_usuario)]
+        self.assertIn(personal.id_direccion, ids_admin)
+        self.assertNotIn(sede.id_direccion, ids_admin)
+
+        # Una segunda edición reutiliza el mismo registro de la sede
+        sede2 = guardar_direccion_sede(
+            usuario_admin=self.admin,
+            datos_validados={'id_ciudad': self.ciudad, 'alias': 'Sede', 'nro_calle': 'Otra 5', 'nombre_barrio': 'Sur'}
+        )
+        self.assertEqual(sede2.id_direccion, sede.id_direccion)
+        self.assertEqual(sede2.nro_calle, 'Otra 5')
+        personal.refresh_from_db()
+        self.assertEqual(personal.nro_calle, 'Calle 1 100')
+
 
 

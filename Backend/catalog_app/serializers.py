@@ -8,14 +8,390 @@ class MarcaOutputSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=150)
     estado_activo = serializers.BooleanField()
 
+
+class MarcaCreateInputSerializer(serializers.Serializer):
+    """
+    La Aduana para el registro de una nueva Marca (CU-77).
+    """
+    nombre = serializers.CharField(
+        max_length=150,
+        required=True,
+        error_messages={'required': 'El nombre de la marca es obligatorio.'}
+    )
+
+    def validate_nombre(self, value):
+        from .models import Marca
+
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El nombre de la marca no puede estar vacío.')
+
+        marca_existente = Marca.objects.filter(nombre__iexact=val).first()
+        if marca_existente and marca_existente.estado_activo:
+            raise serializers.ValidationError("La marca ya se encuentra registrada y activa")
+
+        return val
+
+class TipoDispositivoOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para TipoDispositivo.
+    """
+    id_tipo_dispositivo = serializers.IntegerField(read_only=True)
+    nombre = serializers.CharField()
+    estado_activo = serializers.BooleanField()
+
+
 class ModeloInputSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=150)
     id_marca = serializers.IntegerField()
     id_tipo_dispositivo = serializers.IntegerField()
 
-class ModeloOutputSerializer(serializers.Serializer):
+
+class ModeloDispositivoOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para ModeloDispositivo (CU-81 / CU-79 / CU-80).
+    Expone ID, nombre, estado_activo, y datos anidados de marca y tipo de dispositivo.
+    """
     id_modelo = serializers.IntegerField(read_only=True)
     nombre = serializers.CharField(max_length=150)
     estado_activo = serializers.BooleanField()
-    id_marca = serializers.IntegerField(source='id_marca_id')
-    id_tipo_dispositivo = serializers.IntegerField(source='id_tipo_dispositivo_id')
+    id_marca = serializers.IntegerField(source='id_marca_id', read_only=True)
+    id_tipo_dispositivo = serializers.IntegerField(source='id_tipo_dispositivo_id', read_only=True)
+    marca = MarcaOutputSerializer(source='id_marca', read_only=True)
+    tipo_dispositivo = TipoDispositivoOutputSerializer(source='id_tipo_dispositivo', read_only=True)
+
+
+ModeloOutputSerializer = ModeloDispositivoOutputSerializer
+
+
+class ModeloDispositivoCreateInputSerializer(serializers.Serializer):
+    """
+    La Aduana para el registro de un nuevo Modelo de Dispositivo (CU-79).
+    """
+    nombre = serializers.CharField(
+        max_length=150,
+        required=True,
+        error_messages={'required': 'El nombre del modelo es obligatorio.'}
+    )
+    id_marca = serializers.IntegerField(
+        required=True,
+        error_messages={'required': 'La marca es obligatoria.'}
+    )
+    id_tipo_dispositivo = serializers.IntegerField(
+        required=True,
+        error_messages={'required': 'El tipo de dispositivo es obligatorio.'}
+    )
+
+    def validate_nombre(self, value):
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El nombre del modelo no puede estar vacío.')
+        return val
+
+    def validate(self, attrs):
+        from .models import Marca, TipoDispositivo, ModeloDispositivo
+
+        nombre = attrs['nombre']
+        id_marca = attrs['id_marca']
+        id_tipo = attrs['id_tipo_dispositivo']
+
+        # Validar existencia y estado de la Marca
+        try:
+            marca = Marca.objects.get(id_marca=id_marca)
+            if not marca.estado_activo:
+                raise serializers.ValidationError({'id_marca': 'La marca especificada no se encuentra activa.'})
+            attrs['marca'] = marca
+        except Marca.DoesNotExist:
+            raise serializers.ValidationError({'id_marca': 'La marca especificada no existe.'})
+
+        # Validar existencia y estado del Tipo de Dispositivo
+        try:
+            tipo = TipoDispositivo.objects.get(id_tipo_dispositivo=id_tipo)
+            if not tipo.estado_activo:
+                raise serializers.ValidationError({'id_tipo_dispositivo': 'El tipo de dispositivo especificado no se encuentra activo.'})
+            attrs['tipo_dispositivo'] = tipo
+        except TipoDispositivo.DoesNotExist:
+            raise serializers.ValidationError({'id_tipo_dispositivo': 'El tipo de dispositivo especificado no existe.'})
+
+        # Validar unicidad compuesta (nombre iexact + id_marca)
+        modelo_existente = ModeloDispositivo.objects.filter(
+            nombre__iexact=nombre,
+            id_marca_id=id_marca
+        ).first()
+
+        if modelo_existente:
+            if modelo_existente.estado_activo:
+                raise serializers.ValidationError("El modelo ya se encuentra registrado y activo para esta marca")
+            # Si existe pero su estado_activo es False, la validación pasa (será reactivado en el servicio)
+
+        return attrs
+
+
+class CategoriaProductoOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para CategoriaProducto.
+    Expone id_categoria, nombre, descripcion y estado_activo (manteniendo estado para compatibilidad).
+    """
+    id_categoria = serializers.IntegerField(read_only=True)
+    nombre = serializers.CharField()
+    descripcion = serializers.CharField(allow_null=True, required=False, allow_blank=True)
+    estado = serializers.BooleanField(required=False)
+    estado_activo = serializers.BooleanField(source='estado')
+
+
+class CategoriaProductoCreateInputSerializer(serializers.Serializer):
+    """
+    La Aduana Comercial para el registro de una nueva Categoría de Producto (CU-29).
+    """
+    nombre = serializers.CharField(
+        max_length=150,
+        required=True,
+        error_messages={'required': 'El nombre de la categoría es obligatorio.'}
+    )
+    descripcion = serializers.CharField(
+        max_length=500,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=''
+    )
+
+    def validate_nombre(self, value):
+        from .models import CategoriaProducto
+
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El nombre de la categoría no puede estar vacío.')
+
+        if CategoriaProducto.objects.filter(nombre__iexact=val).exists():
+            raise serializers.ValidationError("La categoría ya se encuentra registrada con este nombre")
+
+        return val
+
+
+class ProductoTiendaOutputSerializer(serializers.Serializer):
+    id_producto = serializers.IntegerField()
+    nombre = serializers.CharField()
+    descripcion = serializers.CharField(allow_blank=True, allow_null=True)
+    precio_venta = serializers.DecimalField(max_digits=10, decimal_places=2)
+    id_categoria = serializers.IntegerField(allow_null=True)
+    categoria_nombre = serializers.CharField(allow_blank=True)
+    id_marca = serializers.IntegerField(source='id_marca_id', allow_null=True, required=False)
+    marca_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    id_modelo = serializers.IntegerField(source='id_modelo_id', allow_null=True, required=False)
+    modelo_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    id_tipo_dispositivo = serializers.IntegerField(source='id_tipo_dispositivo_id', allow_null=True, required=False)
+    tipo_dispositivo_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
+    imagen_principal = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    imagenes = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    stock_disponible = serializers.IntegerField()
+    en_stock = serializers.BooleanField()
+    tiene_descuento = serializers.BooleanField(required=False, default=False)
+    porcentaje_descuento = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
+    precio_final = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    motivo_descuento = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
+
+
+class ProductoCreateInputSerializer(serializers.Serializer):
+    """
+    La Aduana para el registro manual de un nuevo producto (CU-12).
+    """
+    nombre = serializers.CharField(
+        max_length=255,
+        required=True,
+        error_messages={'required': 'El nombre del producto es obligatorio.'}
+    )
+    id_categoria = serializers.IntegerField(
+        required=True,
+        error_messages={'required': 'La categoría del producto es obligatoria.'}
+    )
+    id_marca = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None
+    )
+    id_modelo = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None
+    )
+    id_tipo_dispositivo = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None
+    )
+    imagen_principal = serializers.CharField(
+        max_length=500,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=''
+    )
+    imagenes = serializers.ListField(
+        child=serializers.CharField(max_length=500),
+        required=False,
+        default=list
+    )
+    descripcion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=''
+    )
+    precio = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        error_messages={'min_value': 'El precio no puede ser negativo.'}
+    )
+    precio_venta = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        error_messages={'min_value': 'El precio de venta no puede ser negativo.'}
+    )
+    apto_venta = serializers.BooleanField(required=False, default=False)
+    apto_reparacion = serializers.BooleanField(required=False, default=False)
+    consumible = serializers.BooleanField(required=False, default=False)
+    apto_consumible = serializers.BooleanField(required=False, default=False)
+    modulo_automatico = serializers.BooleanField(required=False, default=False)
+    stock_inicial = serializers.IntegerField(
+        required=False,
+        default=0,
+        min_value=0,
+        error_messages={'min_value': 'El stock inicial no puede ser negativo.'}
+    )
+    stock_minimo = serializers.IntegerField(
+        required=False,
+        default=0,
+        min_value=0,
+        error_messages={'min_value': 'El stock mínimo no puede ser negativo.'}
+    )
+
+    def validate_nombre(self, value):
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El nombre del producto no puede estar vacío.')
+        return val
+
+    def validate(self, attrs):
+        from catalog_app.models import CategoriaProducto, Marca, ModeloDispositivo
+
+        # 1. Validar existencia de la Categoría
+        id_cat = attrs.get('id_categoria')
+        try:
+            cat = CategoriaProducto.objects.get(id_categoria=id_cat)
+            attrs['categoria'] = cat
+        except CategoriaProducto.DoesNotExist:
+            raise serializers.ValidationError({'id_categoria': 'La categoría seleccionada no existe.'})
+
+        # 1.b Validar Marca (Opcional)
+        id_marca = attrs.get('id_marca')
+        if id_marca:
+            try:
+                attrs['marca'] = Marca.objects.get(id_marca=id_marca)
+            except Marca.DoesNotExist:
+                raise serializers.ValidationError({'id_marca': 'La marca seleccionada no existe.'})
+
+        # 1.c Validar Modelo (Opcional)
+        id_modelo = attrs.get('id_modelo')
+        if id_modelo:
+            try:
+                modelo_obj = ModeloDispositivo.objects.get(id_modelo=id_modelo)
+                if id_marca and modelo_obj.id_marca_id != id_marca:
+                    raise serializers.ValidationError({'id_modelo': 'El modelo seleccionado no pertenece a la marca indicada.'})
+                attrs['modelo'] = modelo_obj
+            except ModeloDispositivo.DoesNotExist:
+                raise serializers.ValidationError({'id_modelo': 'El modelo seleccionado no existe.'})
+
+        # 1.d Validar Tipo de Dispositivo (Opcional)
+        id_tipo_dispositivo = attrs.get('id_tipo_dispositivo')
+        if id_tipo_dispositivo:
+            from .models import TipoDispositivo
+            try:
+                attrs['tipo_dispositivo'] = TipoDispositivo.objects.get(id_tipo_dispositivo=id_tipo_dispositivo)
+            except TipoDispositivo.DoesNotExist:
+                raise serializers.ValidationError({'id_tipo_dispositivo': 'El tipo de dispositivo seleccionado no existe.'})
+
+        # 2. Unificar precio / precio_venta
+        precio = attrs.get('precio') if attrs.get('precio') is not None else attrs.get('precio_venta')
+        if precio is None:
+            raise serializers.ValidationError({'precio': 'El precio del producto es obligatorio.'})
+        attrs['precio_venta'] = precio
+
+        # 3. Unificar consumible / apto_consumible
+        es_consumible = bool(attrs.get('consumible') or attrs.get('apto_consumible'))
+        attrs['apto_consumible'] = es_consumible
+
+        # 4. Validación del Propósito (Paso 4 del CU-12):
+        es_venta = bool(attrs.get('apto_venta', False))
+        es_reparacion = bool(attrs.get('apto_reparacion', False))
+
+        if not es_venta and not es_reparacion and not es_consumible:
+            raise serializers.ValidationError("El artículo debe tener al menos un propósito funcional asignado")
+
+        return attrs
+
+
+class ProductoCreateOutputSerializer(serializers.Serializer):
+    """Serializador de salida tras el alta exitosa del producto."""
+    id_producto = serializers.IntegerField()
+    nombre = serializers.CharField()
+    descripcion = serializers.CharField(allow_blank=True, allow_null=True)
+    precio_venta = serializers.DecimalField(max_digits=10, decimal_places=2)
+    estado = serializers.BooleanField()
+    apto_venta = serializers.BooleanField()
+    apto_reparacion = serializers.BooleanField()
+    apto_consumible = serializers.BooleanField()
+    modulo_automatico = serializers.BooleanField()
+    id_categoria = serializers.IntegerField(source='id_categoria_id')
+    categoria_nombre = serializers.CharField()
+    id_marca = serializers.IntegerField(source='id_marca_id', allow_null=True, required=False)
+    marca = serializers.CharField(source='id_marca.nombre', allow_null=True, required=False, default='')
+    id_modelo = serializers.IntegerField(source='id_modelo_id', allow_null=True, required=False)
+    modelo = serializers.CharField(source='id_modelo.nombre', allow_null=True, required=False, default='')
+    id_tipo_dispositivo = serializers.IntegerField(source='id_tipo_dispositivo_id', allow_null=True, required=False)
+    tipo_dispositivo = serializers.CharField(source='id_tipo_dispositivo.nombre', allow_null=True, required=False, default='')
+    imagen_principal = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
+    imagenes = serializers.SerializerMethodField(required=False)
+    stock_inicial = serializers.IntegerField()
+    stock_minimo = serializers.IntegerField()
+
+    def get_imagenes(self, obj):
+        if hasattr(obj, 'imagenes'):
+            return [img.url_imagen for img in obj.imagenes.all()]
+        return []
+
+
+class TipoDispositivoOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para TipoDispositivo.
+    """
+    id_tipo_dispositivo = serializers.IntegerField(read_only=True)
+    nombre = serializers.CharField()
+    estado_activo = serializers.BooleanField()
+
+
+class TipoDispositivoCreateInputSerializer(serializers.Serializer):
+    """
+    La Aduana para el registro de un nuevo Tipo de Dispositivo (CU-65).
+    """
+    nombre = serializers.CharField(
+        max_length=100,
+        required=True,
+        error_messages={'required': 'El nombre del tipo de dispositivo es obligatorio.'}
+    )
+
+    def validate_nombre(self, value):
+        from .models import TipoDispositivo
+
+        val = str(value or '').strip()
+        if not val:
+            raise serializers.ValidationError('El nombre del tipo de dispositivo no puede estar vacío.')
+
+        if TipoDispositivo.objects.filter(nombre__iexact=val).exists():
+            raise serializers.ValidationError("El tipo de dispositivo ya se encuentra registrado")
+
+        return val

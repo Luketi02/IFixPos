@@ -9,9 +9,12 @@ from geo_app.selectors import (
     obtener_provincias_por_pais,
     obtener_todas_las_provincias,
     obtener_ciudades_por_provincia,
+    obtener_direcciones_usuario,
     obtener_direcciones_activas_usuario,
     obtener_todas_direcciones_usuario,
     obtener_direccion_por_id,
+    obtener_direccion_usuario,
+    obtener_direccion_sede,
     filtrar_zonas_cobertura
 )
 from geo_app.serializers import (
@@ -27,6 +30,7 @@ from geo_app.services import (
     registrar_direccion,
     modificar_direccion,
     cambiar_estado_direccion,
+    guardar_direccion_sede,
     actualizar_cobertura_zonas
 )
 
@@ -118,19 +122,17 @@ class CiudadesListApi(APIView):
 class MisDireccionesApi(APIView):
     """
     Endpoint de colección para la gestión de direcciones del usuario en sesión.
-    - GET: Lista las direcciones activas (o todas si se incluye ?todas=true).
-    - POST: Registra una nueva dirección (CU-47).
+    - GET: Llama a obtener_direcciones_usuario y retorna con DireccionOutputSerializer.
+    - POST: Consume DireccionInputSerializer. Si es válido, llama a registrar_direccion y retorna 201 Created.
     - PUT: Modifica una dirección recibiendo id_direccion en el cuerpo o URL (CU-48).
     - PATCH / DELETE: Borrado lógico / reactivación (CU-49).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        user_id = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
         todas = request.query_params.get('todas', '').lower() in ['true', '1']
-        if todas:
-            direcciones = obtener_todas_direcciones_usuario(request.user.id_usuario)
-        else:
-            direcciones = obtener_direcciones_activas_usuario(request.user.id_usuario)
+        direcciones = obtener_direcciones_usuario(user_id, solo_activas=not todas)
 
         serializer = DireccionOutputSerializer(direcciones, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -141,7 +143,7 @@ class MisDireccionesApi(APIView):
 
         direccion = registrar_direccion(
             usuario=request.user,
-            datos=serializer.validated_data
+            datos_validados=serializer.validated_data
         )
 
         output = DireccionOutputSerializer(direccion)
@@ -168,7 +170,7 @@ class MisDireccionesApi(APIView):
             direccion = modificar_direccion(
                 usuario=request.user,
                 id_direccion=int(target_id),
-                datos=serializer.validated_data
+                datos_validados=serializer.validated_data
             )
         except ObjectDoesNotExist as e:
             return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
@@ -207,6 +209,8 @@ class MisDireccionesApi(APIView):
         return Response(
             {
                 "mensaje": f"Dirección {estado_msg} con éxito.",
+                "nuevo_estado": direccion.is_active,
+                "is_active": direccion.is_active,
                 "direccion": output.data
             },
             status=status.HTTP_200_OK
@@ -216,21 +220,25 @@ class MisDireccionesApi(APIView):
         return self.patch(request, id_direccion=id_direccion)
 
 
-class DireccionDetalleApi(APIView):
+class MisDireccionesDetalleApi(APIView):
     """
     Endpoint detallado con ID en URL para modificar, consultar o cambiar estado de una dirección:
     /api/geo/mis-direcciones/<int:id_direccion>/
+    - PUT: Recibe el id_direccion por URL, valida con DireccionInputSerializer, y llama a modificar_direccion. Retorna 200 OK.
+    - PATCH: Recibe el id_direccion por URL. No necesita body. Llama a cambiar_estado_direccion y retorna 200 OK indicando el nuevo estado.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id_direccion):
-        direccion = obtener_direccion_por_id(id_direccion)
-        if not direccion:
-            return Response({"error": "Dirección no encontrada."}, status=status.HTTP_404_NOT_FOUND)
-
-        rol_codigo = getattr(getattr(request.user, 'id_rol', None), 'codigo', '')
-        if direccion.id_usuario_id != request.user.id_usuario and rol_codigo.upper() != 'ADMIN':
-            return Response({"error": "No tienes permiso para ver esta dirección."}, status=status.HTTP_403_FORBIDDEN)
+        user_id = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
+        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+        es_admin = getattr(rol, 'codigo', '').upper() == 'ADMIN'
+        try:
+            direccion = obtener_direccion_usuario(id_direccion=id_direccion, id_usuario=user_id, es_admin=es_admin)
+        except ObjectDoesNotExist as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
         output = DireccionOutputSerializer(direccion)
         return Response(output.data, status=status.HTTP_200_OK)
@@ -243,7 +251,7 @@ class DireccionDetalleApi(APIView):
             direccion = modificar_direccion(
                 usuario=request.user,
                 id_direccion=id_direccion,
-                datos=serializer.validated_data
+                datos_validados=serializer.validated_data
             )
         except ObjectDoesNotExist as e:
             return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
@@ -275,6 +283,8 @@ class DireccionDetalleApi(APIView):
         return Response(
             {
                 "mensaje": f"Dirección {estado_msg} con éxito.",
+                "nuevo_estado": direccion.is_active,
+                "is_active": direccion.is_active,
                 "direccion": output.data
             },
             status=status.HTTP_200_OK
@@ -282,6 +292,49 @@ class DireccionDetalleApi(APIView):
 
     def delete(self, request, id_direccion):
         return self.patch(request, id_direccion=id_direccion)
+
+
+# Alias para retrocompatibilidad
+DireccionDetalleApi = MisDireccionesDetalleApi
+
+
+class DireccionSedeApi(APIView):
+    """
+    Dirección física de la sede de la empresa (parámetro 'direccionLocal').
+    Exclusivo para administradores. Es independiente de la libreta personal del usuario.
+    - GET: retorna la dirección de la sede (o null si no está definida).
+    - PUT: crea/actualiza la dirección de la sede y actualiza 'direccionLocal'.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        if (getattr(rol, 'codigo', '') or '').upper() != 'ADMIN':
+            raise PermissionDenied("Acceso denegado. Se requieren permisos de Administrador.")
+
+    def get(self, request):
+        self._verificar_admin(request.user)
+        direccion = obtener_direccion_sede()
+        if direccion is None:
+            return Response(None, status=status.HTTP_200_OK)
+        return Response(DireccionOutputSerializer(direccion).data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        self._verificar_admin(request.user)
+        serializer = DireccionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        direccion = guardar_direccion_sede(
+            usuario_admin=request.user,
+            datos_validados=serializer.validated_data
+        )
+        return Response(
+            {
+                "mensaje": "Dirección de la sede actualizada y vinculada exitosamente.",
+                "direccion": DireccionOutputSerializer(direccion).data
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 # ==============================================================================

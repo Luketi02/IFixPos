@@ -2,7 +2,7 @@ from typing import Optional
 from datetime import date
 from django.db.models import QuerySet, Q
 from django.core.exceptions import ValidationError
-from workshop_app.models import Dispositivo
+from workshop_app.models import Dispositivo, Reparacion, CategoriaReparacion
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
 
@@ -111,7 +111,7 @@ def filtrar_mis_dispositivos(
     if texto_busqueda:
         qs = qs.filter(
             Q(id_modelo__nombre__icontains=texto_busqueda) | 
-            Q(id_modelo__id_marca__nombre_marca__icontains=texto_busqueda)
+            Q(id_modelo__id_marca__nombre__icontains=texto_busqueda)
         )
     if etapa_reparacion:
         qs = qs.filter(reparacion__etapa=etapa_reparacion)
@@ -126,3 +126,195 @@ def filtrar_mis_dispositivos(
         qs = qs.order_by('fecha_registro')
         
     return qs.distinct()
+
+
+def filtrar_dispositivos_cliente(
+    *,
+    usuario_cliente: Usuario,
+    texto_busqueda: str = None,
+    id_marca: int = None,
+    id_modelo: int = None,
+    estado_reparacion: str = None
+) -> QuerySet[Dispositivo]:
+    """
+    CU-34: Filtra los dispositivos del cliente en sesión.
+
+    Seguridad innegociable: la primera cláusula del filter() acota SIEMPRE
+    a los dispositivos propiedad del cliente (FK `id_usuario` de Dispositivo).
+    """
+    qs = Dispositivo.objects.filter(
+        id_usuario=usuario_cliente.id_usuario
+    ).select_related(
+        'id_modelo', 'id_modelo__id_marca', 'id_modelo__id_tipo_dispositivo'
+    ).prefetch_related('reparacion_set')
+
+    if id_marca is not None:
+        qs = qs.filter(id_modelo__id_marca=id_marca)
+    if id_modelo is not None:
+        qs = qs.filter(id_modelo=id_modelo)
+    if texto_busqueda:
+        qs = qs.filter(
+            Q(id_modelo__nombre__icontains=texto_busqueda) |
+            Q(id_modelo__id_marca__nombre__icontains=texto_busqueda)
+        )
+    if estado_reparacion:
+        qs = qs.filter(reparacion__etapa=estado_reparacion)
+
+    return qs.distinct().order_by('-fecha_registro', '-id_dispositivo')
+
+
+def dispositivo_tiene_reparaciones(id_dispositivo: int) -> bool:
+    """CU-07: Indica si el dispositivo posee alguna reparación (histórica o activa)."""
+    return Reparacion.objects.filter(id_dispositivo=id_dispositivo).exists()
+
+
+
+# ==============================================================================
+# CU-11: Consultar Detalles del Dispositivo y CU-61: Consultar Detalle de Reparación
+# ==============================================================================
+
+def obtener_detalle_dispositivo(*, usuario_cliente: Usuario, id_dispositivo: int) -> Dispositivo:
+    """
+    CU-11: Recupera el dispositivo validando propiedad horizontal.
+    Si el dispositivo no pertenece al cliente, levanta PermissionDenied.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound
+
+    dispositivo = Dispositivo.objects.filter(pk=id_dispositivo).select_related(
+        'id_modelo',
+        'id_modelo__id_marca',
+        'id_modelo__id_tipo_dispositivo',
+        'id_usuario',
+        'id_usuario__perfilusuario'
+    ).first()
+
+    if not dispositivo:
+        raise NotFound("El dispositivo solicitado no existe.")
+
+    cliente_id = getattr(usuario_cliente, 'id_usuario', None)
+    if dispositivo.id_usuario_id != cliente_id:
+        raise PermissionDenied("Acceso Denegado: No posee permisos sobre este equipo.")
+
+    return dispositivo
+
+
+def obtener_historial_reparaciones(id_dispositivo: int) -> QuerySet[Reparacion]:
+    """
+    CU-11: Retorna todas las reparaciones vinculadas al dispositivo ordenadas cronológicamente descendente.
+    """
+    return Reparacion.objects.filter(
+        id_dispositivo_id=id_dispositivo
+    ).select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario'
+    ).prefetch_related(
+        'diagnostico_set',
+        'calificacion_set'
+    ).order_by('-fecha_inicio', '-id_reparacion')
+
+
+def obtener_reparacion_activa(id_dispositivo: int) -> Optional[Reparacion]:
+    """
+    CU-11: Retorna la reparación que se encuentra en curso (no 'FINALIZADA' ni 'ENTREGADA'), si existe.
+    """
+    etapas_cerradas = ['FINALIZADA', 'ENTREGADA']
+    return Reparacion.objects.filter(
+        id_dispositivo_id=id_dispositivo
+    ).exclude(
+        etapa__in=etapas_cerradas
+    ).select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario'
+    ).prefetch_related(
+        'diagnostico_set'
+    ).order_by('-fecha_inicio', '-id_reparacion').first()
+
+
+def obtener_reparacion_detallada(*, usuario_solicitante: Usuario, id_reparacion: int) -> Reparacion:
+    """
+    CU-61: Consultar Detalle de Reparación.
+    - Seguridad Horizontal: Si es CLIENTE, verifica que el dispositivo pertenezca al usuario.
+    - Seguridad Vertical: Gestionada mediante context en el serializador o censura de claves.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound
+
+    reparacion = Reparacion.objects.filter(pk=id_reparacion).select_related(
+        'id_dispositivo',
+        'id_dispositivo__id_modelo',
+        'id_dispositivo__id_modelo__id_marca',
+        'id_dispositivo__id_modelo__id_tipo_dispositivo',
+        'id_dispositivo__id_usuario',
+        'id_usuario',
+        'id_usuario__perfilusuario'
+    ).prefetch_related(
+        'bitacorareparacion_set',
+        'detalleinsumoreparacion_set',
+        'detalleinsumoreparacion_set__id_producto',
+        'diagnostico_set',
+        'calificacion_set',
+        'categorias'
+    ).first()
+
+    if not reparacion:
+        raise NotFound("La orden de reparación solicitada no existe.")
+
+    # Determinar rol del usuario solicitante
+    rol_codigo = ''
+    if hasattr(usuario_solicitante, 'id_rol') and usuario_solicitante.id_rol:
+        rol_codigo = (usuario_solicitante.id_rol.codigo or '').upper()
+    elif hasattr(usuario_solicitante, 'rol') and usuario_solicitante.rol:
+        rol_codigo = (usuario_solicitante.rol.codigo or '').upper()
+
+    solicitante_id = getattr(usuario_solicitante, 'id_usuario', None)
+
+    # Regla de Seguridad Horizontal (Innegociable):
+    if rol_codigo == 'CLIENTE':
+        if reparacion.id_dispositivo.id_usuario_id != solicitante_id:
+            raise PermissionDenied("Acceso Denegado: No posee permisos sobre este equipo")
+
+    return reparacion
+
+
+# ==============================================================================
+# GESTIÓN DE CATEGORÍAS DE REPARACIÓN (CU-64)
+# ==============================================================================
+
+def filtrar_categorias_reparacion(
+    *,
+    texto_busqueda: Optional[str] = None,
+    estado_activo: Optional[Any] = None
+) -> QuerySet[CategoriaReparacion]:
+    """
+    CU-64: Filtrar Categoría de Reparación.
+    Retorna un QuerySet de CategoriaReparacion.
+    - Si texto_busqueda no es nulo ni vacío, aplica nombre__icontains=texto_busqueda.
+    - Si estado_activo es provisto ('True'/'False' o bool), filtra por ese booleano.
+      Si es nulo o 'Todos', retorna sin filtrar por estado.
+    """
+    qs = CategoriaReparacion.objects.all()
+
+    if texto_busqueda:
+        termino = str(texto_busqueda).strip()
+        if termino:
+            qs = qs.filter(nombre__icontains=termino)
+
+    if estado_activo is not None:
+        if isinstance(estado_activo, bool):
+            qs = qs.filter(estado_activo=estado_activo)
+        elif isinstance(estado_activo, str):
+            val_str = estado_activo.strip().lower()
+            if val_str in ('true', '1', 'activo', 'activa', 'si'):
+                qs = qs.filter(estado_activo=True)
+            elif val_str in ('false', '0', 'inactivo', 'inactiva', 'no'):
+                qs = qs.filter(estado_activo=False)
+            # 'todos' o cadena vacía -> no se filtra
+
+    return qs.order_by('nombre')
+
+
+def obtener_categoria_reparacion(id_categoria: int) -> CategoriaReparacion:
+    """
+    Retorna la instancia exacta de CategoriaReparacion por su ID.
+    Levanta CategoriaReparacion.DoesNotExist (ObjectDoesNotExist) si no existe.
+    """
+    return CategoriaReparacion.objects.get(id_categoria=id_categoria)

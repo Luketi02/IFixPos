@@ -29,6 +29,16 @@ def obtener_email_emisor() -> str:
         return fallback
     return emisor
 
+def obtener_email_soporte() -> str:
+    """Obtiene la casilla de correo de soporte al cliente con fail-safe."""
+    try:
+        config = ConfiguracionSistema.objects.filter(id_config=23).first()
+        if config and config.valor and str(config.valor).strip():
+            return str(config.valor).strip()
+    except Exception:
+        pass
+    return obtener_configuracion_texto('emailSoporte', fallback='soporte@ifixnet.com')
+
 def obtener_notificaciones_usuario(id_usuario: int) -> QuerySet[Notificacion]:
     """Obtiene las notificaciones de un usuario ordenadas por fecha más reciente."""
     return Notificacion.objects.filter(id_usuario_id=id_usuario).order_by('-id_notificacion')
