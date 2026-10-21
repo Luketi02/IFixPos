@@ -127,6 +127,14 @@ def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict
             config.ultima_modif = ahora
             config.save()
             claves_alteradas.append(clave)
+        else:
+            ConfiguracionSistema.objects.create(
+                clave=clave,
+                descripcion=f"Parámetro {clave}",
+                valor=str(valor) if valor is not None else "",
+                ultima_modif=ahora
+            )
+            claves_alteradas.append(clave)
 
     # Detalle descriptivo de auditoría
     if claves_alteradas:

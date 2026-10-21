@@ -1,9 +1,11 @@
 import os
+import secrets
+import string
 from django.conf import settings
 from django.utils import timezone as django_timezone
 from django.db import transaction
-from rest_framework.exceptions import ValidationError
-from workshop_app.models import Dispositivo, CategoriaReparacion
+from rest_framework.exceptions import ValidationError, PermissionDenied
+from workshop_app.models import Dispositivo, CategoriaReparacion, Reparacion, BitacoraReparacion
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
 from core_app.models import LogSistema
@@ -457,3 +459,609 @@ def cambiar_estado_categoria_reparacion(
     )
 
     return categoria
+
+
+# ==============================================================================
+# CU-26: INICIAR REPARACIÓN (CAPA DE ESCRITURA Y TRANSACCIONES)
+# ==============================================================================
+
+def _obtener_codigo_rol_usuario(usuario: Usuario) -> str:
+    rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
+    return (getattr(rol, 'codigo', '') or '').upper()
+
+
+def generar_codigo_seguridad_reparacion(longitud: int = 6) -> str:
+    """Genera un token alfanumérico en mayúsculas de longitud específica."""
+    caracteres = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(caracteres) for _ in range(longitud))
+
+
+def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
+    """
+    CU-26: Genera los datos consolidados de la Orden de Servicio (Remito de Ingreso)
+    y despacha la notificación por correo al cliente con copia a la casilla corporativa del taller.
+    """
+    try:
+        from core_app.services import registrar_y_enviar_notificacion_correo
+
+        dispositivo = reparacion.id_dispositivo
+        cliente = dispositivo.id_usuario
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre_cliente = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() or cliente.email
+
+        modelo = getattr(dispositivo, 'id_modelo', None)
+        nombre_modelo = getattr(modelo, 'nombre', 'N/D')
+        nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
+        nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
+
+        asunto = f"Orden de Servicio #{reparacion.id_reparacion} - Ingreso de Reparación (IFixPos)"
+        cuerpo_texto = (
+            f"Estimado/a {nombre_cliente},\n\n"
+            f"Se ha iniciado formalmente la Orden de Servicio #{reparacion.id_reparacion} para su equipo.\n\n"
+            f"Detalles del Ingreso:\n"
+            f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
+            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- Estado Inicial: {reparacion.etapa}\n"
+            f"- Código de Seguridad / Token: {reparacion.codigo_sec}\n"
+            f"- Problema Informado: {reparacion.desc_cliente}\n\n"
+            f"Presente el código de seguridad '{reparacion.codigo_sec}' en el mostrador del taller para confirmar la entrega física del equipo.\n\n"
+            f"IFixPos - Taller de Reparaciones"
+        )
+
+        cuerpo_html = (
+            f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Orden de Servicio #{reparacion.id_reparacion}</h2>"
+            f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
+            f"<p>Confirmamos la apertura del servicio técnico para su dispositivo:</p>"
+            f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.etapa}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Código de Seguridad:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>{reparacion.codigo_sec}</span></td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Descripción:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
+            f"</table>"
+            f"<p style='color: #64748b; font-size: 13px;'>Presente este código en el mostrador físico del taller al entregar su equipo.</p>"
+            f"</div>"
+        )
+
+        registrar_y_enviar_notificacion_correo(
+            usuario=cliente,
+            asunto=asunto,
+            cuerpo_texto=cuerpo_texto,
+            tipo_notificacion="REPARACION",
+            cuerpo_html=cuerpo_html,
+            mensaje_notificacion=f"Nueva orden de servicio #{reparacion.id_reparacion} generada para su dispositivo.",
+            codigo_sensible=reparacion.codigo_sec,
+            adjuntar_logo=True
+        )
+    except Exception as e:
+        print(f"[CU-26 Remito] Advertencia al generar o despachar remito: {e}")
+
+
+@transaction.atomic
+def iniciar_reparacion(
+    *,
+    usuario_ejecutor: Usuario,
+    datos_validados: dict
+) -> Reparacion:
+    """
+    CU-26: Iniciar Reparación.
+    Permite a un Cliente, Técnico o Administrador instanciar una nueva orden de servicio
+    para un dispositivo empadronado.
+    """
+    from workshop_app.selectors import dispositivo_tiene_reparacion_activa, obtener_dispositivo_por_id
+
+    id_dispositivo = datos_validados['id_dispositivo']
+
+    # Paso 1: Validación de Disponibilidad
+    if dispositivo_tiene_reparacion_activa(id_dispositivo):
+        raise ValidationError("El dispositivo seleccionado ya posee una reparación en curso.")
+
+    dispositivo = obtener_dispositivo_por_id(id_dispositivo)
+    if not dispositivo:
+        raise ValidationError("El dispositivo seleccionado no existe.")
+
+    # Paso 2: Validación de Propiedad para Clientes
+    codigo_rol = _obtener_codigo_rol_usuario(usuario_ejecutor)
+    if codigo_rol == 'CLIENTE':
+        if dispositivo.id_usuario_id != usuario_ejecutor.id_usuario:
+            raise PermissionDenied("No tiene permiso para iniciar una reparación sobre un dispositivo que no le pertenece.")
+
+    # Paso 3: Lógica de Estado inicial según el rol
+    if codigo_rol == 'CLIENTE':
+        estado_inicial = 'ESPERANDO_DISPOSITIVO'
+        estado_alcanzado_int = 1
+    else:
+        estado_inicial = 'ESPERANDO_DIAGNOSTICO'
+        estado_alcanzado_int = 2
+
+    # Paso 4: Generación de Código de Seguridad
+    codigo_seguridad = generar_codigo_seguridad_reparacion(6)
+
+    # Paso 5: Creación e instanciación de la Reparación
+    reparacion = Reparacion.objects.create(
+        fecha_inicio=django_timezone.now().date(),
+        hora_recepcion=django_timezone.now().time(),
+        etapa=estado_inicial,
+        codigo_sec=codigo_seguridad,
+        desc_cliente=datos_validados['descripcion_problema'],
+        credencial_acceso=datos_validados['credencial_acceso'],
+        id_dispositivo=dispositivo,
+        id_usuario=usuario_ejecutor
+    )
+
+    # Paso 6: Relación M2M con Categorías de Reparación
+    ids_categorias = datos_validados.get('ids_categorias', [])
+    reparacion.categorias.set(ids_categorias)
+
+    # Paso 7: Registro en Bitácora Técnica
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_ejecutor,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=estado_alcanzado_int,
+        comentario="Apertura de orden de servicio"
+    )
+
+    # Paso 8: Auditoría y Despacho de Remito de Ingreso
+    email_ejecutor = getattr(usuario_ejecutor, 'email', str(usuario_ejecutor))
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Apertura de orden de servicio (CU-26)",
+        detalle=(
+            f"Reparación #{reparacion.id_reparacion} iniciada por {email_ejecutor} "
+            f"para dispositivo ID {dispositivo.id_dispositivo} en estado '{estado_inicial}' "
+            f"con código de seguridad {codigo_seguridad}."
+        ),
+        tipo="INFO",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_ejecutor
+    )
+
+    generar_y_enviar_remito_ingreso(reparacion)
+
+    return reparacion
+
+
+# ==============================================================================
+# CU-45: RECEPCIONAR DISPOSITIVO (CAPA DE ESCRITURA Y TRANSACCIONES)
+# ==============================================================================
+
+def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones_fisicas: str = '') -> None:
+    """
+    CU-45 (Paso 7): Genera los datos consolidados del comprobante de recepción física
+    detallando los problemas funcionales y el estado físico del equipo, despachando
+    la notificación por correo electrónico al cliente.
+    """
+    try:
+        from core_app.services import registrar_y_enviar_notificacion_correo
+
+        dispositivo = reparacion.id_dispositivo
+        cliente = dispositivo.id_usuario
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre_cliente = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() or cliente.email
+
+        modelo = getattr(dispositivo, 'id_modelo', None)
+        nombre_modelo = getattr(modelo, 'nombre', 'N/D')
+        nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
+        nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
+
+        obs_texto = observaciones_fisicas or 'Sin observaciones registradas'
+
+        asunto = f"Comprobante de Recepción Física - Orden #{reparacion.id_reparacion} (IFixPos)"
+        cuerpo_texto = (
+            f"Estimado/a {nombre_cliente},\n\n"
+            f"Confirmamos la recepción física de su equipo en nuestro mostrador para la Orden #{reparacion.id_reparacion}.\n\n"
+            f"Detalles de la Recepción:\n"
+            f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
+            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- Estado Actual: Esperando Diagnóstico\n"
+            f"- Código de Servicio: {reparacion.codigo_sec}\n"
+            f"- Problemas Reportados: {reparacion.desc_cliente}\n"
+            f"- Estado Estético / Observaciones Físicas: {obs_texto}\n\n"
+            f"Su dispositivo ha ingresado formalmente a la fila de diagnóstico técnico. Le notificaremos a la brevedad.\n\n"
+            f"IFixPos - Taller de Reparaciones"
+        )
+
+        cuerpo_html = (
+            f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Comprobante de Recepción Física</h2>"
+            f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
+            f"<p>Su equipo ha sido recibido en el mostrador del taller y ha pasado a la etapa de <strong>Esperando Diagnóstico</strong>:</p>"
+            f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Orden de Servicio:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>#{reparacion.id_reparacion}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado Físico / Estético:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{obs_texto}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Falla Informada:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
+            f"</table>"
+            f"<p style='color: #64748b; font-size: 13px;'>Este comprobante certifica la tenencia física del equipo y su condición estética al ingreso.</p>"
+            f"</div>"
+        )
+
+        registrar_y_enviar_notificacion_correo(
+            usuario=cliente,
+            asunto=asunto,
+            cuerpo_texto=cuerpo_texto,
+            tipo_notificacion="REPARACION",
+            cuerpo_html=cuerpo_html,
+            mensaje_notificacion=f"Dispositivo recepcionado físicamente en mostrador para la orden #{reparacion.id_reparacion}.",
+            codigo_sensible=reparacion.codigo_sec,
+            adjuntar_logo=True
+        )
+    except Exception as e:
+        print(f"[CU-45 Comprobante] Advertencia al generar o despachar comprobante: {e}")
+
+
+@transaction.atomic
+def recepcionar_dispositivo_taller(
+    *,
+    usuario_tecnico: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+) -> Reparacion:
+    """
+    CU-45: Recepcionar Dispositivo.
+    Permite al personal de taller (Técnico o Administrador) verificar los datos
+    cargados previamente de forma virtual por el cliente, asentar las condiciones
+    estéticas y físicas del equipo y avanzar formalmente el ciclo de vida a 'ESPERANDO_DIAGNOSTICO'.
+    """
+    from workshop_app.selectors import obtener_reparacion_para_recepcion
+
+    # Paso 1 & 4: Obtener reparación y validar estado estricto 'ESPERANDO_DISPOSITIVO'
+    reparacion = obtener_reparacion_para_recepcion(id_reparacion)
+
+    # Paso 5: Actualizar datos de la reparación
+    reparacion.desc_cliente = datos_validados['descripcion_problema']
+    reparacion.credencial_acceso = datos_validados.get('credencial_acceso') or 'Ninguna'
+    reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+    reparacion.hora_recepcion = django_timezone.now().time()
+    reparacion.save()
+
+    # Actualizar relación M2M de categorías si fueron especificadas
+    if 'ids_categorias' in datos_validados:
+        reparacion.categorias.set(datos_validados['ids_categorias'])
+
+    # Paso 6: Registro en Bitácora de Reparación (único lugar donde persisten las observaciones físicas)
+    comentario_bitacora = f"Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_tecnico,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=2,  # 2: ESPERANDO_DIAGNOSTICO
+        comentario=comentario_bitacora
+    )
+
+    # Paso 7: Auditoría en LogSistema y Despacho de Comprobante
+    email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Recepción física de dispositivo (CU-45)",
+        detalle=(
+            f"Reparación #{reparacion.id_reparacion} recepcionada físicamente en mostrador por {email_tecnico}. "
+            f"Transición a 'ESPERANDO_DIAGNOSTICO'. Estado físico: {datos_validados['observaciones_fisicas']}."
+        ),
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_tecnico
+    )
+
+    generar_y_enviar_comprobante_recepcion(
+        reparacion,
+        observaciones_fisicas=datos_validados['observaciones_fisicas']
+    )
+
+    return reparacion
+
+
+# ==============================================================================
+# CU-08: CARGAR DIAGNÓSTICO TÉCNICO (LÓGICA TRANSACCIONAL Y EMISIÓN DE ALERTAS)
+# ==============================================================================
+
+@transaction.atomic
+def cargar_diagnostico_tecnico(
+    *,
+    usuario_tecnico: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+):
+    """
+    CU-08: Cargar diagnóstico técnico.
+    Permite al técnico o administrador registrar la evaluación formal de un equipo,
+    detallando las fallas detectadas, vinculando insumos consumibles (congelando su precio unitario),
+    estableciendo el costo estimado de mano de obra y transicionando la reparación a 'ESPERANDO_CONFIRMACION'.
+    Emite notificación automática al cliente y registra auditoría en Bitácora y LogSistema.
+    """
+    from workshop_app.selectors import obtener_reparacion_para_diagnostico
+    from workshop_app.models import Diagnostico, DetalleInsumoReparacion, BitacoraReparacion
+    from catalog_app.models import Producto
+    from core_app.models import Notificacion, LogSistema
+
+    # Paso 1: Obtener reparación y verificar estado estricto 'EN_DIAGNOSTICO'
+    reparacion = obtener_reparacion_para_diagnostico(id_reparacion)
+
+    # Paso 2: Instanciar y guardar Diagnóstico técnico
+    diagnostico = Diagnostico.objects.create(
+        id_reparacion=reparacion,
+        descripcion_falla=datos_validados['descripcion_falla'],
+        fecha_diagnostico=django_timezone.now().date(),
+        costo_diagnostico=datos_validados['costo_mano_obra']
+    )
+
+    # Paso 3: Insumos requeridos para el presupuesto (congelando precio de venta actual)
+    insumos_data = datos_validados.get('insumos', [])
+    for item in insumos_data:
+        producto = Producto.objects.get(pk=item['id_producto'])
+        DetalleInsumoReparacion.objects.create(
+            id_reparacion=reparacion,
+            id_producto=producto,
+            cantidad=item['cantidad'],
+            precio_unitario=producto.precio_venta
+        )
+
+    # Paso 4: Transición de Estado de Reparación
+    reparacion.etapa = 'ESPERANDO_CONFIRMACION'
+    reparacion.save()
+
+    # Paso 5: Registro inmutable en BitacoraReparacion
+    # Nota: estado_alcanzado se almacena numéricamente en BD (4: ESPERANDO_CONFIRMACION)
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_tecnico,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=4,  # 4: ESPERANDO_CONFIRMACION
+        comentario="Carga de diagnóstico"
+    )
+
+    # Paso 6: Notificación automática al cliente y Auditoría en LogSistema
+    cliente = reparacion.id_dispositivo.id_usuario
+    Notificacion.objects.create(
+        id_usuario=cliente,
+        mensaje="Su presupuesto ya se encuentra disponible para revisión",
+        tipo="DIAGNOSTICO_DISPONIBLE",
+        fecha_envio=django_timezone.now().date(),
+        leida=False,
+        id_dispositivo=reparacion.id_dispositivo
+    )
+
+    email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Carga de diagnóstico técnico (CU-08)",
+        detalle=(
+            f"Diagnóstico #{diagnostico.id_diagnostico} cargado por técnico {email_tecnico} "
+            f"para la Reparación #{reparacion.id_reparacion}. "
+            f"Mano de obra: ${datos_validados['costo_mano_obra']}. "
+            f"Insumos vinculados: {len(insumos_data)}. "
+            f"Transición a 'ESPERANDO_CONFIRMACION'."
+        ),
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="diagnostico",
+        id_registro_afectado=str(diagnostico.id_diagnostico),
+        id_usuario=usuario_tecnico
+    )
+
+    return diagnostico
+
+
+# ==============================================================================
+# CU-09: CONFIRMAR O RECHAZAR REPARACIÓN (LÓGICA TRANSACCIONAL INNEGOCIABLE)
+# ==============================================================================
+
+@transaction.atomic
+def procesar_decision_reparacion(
+    *,
+    usuario_cliente: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+) -> Reparacion:
+    """
+    CU-09: Confirmar o rechazar reparación.
+    Permite al cliente aceptar o rechazar un presupuesto luego de recibir el diagnóstico técnico.
+    Lógica Transaccional:
+    - Valida que la reparación pertenezca al cliente (PermissionDenied).
+    - Valida que la reparación se encuentre estrictamente en etapa 'ESPERANDO_CONFIRMACION'.
+    - Si el cliente RECHAZA:
+        * Cambia el estado a 'CANCELADO'.
+        * Registra en BitacoraReparacion (estado 8) y emite notificación al técnico.
+    - Si el cliente ACEPTA:
+        * Cambia el estado a 'EN_REPARACION'.
+        * Genera una instancia de Venta en estado PENDIENTE vinculada al cliente con los insumos
+          presupuestados (DetalleVenta), el método de entrega y medio de pago seleccionados.
+        * Vincula la Venta a la Reparación.
+        * Registra en BitacoraReparacion (estado 5) y emite notificación al técnico.
+    - Registra auditoría inmutable en LogSistema para trazabilidad.
+    """
+    import uuid
+    from decimal import Decimal
+    from rest_framework.exceptions import PermissionDenied, ValidationError, NotFound
+    from workshop_app.models import Reparacion, DetalleInsumoReparacion, BitacoraReparacion
+    from sales_app.models import Venta, DetalleVenta, MedioPago, Pago
+    from geo_app.models import Direccion
+    from core_app.models import Notificacion, LogSistema, ConfiguracionSistema
+
+    # Paso 1: Recuperar la reparación
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_modelo',
+            'id_usuario',
+            'id_usuario__perfilusuario'
+        ).get(pk=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise NotFound(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    # Paso 2: Control de propiedad horizontal innegociable
+    cliente_id = getattr(usuario_cliente, 'id_usuario', None) or getattr(usuario_cliente, 'id', None)
+    if reparacion.id_dispositivo.id_usuario_id != cliente_id:
+        raise PermissionDenied("Acceso Denegado: Esta orden de reparación no pertenece a su cuenta.")
+
+    # Paso 3: Validación estricta de precondición operativa ('ESPERANDO_CONFIRMACION')
+    etapa_actual = (
+        (reparacion.etapa or '')
+        .strip()
+        .upper()
+        .replace(' ', '_')
+        .replace('Á', 'A')
+        .replace('É', 'E')
+        .replace('Í', 'I')
+        .replace('Ó', 'O')
+        .replace('Ú', 'U')
+    )
+    if etapa_actual != 'ESPERANDO_CONFIRMACION':
+        raise ValidationError("La reparación no se encuentra en estado 'Esperando Confirmación'.")
+
+    decision = str(datos_validados.get('decision') or '').strip().upper()
+    comentarios = str(datos_validados.get('comentarios_cliente') or '').strip()
+
+    # Paso 4: Bifurcación lógica según la decisión del cliente
+    if decision == 'RECHAZAR':
+        reparacion.etapa = 'CANCELADO'
+        estado_alcanzado_int = 8  # 8: CANCELADO / RECHAZADO
+        comentario_bitacora = "Diagnóstico rechazado" + (f": {comentarios}" if comentarios else "")
+
+    elif decision == 'ACEPTAR':
+        reparacion.etapa = 'EN_REPARACION'
+        estado_alcanzado_int = 5  # 5: EN_REPARACION
+        comentario_bitacora = "Diagnóstico aceptado" + (f": {comentarios}" if comentarios else "")
+
+        # Recuperar insumos presupuestados en el diagnóstico
+        insumos_presupuestados = list(
+            DetalleInsumoReparacion.objects.filter(id_reparacion=reparacion).select_related('id_producto')
+        )
+
+        # Calcular monto subtotal de insumos
+        monto_subtotal = Decimal('0.00')
+        for insumo in insumos_presupuestados:
+            precio = Decimal(str(insumo.precio_unitario or 0))
+            cant = Decimal(str(insumo.cantidad or 0))
+            monto_subtotal += precio * cant
+
+        # Resolver método de entrega y costo de envío
+        metodo_entrega = str(datos_validados.get('metodo_entrega') or 'RETIRO').strip().upper()
+        costo_envio = Decimal('0.00')
+        if metodo_entrega == 'ENVIO':
+            cfg_envio = ConfiguracionSistema.objects.filter(clave='envioLocal').first()
+            if cfg_envio and cfg_envio.valor:
+                try:
+                    val_limpio = cfg_envio.valor.strip().replace(',', '.')
+                    costo_envio = Decimal(val_limpio)
+                except Exception:
+                    costo_envio = Decimal('0.00')
+
+        # Resolver dirección de envío si aplica
+        id_dir = datos_validados.get('id_direccion_envio')
+        direccion_envio_obj = None
+        if id_dir and metodo_entrega == 'ENVIO':
+            direccion_envio_obj = Direccion.objects.filter(id_direccion=id_dir).first()
+
+        # Generar Venta en sales_app
+        codigo_seguridad_venta = uuid.uuid4().hex[:10].upper()
+        venta = Venta.objects.create(
+            id_usuario=usuario_cliente,
+            metodo_entrega=metodo_entrega,
+            fecha_venta=django_timezone.now().date(),
+            estado_venta='PENDIENTE',
+            codigo_sec=codigo_seguridad_venta,
+            monto_subtotal=monto_subtotal,
+            costo_envio=costo_envio,
+            id_direccion_envio=direccion_envio_obj
+        )
+
+        # Replicar insumos presupuestados en DetalleVenta
+        for insumo in insumos_presupuestados:
+            cant = int(insumo.cantidad or 0)
+            precio_u = Decimal(str(insumo.precio_unitario or 0))
+            subtotal_renglon = precio_u * Decimal(str(cant))
+            DetalleVenta.objects.create(
+                id_venta=venta,
+                id_producto=insumo.id_producto,
+                cantidad=cant,
+                precio_unitario=precio_u,
+                subtotal=subtotal_renglon
+            )
+
+        # Resolver MedioPago y registrar instancia de Pago pendiente
+        nombre_pago = str(datos_validados.get('metodo_pago') or 'EFECTIVO').strip()
+        medio_pago_obj = None
+        if nombre_pago.isdigit():
+            medio_pago_obj = MedioPago.objects.filter(id_mediopago=int(nombre_pago)).first()
+        if not medio_pago_obj:
+            medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_pago).first()
+        if not medio_pago_obj:
+            medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__icontains=nombre_pago).first()
+        if not medio_pago_obj:
+            medio_pago_obj = MedioPago.objects.create(
+                nombre_medio_pago=nombre_pago.capitalize(),
+                estado=True,
+                recargo=Decimal('0.00')
+            )
+
+        Pago.objects.create(
+            id_venta=venta,
+            medio_pago=medio_pago_obj,
+            monto_pagado=Decimal('0.00'),
+            fecha_pago=django_timezone.now().date(),
+            detalle=f"Pago pendiente de acreditación ({medio_pago_obj.nombre_medio_pago}) para Reparación #{reparacion.id_reparacion}"
+        )
+
+        # Vincular la Venta a la Reparación
+        reparacion.id_venta = venta
+    else:
+        raise ValidationError(f"Decisión '{decision}' no reconocida. Debe ser 'ACEPTAR' o 'RECHAZAR'.")
+
+    # Paso 5: Persistir la reparación actualizada
+    reparacion.save()
+
+    # Paso 6: Registro inmutable en BitacoraReparacion
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_cliente,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=estado_alcanzado_int,
+        comentario=comentario_bitacora
+    )
+
+    # Paso 7: Notificación interna dirigida al técnico asignado
+    tecnico = reparacion.id_usuario
+    if tecnico:
+        decision_verbo = "aceptó" if decision == 'ACEPTAR' else "rechazó"
+        modelo_nombre = (
+            reparacion.id_dispositivo.id_modelo.nombre
+            if reparacion.id_dispositivo and reparacion.id_dispositivo.id_modelo
+            else "Equipo"
+        )
+        Notificacion.objects.create(
+            id_usuario=tecnico,
+            mensaje=f"El cliente {decision_verbo} el presupuesto para la reparación #{reparacion.id_reparacion} ({modelo_nombre}).",
+            tipo=f"DECISION_REPARACION_{decision}",
+            fecha_envio=django_timezone.now().date(),
+            leida=False,
+            id_dispositivo=reparacion.id_dispositivo
+        )
+
+    # Paso 8: Auditoría en LogSistema para trazabilidad
+    email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
+    venta_info = f", Venta #{reparacion.id_venta_id} generada en estado PENDIENTE" if reparacion.id_venta else ""
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion=f"Decisión de reparación {decision} (CU-09)",
+        detalle=(
+            f"El cliente {email_cliente} confirmó la decisión '{decision}' para la Reparación #{reparacion.id_reparacion}. "
+            f"Nuevo estado: '{reparacion.etapa}'{venta_info}."
+        )[:1000],
+        tipo="AUDITORIA_COMERCIAL",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_cliente
+    )
+
+    return reparacion
+

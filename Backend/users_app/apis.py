@@ -342,3 +342,66 @@ class FiltrarUsuariosApi(APIView):
             
         except ValueError:
             return Response({"error": "Parámetro numérico inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CambiarSesionDevApi(APIView):
+    """
+    Controlador de desarrollo para conmutación rápida de perfiles y sesiones:
+    - Cliente: cliente@ifixpos.com
+    - Técnico: tecnico@ifixpos.com
+    - Administrador: lucas.mino1508@gmail.com
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from users_app.models import Usuario, PerfilUsuario
+        from users_app.services import generar_tokens_jwt
+        from users_app.selectors import perfil_esta_completo
+
+        rol_destino = str(request.data.get('rol', '')).strip().upper()
+        email_destino = str(request.data.get('email', '')).strip().lower()
+
+        usuario = None
+        if email_destino:
+            usuario = Usuario.objects.filter(email__iexact=email_destino, is_active=True).first()
+
+        if not usuario and rol_destino:
+            if rol_destino == 'ADMIN' or rol_destino == 'ADMINISTRADOR':
+                usuario = Usuario.objects.filter(email='lucas.mino1508@gmail.com', is_active=True).first()
+                if not usuario:
+                    usuario = Usuario.objects.filter(id_rol__codigo='ADMIN', is_active=True).first()
+            elif rol_destino == 'TECNICO':
+                usuario = Usuario.objects.filter(email='tecnico@ifixpos.com', is_active=True).first()
+                if not usuario:
+                    usuario = Usuario.objects.filter(id_rol__codigo='TECNICO', is_active=True).first()
+            elif rol_destino == 'CLIENTE':
+                usuario = Usuario.objects.filter(email='cliente@ifixpos.com', is_active=True).first()
+                if not usuario:
+                    usuario = Usuario.objects.filter(id_rol__codigo='CLIENTE', is_active=True).first()
+
+        if not usuario:
+            return Response(
+                {"error": f"No se encontró un usuario activo para el rol '{rol_destino}' o correo '{email_destino}'."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        tokens = generar_tokens_jwt(usuario)
+        perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
+
+        return Response({
+            "mensaje": f"Sesión cambiada con éxito a {usuario.id_rol.nombre_rol} ({usuario.email})",
+            "tokens": tokens,
+            "usuario": {
+                "id_usuario": usuario.id_usuario,
+                "email": usuario.email,
+                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+                "nombre": perfil.nombre if perfil and perfil.nombre else "",
+                "apellido": perfil.apellido if perfil and perfil.apellido else "",
+                "dni": perfil.dni if perfil and perfil.dni else "",
+                "telefono": perfil.telefono if perfil and perfil.telefono else "",
+                "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
+                "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else "",
+                "perfil_completo": perfil_esta_completo(usuario.id_usuario)
+            }
+        }, status=status.HTTP_200_OK)
+

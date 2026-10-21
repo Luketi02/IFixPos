@@ -76,17 +76,18 @@ class Producto(models.Model):
     )
     id_categoria = models.ForeignKey(
         CategoriaProducto,
-        on_delete=models.RESTRICT,
-        db_column='id_categoria',
-        help_text='Identificador único de la categoría de producto.'
-    )
-    id_marca = models.ForeignKey(
-        'Marca',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        db_column='id_marca',
-        help_text='Identificador único de la marca del fabricante si aplica.'
+        db_column='id_categoria',
+        help_text='Identificador único de la categoría de producto principal.'
+    )
+    categorias = models.ManyToManyField(
+        CategoriaProducto,
+        through='DetalleCategoriaProducto',
+        related_name='productos',
+        blank=True,
+        help_text='Categorías asociadas al producto.'
     )
     id_modelo = models.ForeignKey(
         'ModeloDispositivo',
@@ -96,14 +97,6 @@ class Producto(models.Model):
         db_column='id_modelo',
         help_text='Identificador único del modelo comercial si aplica.'
     )
-    id_tipo_dispositivo = models.ForeignKey(
-        'TipoDispositivo',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        db_column='id_tipo_dispositivo',
-        help_text='Identificador único del tipo de dispositivo si aplica.'
-    )
     imagen_principal = models.CharField(
         max_length=500,
         null=True,
@@ -111,8 +104,59 @@ class Producto(models.Model):
         help_text='URL de la imagen representativa principal del producto.'
     )
 
+    @property
+    def id_marca(self):
+        """Retorna la Marca asociada a través del ModeloDispositivo."""
+        return self.id_modelo.id_marca if self.id_modelo else None
+
+    @property
+    def id_marca_id(self):
+        """Retorna el ID de la Marca asociada a través del ModeloDispositivo."""
+        return self.id_modelo.id_marca_id if self.id_modelo else None
+
+    @property
+    def id_tipo_dispositivo(self):
+        """Retorna el TipoDispositivo asociado a través del ModeloDispositivo."""
+        return self.id_modelo.id_tipo_dispositivo if self.id_modelo else None
+
+    @property
+    def id_tipo_dispositivo_id(self):
+        """Retorna el ID del TipoDispositivo asociado a través del ModeloDispositivo."""
+        return self.id_modelo.id_tipo_dispositivo_id if self.id_modelo else None
+
     class Meta:
         db_table = 'producto'
+
+
+class DetalleCategoriaProducto(models.Model):
+    """
+    Tabla intermedia para vincular productos con una o múltiples categorías (N a M).
+    """
+    id_detalle_categoria_producto = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del detalle de categoría del producto.'
+    )
+    id_producto = models.ForeignKey(
+        Producto,
+        on_delete=models.CASCADE,
+        related_name='categorias_detalle',
+        db_column='id_producto',
+        help_text='Producto asociado.'
+    )
+    id_categoria = models.ForeignKey(
+        CategoriaProducto,
+        on_delete=models.RESTRICT,
+        related_name='productos_detalle',
+        db_column='id_categoria',
+        help_text='Categoría asignada.'
+    )
+
+    class Meta:
+        db_table = 'detalle_categoria_productos'
+        unique_together = ('id_producto', 'id_categoria')
+
+    def __str__(self):
+        return f"Detalle {self.id_detalle_categoria_producto}: Prod {self.id_producto_id} - Cat {self.id_categoria_id}"
 
 
 class ImagenProducto(models.Model):

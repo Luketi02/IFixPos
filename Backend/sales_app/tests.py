@@ -414,3 +414,32 @@ class SalesAppCU18TestCase(TestCase):
         self.assertEqual(res.data['total_articulos'], 1)
         self.assertEqual(len(res.data['items']), 1)
         self.assertEqual(res.data['items'][0]['id_producto'], self.prod_funda.id_producto)
+
+    def test_api_quitar_del_carrito_exitoso(self):
+        self.client.force_authenticate(user=self.cliente)
+        # Agregar 2 fundas
+        self.client.post(
+            '/api/sales/carrito/agregar/',
+            data={'id_producto': self.prod_funda.id_producto, 'cantidad': 2},
+            format='json'
+        )
+
+        # Quitar 1 funda
+        res = self.client.post(
+            '/api/sales/carrito/quitar/',
+            data={'id_producto': self.prod_funda.id_producto, 'cantidad': 1},
+            format='json'
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(res.data['resultado']['eliminado_completo'])
+        self.assertEqual(res.data['resultado']['cantidad_restante_item'], 1)
+
+        # Quitar la totalidad (sin enviar cantidad o con cantidad restante)
+        res_total = self.client.post(
+            '/api/sales/carrito/quitar/',
+            data={'id_producto': self.prod_funda.id_producto},
+            format='json'
+        )
+        self.assertEqual(res_total.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_total.data['resultado']['eliminado_completo'])
+        self.assertEqual(res_total.data['resultado']['total_articulos_carrito'], 0)

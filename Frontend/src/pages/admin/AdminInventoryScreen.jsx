@@ -6,6 +6,7 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import RegistrarProductoModal from '../../components/inventory/RegistrarProductoModal';
 import ActualizarStockModal from '../../components/inventory/ActualizarStockModal';
+import ModificarProductoModal from '../../components/inventory/ModificarProductoModal';
 import { formatearMoneda } from '../../utils/productImages';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
@@ -35,6 +36,7 @@ export default function AdminInventoryScreen() {
   // ---------------------------------------------------------------------------
   const [modalRegistroAbierto, setModalRegistroAbierto] = useState(false);
   const [productoAjuste, setProductoAjuste] = useState(null);
+  const [productoEdicion, setProductoEdicion] = useState(null);
   const [toastMensaje, setToastMensaje] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -416,9 +418,22 @@ export default function AdminInventoryScreen() {
                             </div>
                           </td>
 
-                          {/* Categoría */}
+                          {/* Categoría (Soporte Múltiples) */}
                           <td className="px-6 py-4 text-slate-300 text-xs font-medium">
-                            {prod.categoria || 'Sin categoría'}
+                            {prod.categorias && prod.categorias.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                {prod.categorias.map((c) => (
+                                  <span
+                                    key={c.id_categoria}
+                                    className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                                  >
+                                    {c.nombre}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              prod.categoria || 'Sin categoría'
+                            )}
                           </td>
 
                           {/* Propósito */}
@@ -474,20 +489,35 @@ export default function AdminInventoryScreen() {
                             </span>
                           </td>
 
-                          {/* Acciones: Botón Ajustar Stock (+/- Balanza) */}
+                          {/* Acciones: Botones Editar Producto y Ajustar Stock */}
                           <td className="px-6 py-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => setProductoAjuste(prod)}
-                              className="p-2 rounded-xl bg-violet-500/15 hover:bg-violet-500/30 text-violet-300 border border-violet-500/40 hover:border-violet-400 transition-all active:scale-95 group/btn inline-flex items-center gap-1.5 shadow-sm"
-                              title="Ajustar Stock Manual (+ / -)"
-                            >
-                              {/* Icono de Balanza / +/- */}
-                              <svg className="w-4 h-4 transition-transform group-hover/btn:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
-                              </svg>
-                              <span className="text-xs font-semibold pr-1 hidden lg:inline">Ajustar</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              {/* Botón Editar Producto (CU-68) */}
+                              <button
+                                type="button"
+                                onClick={() => setProductoEdicion(prod)}
+                                className="p-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 transition-all active:scale-95 group/btn inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
+                                title="Modificar Datos y Configuración del Producto"
+                              >
+                                <svg className="w-4 h-4 transition-transform group-hover/btn:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                                <span className="text-xs font-semibold pr-1 hidden lg:inline">Editar</span>
+                              </button>
+
+                              {/* Botón Ajustar Stock (+/- Balanza) */}
+                              <button
+                                type="button"
+                                onClick={() => setProductoAjuste(prod)}
+                                className="p-2 rounded-xl bg-violet-500/15 hover:bg-violet-500/30 text-violet-300 border border-violet-500/40 hover:border-violet-400 transition-all active:scale-95 group/btn inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
+                                title="Ajustar Stock Manual (+ / -)"
+                              >
+                                <svg className="w-4 h-4 transition-transform group-hover/btn:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                                </svg>
+                                <span className="text-xs font-semibold pr-1 hidden lg:inline">Ajustar</span>
+                              </button>
+                            </div>
                           </td>
 
                         </tr>
@@ -518,6 +548,17 @@ export default function AdminInventoryScreen() {
         isOpen={Boolean(productoAjuste)}
         producto={productoAjuste}
         onClose={() => setProductoAjuste(null)}
+        onSuccess={(msg) => {
+          setToastMensaje(msg);
+          cargarInventario();
+        }}
+      />
+
+      {/* Modal 3: Modificar Producto Existente (CU-68) */}
+      <ModificarProductoModal
+        isOpen={Boolean(productoEdicion)}
+        producto={productoEdicion}
+        onClose={() => setProductoEdicion(null)}
         onSuccess={(msg) => {
           setToastMensaje(msg);
           cargarInventario();

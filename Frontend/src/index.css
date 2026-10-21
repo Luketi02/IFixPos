@@ -93,3 +93,19 @@ body,
   background: #06B6D4;
 }
 
+/* ==============================================================================
+   ESTILOS GLOBALES: Limpieza de inputs numéricos (Spinners nativos del sistema)
+   ============================================================================== */
+/* Ocultar flechas toscas nativas en WebKit (Chrome, Safari, Edge, Opera) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Ocultar flechas nativas en Firefox */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+

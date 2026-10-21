@@ -2,7 +2,8 @@ from django.urls import path
 from sales_app.apis import (
     RealizarCompraVirtualApi,
     AgregarAlCarritoApi,
-    CarritoDetalleApi
+    CarritoDetalleApi,
+    QuitarDelCarritoApi
 )
 
 urlpatterns = [
@@ -12,5 +13,6 @@ urlpatterns = [
 
     # Carrito de Compras
     path('carrito/agregar/', AgregarAlCarritoApi.as_view(), name='api_carrito_agregar'),
+    path('carrito/quitar/', QuitarDelCarritoApi.as_view(), name='api_carrito_quitar'),
     path('carrito/', CarritoDetalleApi.as_view(), name='api_carrito_detalle'),
 ]

@@ -50,6 +50,7 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'envioNacional',
             'porcentajeDescuentoMaximo',
             'vigenciaBeneficioDefecto',
+            'costoManoDeObra',
         }
 
         # Campos booleanos que se almacenan como 'True' / 'False' en la BD
@@ -62,6 +63,7 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'log_roles_permisos',
             'log_operaciones_lectura',
             'motorBeneficiosActivo',
+            'permitirCostoManoDeObraPropio',
         }
 
         for campo in CAMPOS_BOOLEANOS:

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { normalizarUrlImagen } from '../../utils/productImages';
+import CyberNumberInput from '../common/CyberNumberInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -26,6 +27,20 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
   const [subiendoPortada, setSubiendoPortada] = useState(false);
   const [subiendoGaleria, setSubiendoGaleria] = useState(false);
 
+  // Estados para el sub-modal de creación rápida de modelo al vuelo
+  const [modalNuevoModeloAbierto, setModalNuevoModeloAbierto] = useState(false);
+  const [nuevoModeloNombre, setNuevoModeloNombre] = useState('');
+  const [nuevoModeloTipo, setNuevoModeloTipo] = useState('');
+  const [guardandoNuevoModelo, setGuardandoNuevoModelo] = useState(false);
+  const [errorNuevoModelo, setErrorNuevoModelo] = useState('');
+
+  // Estados para el sub-modal de creación rápida de nueva categoría al vuelo
+  const [modalNuevaCategoriaAbierto, setModalNuevaCategoriaAbierto] = useState(false);
+  const [nuevaCategoriaNombre, setNuevaCategoriaNombre] = useState('');
+  const [nuevaCategoriaDescripcion, setNuevaCategoriaDescripcion] = useState('');
+  const [guardandoNuevaCategoria, setGuardandoNuevaCategoria] = useState(false);
+  const [errorNuevaCategoria, setErrorNuevaCategoria] = useState('');
+
   // Referencias a inputs de archivo ocultos
   const inputPortadaRef = useRef(null);
   const inputGaleriaRef = useRef(null);
@@ -34,6 +49,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
   const [formData, setFormData] = useState({
     nombre: '',
     id_categoria: '',
+    ids_categorias: [],
     id_marca: '',
     id_modelo: '',
     id_tipo_dispositivo: '',
@@ -56,6 +72,20 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
     return () => clearTimeout(t);
   }, [errorMessage]);
 
+  // Auto-ocultar error de creación de nuevo modelo tras 6 segundos (Regla 6)
+  useEffect(() => {
+    if (!errorNuevoModelo) return undefined;
+    const t = setTimeout(() => setErrorNuevoModelo(''), 6000);
+    return () => clearTimeout(t);
+  }, [errorNuevoModelo]);
+
+  // Auto-ocultar error de creación de nueva categoría tras 6 segundos (Regla 6)
+  useEffect(() => {
+    if (!errorNuevaCategoria) return undefined;
+    const t = setTimeout(() => setErrorNuevaCategoria(''), 6000);
+    return () => clearTimeout(t);
+  }, [errorNuevaCategoria]);
+
   // Cargar categorías, marcas y tipos de dispositivo al abrir el modal
   useEffect(() => {
     if (!isOpen) return;
@@ -65,6 +95,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
     setFormData({
       nombre: '',
       id_categoria: '',
+      ids_categorias: [],
       id_marca: '',
       id_modelo: '',
       id_tipo_dispositivo: '',
@@ -102,7 +133,11 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
         const dataCat = Array.isArray(resCat.data) ? resCat.data : [];
         setCategorias(dataCat);
         if (dataCat.length > 0) {
-          setFormData((prev) => ({ ...prev, id_categoria: String(dataCat[0].id_categoria) }));
+          setFormData((prev) => ({
+            ...prev,
+            id_categoria: String(dataCat[0].id_categoria),
+            ids_categorias: prev.ids_categorias.length > 0 ? prev.ids_categorias : [String(dataCat[0].id_categoria)]
+          }));
         }
 
         const dataMarcas = Array.isArray(resMarcas.data) ? resMarcas.data : [];
@@ -152,6 +187,166 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
     setFormData((prev) => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  // Abrir sub-modal para crear una nueva categoría de producto al vuelo
+  const abrirModalNuevaCategoria = () => {
+    setNuevaCategoriaNombre('');
+    setNuevaCategoriaDescripcion('');
+    setErrorNuevaCategoria('');
+    setModalNuevaCategoriaAbierto(true);
+  };
+
+  // Guardar nueva categoría de producto en la BD y asociarla al producto de inmediato
+  const handleCrearNuevaCategoria = async (e) => {
+    if (e) e.preventDefault();
+    const nombreLimpio = nuevaCategoriaNombre.trim();
+    if (!nombreLimpio) {
+      setErrorNuevaCategoria('El nombre de la categoría es obligatorio.');
+      return;
+    }
+
+    setGuardandoNuevaCategoria(true);
+    setErrorNuevaCategoria('');
+
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/catalog/categorias/`,
+        {
+          nombre: nombreLimpio,
+          descripcion: nuevaCategoriaDescripcion.trim()
+        },
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      const catCreada = res.data?.categoria || res.data;
+      const nuevoId = String(catCreada.id_categoria);
+
+      // Actualizar listado de categorías locales
+      setCategorias((prev) => {
+        const existe = prev.some((c) => String(c.id_categoria) === nuevoId);
+        if (existe) {
+          return prev.map((c) => (String(c.id_categoria) === nuevoId ? { ...c, ...catCreada, estado_activo: true } : c));
+        }
+        return [...prev, catCreada];
+      });
+
+      // Vincular de inmediato al formulario del producto
+      setFormData((prev) => {
+        const nuevosIds = prev.ids_categorias.includes(nuevoId)
+          ? prev.ids_categorias
+          : [...prev.ids_categorias, nuevoId];
+        return {
+          ...prev,
+          ids_categorias: nuevosIds,
+          id_categoria: prev.id_categoria || nuevoId
+        };
+      });
+
+      setModalNuevaCategoriaAbierto(false);
+    } catch (err) {
+      console.error('Error al registrar nueva categoría:', err);
+      const dataErr = err.response?.data;
+      const msg = typeof dataErr === 'string'
+        ? dataErr
+        : dataErr?.error || dataErr?.detail || dataErr?.nombre?.[0] || 'Error al guardar la nueva categoría.';
+      setErrorNuevaCategoria(msg);
+    } finally {
+      setGuardandoNuevaCategoria(false);
+    }
+  };
+
+  // Abrir sub-modal para crear un nuevo modelo vinculado a la marca seleccionada
+  const abrirModalNuevoModelo = () => {
+    if (!formData.id_marca) {
+      setErrorMessage('Por favor seleccione una Marca Comercial primero para vincular el nuevo modelo.');
+      return;
+    }
+    setNuevoModeloNombre('');
+    setErrorNuevoModelo('');
+    // Usar el tipo de dispositivo ya seleccionado en el formulario, o el primero disponible
+    const tipoDefecto = formData.id_tipo_dispositivo || (tiposDispositivo.length > 0 ? String(tiposDispositivo[0].id_tipo_dispositivo) : '');
+    setNuevoModeloTipo(tipoDefecto);
+    setModalNuevoModeloAbierto(true);
+  };
+
+  // Guardar nuevo modelo en la BD y asociarlo de inmediato al producto
+  const handleCrearNuevoModelo = async (e) => {
+    if (e) e.preventDefault();
+    if (!nuevoModeloNombre.trim()) {
+      setErrorNuevoModelo('El nombre del modelo es obligatorio.');
+      return;
+    }
+    if (!nuevoModeloTipo) {
+      setErrorNuevoModelo('Debe seleccionar un tipo de dispositivo.');
+      return;
+    }
+
+    setGuardandoNuevoModelo(true);
+    setErrorNuevoModelo('');
+
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/catalog/modelos/`,
+        {
+          nombre: nuevoModeloNombre.trim(),
+          id_marca: Number(formData.id_marca),
+          id_tipo_dispositivo: Number(nuevoModeloTipo)
+        },
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      const modeloCreado = res.data?.modelo || res.data;
+      const nuevoIdModelo = String(modeloCreado.id_modelo);
+
+      // Actualizar listado de modelos locales
+      setModelos((prev) => {
+        const existe = prev.some((m) => String(m.id_modelo) === nuevoIdModelo);
+        if (existe) {
+          return prev.map((m) => (String(m.id_modelo) === nuevoIdModelo ? { ...m, ...modeloCreado, estado_activo: true } : m));
+        }
+        return [...prev, modeloCreado];
+      });
+
+      // Vincular de inmediato al formulario del producto y sincronizar tipo de dispositivo si está vacío
+      setFormData((prev) => ({
+        ...prev,
+        id_modelo: nuevoIdModelo,
+        id_tipo_dispositivo: prev.id_tipo_dispositivo || String(modeloCreado.id_tipo_dispositivo || nuevoModeloTipo)
+      }));
+
+      setModalNuevoModeloAbierto(false);
+    } catch (err) {
+      console.error('Error al registrar nuevo modelo:', err);
+      const dataErr = err.response?.data;
+      const msg = typeof dataErr === 'string'
+        ? dataErr
+        : dataErr?.error || dataErr?.detail || dataErr?.nombre?.[0] || dataErr?.id_marca?.[0] || dataErr?.id_tipo_dispositivo?.[0] || 'Error al guardar el nuevo modelo.';
+      setErrorNuevoModelo(msg);
+    } finally {
+      setGuardandoNuevoModelo(false);
+    }
+  };
+
+  // Manejar selección de modelo en el select con detección de '+ Agregar nuevo'
+  const handleModeloChange = (e) => {
+    const val = e.target.value;
+    if (val === '__crear_nuevo__') {
+      abrirModalNuevoModelo();
+      return;
+    }
+    const modeloSeleccionado = modelos.find((m) => String(m.id_modelo) === String(val));
+    setFormData((prev) => ({
+      ...prev,
+      id_modelo: val,
+      id_tipo_dispositivo: (!prev.id_tipo_dispositivo && modeloSeleccionado?.id_tipo_dispositivo)
+        ? String(modeloSeleccionado.id_tipo_dispositivo)
+        : prev.id_tipo_dispositivo
     }));
   };
 
@@ -238,9 +433,10 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
   const tieneProposito = formData.apto_venta || formData.apto_reparacion || formData.consumible;
 
   // Validaciones por pasos
+  const tieneCategoria = (formData.ids_categorias && formData.ids_categorias.length > 0) || Boolean(formData.id_categoria);
   const paso1Valido =
     formData.nombre.trim() !== '' &&
-    formData.id_categoria !== '' &&
+    tieneCategoria &&
     formData.precio !== '' &&
     Number(formData.precio) >= 0;
 
@@ -297,9 +493,14 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
       const imagenesLimpias = (formData.imagenes || []).map((u) => u.trim()).filter(Boolean);
       const imagenPrincipalLimpia = formData.imagen_principal.trim() || (imagenesLimpias.length > 0 ? imagenesLimpias[0] : null);
 
+      const listaIdsCategorias = (formData.ids_categorias && formData.ids_categorias.length > 0)
+        ? formData.ids_categorias.map(Number)
+        : formData.id_categoria ? [Number(formData.id_categoria)] : [];
+
       const payload = {
         nombre: formData.nombre.trim(),
-        id_categoria: Number(formData.id_categoria),
+        id_categoria: listaIdsCategorias[0] || null,
+        ids_categorias: listaIdsCategorias,
         id_marca: formData.id_marca ? Number(formData.id_marca) : null,
         id_modelo: formData.id_modelo ? Number(formData.id_modelo) : null,
         id_tipo_dispositivo: formData.id_tipo_dispositivo ? Number(formData.id_tipo_dispositivo) : null,
@@ -512,25 +713,98 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                       />
                     </div>
 
-                    {/* Categoría */}
-                    <div className="space-y-1.5">
-                      <label htmlFor="id-categoria-producto" className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                        Categoría <span className="text-cyan-400">*</span>
-                      </label>
+                    {/* Categorías (Soporte Múltiple N a M) */}
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                          Categorías Asociadas <span className="text-cyan-400">*</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-cyan-400 font-mono">
+                            {formData.ids_categorias.length} seleccionada{formData.ids_categorias.length !== 1 ? 's' : ''}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={abrirModalNuevaCategoria}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                            title="Crear una nueva categoría de producto al vuelo"
+                          >
+                            <span>+</span>
+                            <span>Nueva Categoría</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Chips / Badges de Categorías Seleccionadas */}
+                      <div className="flex flex-wrap gap-1.5 min-h-[42px] p-2 rounded-xl bg-[#0F172A] border border-slate-700">
+                        {formData.ids_categorias.length === 0 ? (
+                          <span className="text-xs text-slate-500 italic py-1 px-1">
+                            Selecciona una o más categorías abajo...
+                          </span>
+                        ) : (
+                          formData.ids_categorias.map((idCat) => {
+                            const catObj = categorias.find((c) => String(c.id_categoria) === String(idCat));
+                            return (
+                              <span
+                                key={idCat}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-gradient-to-r from-purple-500/20 to-cyan-500/10 text-purple-300 border border-purple-500/40 shadow-sm"
+                              >
+                                <span>{catObj ? catObj.nombre : `Cat #${idCat}`}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFormData((prev) => {
+                                      const nuevos = prev.ids_categorias.filter((c) => String(c) !== String(idCat));
+                                      return {
+                                        ...prev,
+                                        ids_categorias: nuevos,
+                                        id_categoria: nuevos[0] || ''
+                                      };
+                                    });
+                                  }}
+                                  className="text-purple-400 hover:text-white rounded-full p-0.5 hover:bg-purple-500/30 transition-colors ml-0.5"
+                                  title="Quitar categoría"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Dropdown para Añadir Categorías Adicionales */}
                       <select
-                        id="id-categoria-producto"
-                        name="id_categoria"
-                        value={formData.id_categoria}
-                        onChange={handleChange}
-                        required
+                        value=""
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          if (val === '__crear_nueva_categoria__') {
+                            abrirModalNuevaCategoria();
+                            return;
+                          }
+                          if (!formData.ids_categorias.includes(val)) {
+                            setFormData((prev) => {
+                              const nuevos = [...prev.ids_categorias, val];
+                              return {
+                                ...prev,
+                                ids_categorias: nuevos,
+                                id_categoria: nuevos[0] || ''
+                              };
+                            });
+                          }
+                        }}
                         disabled={cargandoCategorias}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
                       >
-                        {categorias.map((cat) => (
-                          <option key={cat.id_categoria} value={cat.id_categoria}>
-                            {cat.nombre}
-                          </option>
-                        ))}
+                        <option value="">+ Asignar otra categoría (ej. Pantallas, Periféricos, Gamer...)</option>
+                        {categorias
+                          .filter((cat) => !formData.ids_categorias.includes(String(cat.id_categoria)))
+                          .map((cat) => (
+                            <option key={cat.id_categoria} value={cat.id_categoria}>
+                              {cat.nombre}
+                            </option>
+                          ))}
                       </select>
                     </div>
 
@@ -539,17 +813,17 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                       <label htmlFor="precio-producto" className="text-xs font-semibold text-slate-300 flex items-center gap-1">
                         Precio de Venta ($ ARS) <span className="text-cyan-400">*</span>
                       </label>
-                      <input
+                      <CyberNumberInput
                         id="precio-producto"
-                        type="number"
+                        name="precio"
                         step="0.01"
                         min="0"
-                        name="precio"
+                        prefix="$"
                         value={formData.precio}
                         onChange={handleChange}
                         placeholder="0.00"
                         required
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-cyan-300 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
+                        inputClassName="!text-cyan-300 font-semibold"
                       />
                     </div>
 
@@ -577,17 +851,36 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
 
                     {/* Modelo Compatible */}
                     <div className="space-y-1.5">
-                      <label htmlFor="id-modelo-producto" className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                        <span>Modelo Compatible</span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {cargandoModelos ? 'Cargando...' : 'Opcional'}
-                        </span>
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label htmlFor="id-modelo-producto" className="text-xs font-semibold text-slate-300">
+                          Modelo Compatible
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={abrirModalNuevoModelo}
+                            className={`text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors ${
+                              formData.id_marca
+                                ? 'text-cyan-400 hover:text-cyan-300 hover:underline'
+                                : 'text-slate-500 hover:text-cyan-400'
+                            }`}
+                            title={formData.id_marca ? 'Registrar y vincular nuevo modelo para esta marca' : 'Seleccione primero una marca comercial'}
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span>Nuevo Modelo</span>
+                          </button>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {cargandoModelos ? 'Cargando...' : 'Opcional'}
+                          </span>
+                        </div>
+                      </div>
                       <select
                         id="id-modelo-producto"
                         name="id_modelo"
                         value={formData.id_modelo}
-                        onChange={handleChange}
+                        onChange={handleModeloChange}
                         disabled={!formData.id_marca || cargandoModelos}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer disabled:opacity-50"
                       >
@@ -667,15 +960,14 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                         <label htmlFor="stock-inicial-producto" className="text-xs font-medium text-slate-300">
                           Stock Inicial
                         </label>
-                        <input
+                        <CyberNumberInput
                           id="stock-inicial-producto"
-                          type="number"
-                          min="0"
                           name="stock_inicial"
+                          min="0"
+                          step="1"
                           value={formData.stock_inicial}
                           onChange={handleChange}
                           required
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
                         />
                         <p className="text-[10px] text-slate-400">Cantidad física disponible al dar de alta el producto.</p>
                       </div>
@@ -685,15 +977,14 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                         <label htmlFor="stock-minimo-producto" className="text-xs font-medium text-slate-300">
                           Stock Mínimo (Punto de Alerta)
                         </label>
-                        <input
+                        <CyberNumberInput
                           id="stock-minimo-producto"
-                          type="number"
-                          min="0"
                           name="stock_minimo"
+                          min="0"
+                          step="1"
                           value={formData.stock_minimo}
                           onChange={handleChange}
                           required
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
                         />
                         <p className="text-[10px] text-slate-400">Umbral para disparar alertas de reposición automática.</p>
                       </div>
@@ -1062,6 +1353,263 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
 
             </form>
           </motion.div>
+
+          {/* Sub-Modal para Agregar Nuevo Modelo al Vuelo */}
+          <AnimatePresence>
+            {modalNuevoModeloAbierto && (
+              <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-3 sm:p-4">
+                {/* Backdrop oscuro con desenfoque */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => !guardandoNuevoModelo && setModalNuevoModeloAbierto(false)}
+                  className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm"
+                />
+
+                {/* Contenedor del Sub-Modal */}
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="relative w-full max-w-md bg-[#1E293B] border border-cyan-500/40 rounded-2xl shadow-2xl shadow-cyan-950/60 p-6 z-10 space-y-4"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white tracking-tight">Agregar Nuevo Modelo</h3>
+                        <p className="text-[11px] text-slate-400">Vincular a la marca seleccionada</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={guardandoNuevoModelo}
+                      onClick={() => setModalNuevoModeloAbierto(false)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Marca Vinculada (Badge informativo) */}
+                  <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between text-xs">
+                    <span className="text-slate-400">Marca vinculada:</span>
+                    <span className="font-semibold text-cyan-300 px-2.5 py-0.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
+                      {marcas.find((m) => String(m.id_marca) === String(formData.id_marca))?.nombre || 'Marca'}
+                    </span>
+                  </div>
+
+                  {/* Alerta de Error en Sub-Modal */}
+                  <AnimatePresence>
+                    {errorNuevoModelo && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>{errorNuevoModelo}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <form onSubmit={handleCrearNuevoModelo} className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        Nombre del Modelo <span className="text-cyan-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={nuevoModeloNombre}
+                        onChange={(e) => setNuevoModeloNombre(e.target.value)}
+                        placeholder="Ej. Galaxy S24 Ultra, iPhone 16 Pro..."
+                        autoFocus
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        Tipo de Dispositivo <span className="text-cyan-400">*</span>
+                      </label>
+                      <select
+                        value={nuevoModeloTipo}
+                        onChange={(e) => setNuevoModeloTipo(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
+                      >
+                        <option value="">Seleccione tipo de dispositivo...</option>
+                        {tiposDispositivo.map((t) => (
+                          <option key={t.id_tipo_dispositivo} value={t.id_tipo_dispositivo}>
+                            {t.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-700/60">
+                      <button
+                        type="button"
+                        disabled={guardandoNuevoModelo}
+                        onClick={() => setModalNuevoModeloAbierto(false)}
+                        className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={guardandoNuevoModelo || !nuevoModeloNombre.trim()}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 text-slate-950 font-bold text-xs hover:from-cyan-400 hover:to-violet-500 transition-all shadow-md shadow-cyan-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                      >
+                        {guardandoNuevoModelo ? (
+                          <>
+                            <svg className="animate-spin w-3.5 h-3.5 text-slate-950" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                            <span>Guardando...</span>
+                          </>
+                        ) : (
+                          <span>Crear y Vincular</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* Sub-Modal para Agregar Nueva Categoría al Vuelo */}
+          <AnimatePresence>
+            {modalNuevaCategoriaAbierto && (
+              <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-3 sm:p-4">
+                {/* Backdrop oscuro con desenfoque */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => !guardandoNuevaCategoria && setModalNuevaCategoriaAbierto(false)}
+                  className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm"
+                />
+
+                {/* Contenedor del Sub-Modal */}
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="relative w-full max-w-md bg-[#1E293B] border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-950/60 p-6 z-10 space-y-4"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 font-bold">
+                        📁
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white tracking-tight">Nueva Categoría de Producto</h3>
+                        <p className="text-[11px] text-slate-400">Crear y asignar al producto actual</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={guardandoNuevaCategoria}
+                      onClick={() => setModalNuevaCategoriaAbierto(false)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Alerta de Error en Sub-Modal */}
+                  <AnimatePresence>
+                    {errorNuevaCategoria && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>{errorNuevaCategoria}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <form onSubmit={handleCrearNuevaCategoria} className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        Nombre de la Categoría <span className="text-cyan-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={nuevaCategoriaNombre}
+                        onChange={(e) => setNuevaCategoriaNombre(e.target.value)}
+                        placeholder="Ej. Pantallas, Periféricos, Baterías, Gamer..."
+                        autoFocus
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">
+                        Descripción (Opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={nuevaCategoriaDescripcion}
+                        onChange={(e) => setNuevaCategoriaDescripcion(e.target.value)}
+                        placeholder="Breve descripción o uso de la categoría..."
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-700/60">
+                      <button
+                        type="button"
+                        disabled={guardandoNuevaCategoria}
+                        onClick={() => setModalNuevaCategoriaAbierto(false)}
+                        className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={guardandoNuevaCategoria || !nuevaCategoriaNombre.trim()}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-cyan-500 text-slate-950 font-bold text-xs hover:from-purple-400 hover:to-cyan-400 transition-all shadow-md shadow-purple-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                      >
+                        {guardandoNuevaCategoria ? (
+                          <>
+                            <svg className="animate-spin w-3.5 h-3.5 text-slate-950" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                            <span>Guardando...</span>
+                          </>
+                        ) : (
+                          <span>Crear y Asignar</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
       )}
     </AnimatePresence>

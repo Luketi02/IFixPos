@@ -12,12 +12,14 @@ from users_app.apis import (
     SubirFotoPerfilApi,
     FiltrarUsuariosApi,
     CompletarOnboardingApi,
-    VerificarCorreoApi
+    VerificarCorreoApi,
+    CambiarSesionDevApi
 )
 
 urlpatterns = [
     path('login/', LoginApi.as_view(), name='api_login'),
     path('login/google/', GoogleLoginApi.as_view(), name='api_login_google'),
+    path('cambiar-sesion/', CambiarSesionDevApi.as_view(), name='api_cambiar_sesion'),
     path('logout/', LogoutApi.as_view(), name='api_logout'),
     path('registro/publico/', RegistroPublicoApi.as_view(), name='api_registro_publico'),
     path('verificar-correo/', VerificarCorreoApi.as_view(), name='api_verificar_correo'),

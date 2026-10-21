@@ -92,7 +92,12 @@ def filtrar_stock_inventario(
         Value(0)
     )
 
-    qs = Producto.objects.select_related('id_categoria', 'id_marca', 'id_modelo').annotate(
+    qs = Producto.objects.select_related(
+        'id_categoria',
+        'id_modelo',
+        'id_modelo__id_marca',
+        'id_modelo__id_tipo_dispositivo'
+    ).annotate(
         id_stock=F('stock__id_stock'),
         stock_minimo=Coalesce(F('stock__stock_minimo'), Value(0)),
         cantidad_actual=total_ingresos - total_egresos
@@ -106,9 +111,9 @@ def filtrar_stock_inventario(
             filtro_texto |= Q(id_producto=int(termino))
         qs = qs.filter(filtro_texto)
 
-    # 4. Filtro por Categoría taxonómica
+    # 4. Filtro por Categoría taxonómica (Soporta N a M)
     if id_categoria is not None:
-        qs = qs.filter(id_categoria_id=id_categoria)
+        qs = qs.filter(Q(id_categoria_id=id_categoria) | Q(categorias_detalle__id_categoria_id=id_categoria)).distinct()
 
     # 5. Filtro por Proveedor asociado (vía cotizaciones u órdenes de compra en purchases_app)
     if id_proveedor is not None and str(id_proveedor).strip():

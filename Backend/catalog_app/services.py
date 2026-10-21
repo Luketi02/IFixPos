@@ -234,7 +234,10 @@ def registrar_producto(
     with transaction.atomic():
         # 1. Separar datos propios de Producto de los del Stock inicial
         nombre = datos_validados['nombre']
-        categoria = datos_validados['categoria']
+        categoria = datos_validados.get('categoria')
+        if not categoria and datos_validados.get('id_categoria'):
+            from catalog_app.models import CategoriaProducto
+            categoria = CategoriaProducto.objects.get(id_categoria=datos_validados['id_categoria'])
         descripcion = datos_validados.get('descripcion') or ''
         precio_venta = datos_validados['precio_venta']
         apto_venta = datos_validados.get('apto_venta', False)
@@ -277,13 +280,23 @@ def registrar_producto(
             apto_consumible=apto_consumible,
             modulo_automatico=modulo_automatico,
             id_categoria=categoria,
-            id_marca=marca,
             id_modelo=modelo,
-            id_tipo_dispositivo=tipo_disp,
             imagen_principal=imagen_principal or None
         )
 
-        # 2.b Guardar galería de imágenes complementarias
+        # 2.b Guardar relaciones en DetalleCategoriaProducto (N a M)
+        from catalog_app.models import DetalleCategoriaProducto
+        categorias_a_vincular = datos_validados.get('categorias')
+        if not categorias_a_vincular and categoria:
+            categorias_a_vincular = [categoria]
+
+        for cat_obj in (categorias_a_vincular or []):
+            DetalleCategoriaProducto.objects.get_or_create(
+                id_producto=producto,
+                id_categoria=cat_obj
+            )
+
+        # 2.c Guardar galería de imágenes complementarias
         from catalog_app.models import ImagenProducto
         urls_galeria = [str(u).strip() for u in imagenes if str(u).strip()]
         if imagen_principal and imagen_principal not in urls_galeria:
@@ -336,6 +349,133 @@ def registrar_producto(
         producto.stock_minimo = stock_minimo
 
         return producto
+
+
+@transaction.atomic
+def modificar_producto(
+    *,
+    usuario_admin: Any,
+    id_producto: int,
+    datos_validados: dict
+) -> Producto:
+    """
+    CU-68: Modificar Producto.
+    Permite al actor (Administrador) actualizar los atributos descriptivos, comerciales,
+    marcas/modelos, imágenes y banderas de comportamiento operativo de un producto existente,
+    así como el umbral de stock mínimo en el registro de stock asociado.
+    Registra el evento de auditoría en LogSistema.
+    """
+    from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
+    from core_app.models import LogSistema
+    from inventory_app.models import Stock
+    from catalog_app.models import Producto, ImagenProducto
+
+    # 1. Verificación de Seguridad Horizontal / Rol
+    rol = getattr(usuario_admin, 'id_rol', None) or getattr(usuario_admin, 'rol', None)
+    codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+    if codigo_rol != 'ADMIN':
+        raise PermissionDenied("Se requiere rol de Administrador para modificar productos.")
+
+    # 2. Localizar producto existente
+    try:
+        producto = Producto.objects.select_for_update().get(id_producto=id_producto)
+    except Producto.DoesNotExist:
+        raise ObjectDoesNotExist(f"No existe el producto con ID {id_producto}.")
+
+    # 3. Asignación de atributos principales
+    categoria = datos_validados.get('categoria')
+    marca = datos_validados.get('marca')
+    modelo = datos_validados.get('modelo')
+    tipo_disp = datos_validados.get('tipo_dispositivo')
+    if not tipo_disp and modelo and modelo.id_tipo_dispositivo:
+        tipo_disp = modelo.id_tipo_dispositivo
+
+    producto.nombre = datos_validados['nombre'].strip()
+    producto.descripcion = (datos_validados.get('descripcion') or '').strip()
+    producto.precio_venta = datos_validados['precio_venta']
+    if 'estado' in datos_validados:
+        producto.estado = bool(datos_validados['estado'])
+    producto.apto_venta = bool(datos_validados.get('apto_venta', False))
+    producto.apto_reparacion = bool(datos_validados.get('apto_reparacion', False))
+    producto.apto_consumible = bool(datos_validados.get('apto_consumible', False))
+    producto.modulo_automatico = bool(datos_validados.get('modulo_automatico', False))
+
+    if categoria:
+        producto.id_categoria = categoria
+    producto.id_modelo = modelo
+
+    # Portada e Imágenes
+    imagen_principal = (datos_validados.get('imagen_principal') or '').strip()
+    imagenes = datos_validados.get('imagenes') or []
+    urls_galeria = [str(u).strip() for u in imagenes if str(u).strip()]
+
+    if not imagen_principal and urls_galeria:
+        imagen_principal = urls_galeria[0]
+    producto.imagen_principal = imagen_principal or None
+
+    producto.save()
+
+    # 3.b Sincronizar categorías en DetalleCategoriaProducto (N a M)
+    categorias_a_vincular = datos_validados.get('categorias')
+    if not categorias_a_vincular and categoria:
+        categorias_a_vincular = [categoria]
+
+    if categorias_a_vincular is not None:
+        from catalog_app.models import DetalleCategoriaProducto
+        DetalleCategoriaProducto.objects.filter(id_producto=producto).exclude(id_categoria__in=categorias_a_vincular).delete()
+        for cat_obj in categorias_a_vincular:
+            DetalleCategoriaProducto.objects.get_or_create(
+                id_producto=producto,
+                id_categoria=cat_obj
+            )
+
+    # 4. Actualizar galería en ImagenProducto si se especificaron imágenes o portada
+    if 'imagenes' in datos_validados or imagen_principal:
+        if imagen_principal and imagen_principal not in urls_galeria:
+            urls_galeria.insert(0, imagen_principal)
+
+        ImagenProducto.objects.filter(id_producto=producto).delete()
+        for idx, url_img in enumerate(urls_galeria):
+            ImagenProducto.objects.create(
+                id_producto=producto,
+                url_imagen=url_img,
+                orden=idx
+            )
+
+    # 5. Actualizar stock mínimo si se provee
+    stock_minimo = datos_validados.get('stock_minimo')
+    if stock_minimo is not None:
+        stock = Stock.objects.filter(id_producto=producto).first()
+        if stock:
+            stock.stock_minimo = int(stock_minimo)
+            stock.save(update_fields=['stock_minimo'])
+        else:
+            Stock.objects.create(
+                id_producto=producto,
+                stock_minimo=int(stock_minimo)
+            )
+
+    # 6. Auditoría inmutable en LogSistema
+    email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Modificar Producto (CU-68)",
+        detalle=(
+            f"Modificación del producto '{producto.nombre}' (ID: {producto.id_producto}) por {email_admin}. "
+            f"Categoría: {categoria.nombre if categoria else producto.id_categoria.nombre}, "
+            f"Precio: ${producto.precio_venta}, Stock Mínimo: {stock_minimo}."
+        )[:1000],
+        tipo="AUDITORIA_CATALOGO",
+        modulo_origen="catalog_app",
+        tabla_afectada="producto",
+        id_registro_afectado=str(producto.id_producto),
+        id_usuario=usuario_admin
+    )
+
+    # Propiedades auxiliares para formateo de salida
+    producto.stock_minimo_calculado = stock_minimo
+
+    return producto
 
 
 @transaction.atomic

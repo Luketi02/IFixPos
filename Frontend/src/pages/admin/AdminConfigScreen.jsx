@@ -7,13 +7,15 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 import AddressManagementModal from '../../components/geo/AddressManagementModal';
+import CyberNumberInput from '../../components/common/CyberNumberInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Catálogo de categorías para pestañas de navegación rápida
 const CATEGORIAS_CONFIG = [
-  { id: 'all', label: 'Todas las Categorías', badge: '41' },
+  { id: 'all', label: 'Todas las Categorías', badge: '43' },
   { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '8' },
+  { id: 'taller', label: 'Taller & Servicio Técnico', badge: '2' },
   { id: 'fidelizacion', label: 'Fidelización & Logística', badge: '8' },
   { id: 'institucional', label: 'Institucional (Master Data)', badge: '12' },
   { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '8' },
@@ -24,7 +26,7 @@ export default function AdminConfigScreen() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
-  // Estado con los 41 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
+  // Estado con los 43 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
   const [formData, setFormData] = useState({
     // 🛡️ Seguridad
     tiempoSesionInactiva: '168',
@@ -81,7 +83,11 @@ export default function AdminConfigScreen() {
     limitePromocionesMensual: '15',
     porcentajeDescuentoMaximo: '5.0',
     periodoRefrigerioCliente: '7',
-    vigenciaBeneficioDefecto: '72.0'
+    vigenciaBeneficioDefecto: '72.0',
+
+    // 🔧 Taller y Servicio Técnico
+    costoManoDeObra: '30000.0',
+    permitirCostoManoDeObraPropio: 'False'
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -99,6 +105,7 @@ export default function AdminConfigScreen() {
 
   // Estados para subida y reemplazo de Logo Institucional
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isDraggingLogo, setIsDraggingLogo] = useState(false);
   const fileInputRef = useRef(null);
 
   // 1. Cargar configuraciones reales desde PostgreSQL al montar
@@ -183,9 +190,8 @@ export default function AdminConfigScreen() {
     setSuccessMsg('Dirección de la sede actualizada y vinculada exitosamente.');
   };
 
-  // Manejador para subir o reemplazar el archivo del logo de la empresa
-  const handleUploadLogo = async (e) => {
-    const file = e.target.files?.[0];
+  // Función común para validar y subir el archivo del logo (click o drag & drop)
+  const handleProcessLogoFile = async (file) => {
     if (!file) return;
 
     const validExtensions = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
@@ -223,6 +229,12 @@ export default function AdminConfigScreen() {
       setIsUploadingLogo(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  // Manejador para subir o reemplazar el archivo del logo de la empresa desde input
+  const handleUploadLogo = (e) => {
+    const file = e.target.files?.[0];
+    if (file) handleProcessLogoFile(file);
   };
 
   // Temporizador para desvanecer errores a los 6 segundos (Regla de UX)
@@ -781,12 +793,10 @@ export default function AdminConfigScreen() {
                       <label className="block text-xs font-semibold text-slate-200">
                         Frecuencia Generación OC (Días)
                       </label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="1"
                         value={formData.frecuenciaGeneracionOC_dias}
                         onChange={(e) => handleInputChange('frecuenciaGeneracionOC_dias', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                       <p className="text-[10px] text-slate-400">Días para agrupar faltantes antes de enviar la OC.</p>
                     </div>
@@ -796,18 +806,86 @@ export default function AdminConfigScreen() {
                       <label className="block text-xs font-semibold text-slate-200">
                         Días Espera Cotizaciones
                       </label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="1"
                         value={formData.diasEsperaCotizacion}
                         onChange={(e) => handleInputChange('diasEsperaCotizacion', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                       <p className="text-[10px] text-slate-400">Plazo hábil a proveedores para cargar presupuestos.</p>
                     </div>
                   </div>
                 </div>
 
+              </div>
+            )}
+
+            {/* ============================================================ */}
+            {/* CATEGORÍA: TALLER & SERVICIO TÉCNICO                         */}
+            {/* ============================================================ */}
+            {isSectionVisible('taller') && (
+              <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-700/60 gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
+                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                        Taller & Servicio Técnico
+                      </h2>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Parámetros operativos para emisión de presupuestos, fijación de tarifas de mano de obra y permisos del técnico.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* costoManoDeObra */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-slate-200">
+                      Costo de Mano de Obra Base ($ ARS)
+                    </label>
+                    <CyberNumberInput
+                      id="costoManoDeObra"
+                      name="costoManoDeObra"
+                      min="0"
+                      step="0.50"
+                      prefix="$"
+                      value={formData.costoManoDeObra}
+                      onChange={(e) => handleInputChange('costoManoDeObra', e.target.value)}
+                      placeholder="30000.0"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Importe monetario base predeterminado cargado automáticamente en los diagnósticos técnicos de taller.
+                    </p>
+                  </div>
+
+                  {/* permitirCostoManoDeObraPropio */}
+                  <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
+                    <div className="pr-4">
+                      <span className="text-sm font-bold text-white block">
+                        Permitir Costo de Mano de Obra Propio
+                      </span>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Si está activado, el técnico podrá modificar manualmente el costo de mano de obra al cargar un diagnóstico. Si está desactivado, el valor base quedará fijado y bloqueado para su edición.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleBoolean('permitirCostoManoDeObraPropio')}
+                      className={`w-12 h-6 rounded-full transition-colors relative p-0.5 border shrink-0 ${
+                        isBooleanActive('permitirCostoManoDeObraPropio')
+                          ? 'bg-[#06B6D4] border-cyan-400'
+                          : 'bg-slate-800 border-slate-700'
+                      }`}
+                    >
+                      <div
+                        className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                          isBooleanActive('permitirCostoManoDeObraPropio') ? 'translate-x-6' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -871,12 +949,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Límite Promociones Mensuales
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="0"
                       value={formData.limitePromocionesMensual}
                       onChange={(e) => handleInputChange('limitePromocionesMensual', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Cantidad tope de beneficios por mes calendario.</p>
                   </div>
@@ -886,12 +962,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Período de Refrigerio (Días)
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="0"
                       value={formData.periodoRefrigerioCliente}
                       onChange={(e) => handleInputChange('periodoRefrigerioCliente', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Tiempo de espera antes de una nueva promoción.</p>
                   </div>
@@ -901,12 +975,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Vigencia Beneficio (Horas)
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="1"
                       value={formData.vigenciaBeneficioDefecto}
                       onChange={(e) => handleInputChange('vigenciaBeneficioDefecto', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Horas de validez antes de la caducidad del cupón.</p>
                   </div>
@@ -920,34 +992,34 @@ export default function AdminConfigScreen() {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300">Envío Local ($)</label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="0"
+                        prefix="$"
+                        step="50"
                         value={formData.envioLocal}
                         onChange={(e) => handleInputChange('envioLocal', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                       <p className="text-[10px] text-slate-400">Entrega dentro de la ciudad sede.</p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300">Envío Regional ($)</label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="0"
+                        prefix="$"
+                        step="50"
                         value={formData.envioRegional}
                         onChange={(e) => handleInputChange('envioRegional', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                       <p className="text-[10px] text-slate-400">Fuera de la ciudad, en la provincia.</p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300">Envío Nacional ($)</label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="0"
+                        prefix="$"
+                        step="50"
                         value={formData.envioNacional}
                         onChange={(e) => handleInputChange('envioNacional', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                       <p className="text-[10px] text-slate-400">Resto del territorio nacional.</p>
                     </div>
@@ -1043,8 +1115,28 @@ export default function AdminConfigScreen() {
                     />
                   </div>
 
-                  {/* Panel de Logo e Imagen Oficial de la Empresa */}
-                  <div className="col-span-full bg-slate-900/60 border border-slate-700/80 rounded-xl p-5 space-y-4">
+                  {/* Panel de Logo e Imagen Oficial de la Empresa con Drag & Drop */}
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDraggingLogo(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setIsDraggingLogo(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDraggingLogo(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) handleProcessLogoFile(file);
+                    }}
+                    className={`col-span-full rounded-xl p-5 space-y-4 transition-all duration-200 ${
+                      isDraggingLogo
+                        ? 'bg-cyan-500/10 border-2 border-dashed border-[#06B6D4] shadow-[0_0_20px_rgba(6,182,212,0.3)]'
+                        : 'bg-slate-900/60 border border-slate-700/80'
+                    }`}
+                  >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
                       <div>
                         <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
@@ -1353,12 +1445,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Sesión Inactiva (Horas)
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="1"
                       value={formData.tiempoSesionInactiva}
                       onChange={(e) => handleInputChange('tiempoSesionInactiva', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Horas antes de cerrar sesión forzosamente.</p>
                   </div>
@@ -1368,12 +1458,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Max. Intentos Login
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="1"
                       value={formData.maxIntentosLogin}
                       onChange={(e) => handleInputChange('maxIntentosLogin', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Intentos fallidos antes de bloqueo preventivo.</p>
                   </div>
@@ -1383,12 +1471,10 @@ export default function AdminConfigScreen() {
                     <label className="block text-xs font-semibold text-slate-200">
                       Tamaño Máx. Archivos (MB)
                     </label>
-                    <input
-                      type="number"
+                    <CyberNumberInput
                       min="1"
                       value={formData.tamanoMaxArchivoMB}
                       onChange={(e) => handleInputChange('tamanoMaxArchivoMB', e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                     />
                     <p className="text-[10px] text-slate-400">Límite para fotos de perfil o diagnósticos.</p>
                   </div>
@@ -1439,12 +1525,10 @@ export default function AdminConfigScreen() {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300">Frecuencia (Horas)</label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="24"
                         value={formData.backupFrecuenciaHoras}
                         onChange={(e) => handleInputChange('backupFrecuenciaHoras', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                     </div>
 
@@ -1461,13 +1545,11 @@ export default function AdminConfigScreen() {
 
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300">Retención de Copias</label>
-                      <input
-                        type="number"
+                      <CyberNumberInput
                         min="1"
                         max="30"
                         value={formData.backupRetencionCopias}
                         onChange={(e) => handleInputChange('backupRetencionCopias', e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
                       />
                     </div>
                   </div>

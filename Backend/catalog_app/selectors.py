@@ -1,5 +1,5 @@
-from typing import Optional, Union
-from .models import Marca, ModeloDispositivo, TipoDispositivo
+from typing import Any, Optional, Union
+from .models import Marca, ModeloDispositivo, TipoDispositivo, Producto
 
 def obtener_marca_por_nombre(nombre: str) -> Optional[Marca]:
     """Obtiene una marca por nombre ignorando mayúsculas/minúsculas."""
@@ -196,10 +196,9 @@ def obtener_productos_tienda(
 
     qs = Producto.objects.filter(estado=True, apto_venta=True).select_related(
         'id_categoria',
-        'id_marca',
         'id_modelo',
-        'id_modelo__id_tipo_dispositivo',
-        'id_tipo_dispositivo'
+        'id_modelo__id_marca',
+        'id_modelo__id_tipo_dispositivo'
     ).prefetch_related('imagenes')
 
     if id_categoria:
@@ -211,9 +210,8 @@ def obtener_productos_tienda(
             qs = qs.filter(
                 Q(nombre__icontains=termino) |
                 Q(descripcion__icontains=termino) |
-                Q(id_marca__nombre__icontains=termino) |
                 Q(id_modelo__nombre__icontains=termino) |
-                Q(id_tipo_dispositivo__nombre__icontains=termino) |
+                Q(id_modelo__id_marca__nombre__icontains=termino) |
                 Q(id_modelo__id_tipo_dispositivo__nombre__icontains=termino)
             )
 
@@ -227,13 +225,10 @@ def obtener_productos_tienda(
     for prod in qs:
         cant_stock = obtener_stock_actual_producto(prod.id_producto)
 
-        # Resolver tipo de dispositivo (directo en producto o heredado de modelo)
+        # Resolver tipo de dispositivo heredado del modelo
         tipo_disp_nombre = ''
         id_tipo_disp = None
-        if prod.id_tipo_dispositivo:
-            tipo_disp_nombre = prod.id_tipo_dispositivo.nombre
-            id_tipo_disp = prod.id_tipo_dispositivo_id
-        elif prod.id_modelo and prod.id_modelo.id_tipo_dispositivo:
+        if prod.id_modelo and prod.id_modelo.id_tipo_dispositivo:
             tipo_disp_nombre = prod.id_modelo.id_tipo_dispositivo.nombre
             id_tipo_disp = prod.id_modelo.id_tipo_dispositivo_id
 
@@ -286,3 +281,18 @@ def obtener_productos_tienda(
         })
 
     return resultados
+
+
+def obtener_producto(id_producto: int) -> Producto:
+    """
+    CU-68: Recupera un producto específico para edición y consulta detallada.
+    Optimizado con select_related y prefetch_related.
+    Levanta Producto.DoesNotExist si no existe.
+    """
+    return Producto.objects.select_related(
+        'id_categoria',
+        'id_modelo',
+        'id_modelo__id_marca',
+        'id_modelo__id_tipo_dispositivo'
+    ).prefetch_related('imagenes').get(id_producto=id_producto)
+

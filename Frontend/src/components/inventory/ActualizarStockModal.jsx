@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import CyberNumberInput from '../common/CyberNumberInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -221,19 +222,16 @@ export default function ActualizarStockModal({ isOpen, onClose, producto, onSucc
                     </span>
                   )}
                 </label>
-                <input
+                <CyberNumberInput
                   id="cantidad-ajuste"
-                  type="number"
                   min="1"
+                  step="1"
                   value={cantidad}
                   onChange={(e) => setCantidad(e.target.value)}
                   placeholder="1"
                   required
-                  className={`w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border text-sm font-mono font-bold focus:outline-none transition-all ${
-                    egresoExcedeStock
-                      ? 'border-rose-500 text-rose-300 focus:ring-2 focus:ring-rose-500'
-                      : 'border-slate-700 text-slate-100 focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6]'
-                  }`}
+                  className={egresoExcedeStock ? '!border-rose-500' : ''}
+                  inputClassName={`font-bold ${egresoExcedeStock ? '!text-rose-300' : ''}`}
                 />
 
                 {/* Error de Validación en Tiempo Real (CU-13) */}

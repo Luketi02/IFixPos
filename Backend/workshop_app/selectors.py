@@ -1,7 +1,8 @@
+from typing import Any
 from typing import Optional
 from datetime import date
-from django.db.models import QuerySet, Q
-from django.core.exceptions import ValidationError
+from django.db.models import QuerySet, Q, Prefetch
+from django.core.exceptions import ValidationError, ObjectDoesNotExist
 from workshop_app.models import Dispositivo, Reparacion, CategoriaReparacion
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
@@ -11,6 +12,38 @@ def obtener_usuario_por_id(id_usuario: int) -> Optional[Usuario]:
 
 def obtener_modelo_por_id(id_modelo: int) -> Optional[ModeloDispositivo]:
     return ModeloDispositivo.objects.filter(pk=id_modelo).first()
+
+def obtener_dispositivo_por_id(id_dispositivo: int) -> Optional[Dispositivo]:
+    return Dispositivo.objects.select_related('id_usuario', 'id_usuario__perfilusuario', 'id_modelo').filter(pk=id_dispositivo).first()
+
+def dispositivo_tiene_reparacion_activa(id_dispositivo: int) -> bool:
+    """
+    CU-26: Busca en la tabla Reparacion si existe algún registro vinculado a este
+    dispositivo cuyo estado NO sea 'FINALIZADO', 'ENTREGADO' ni 'CANCELADO'.
+    Retorna True si hay una reparación activa bloqueando el equipo, False si está libre.
+    """
+    estados_inactivos = [
+        'FINALIZADO', 'FINALIZADA',
+        'ENTREGADO', 'ENTREGADA',
+        'CANCELADO', 'CANCELADA'
+    ]
+    return Reparacion.objects.filter(
+        id_dispositivo_id=id_dispositivo
+    ).exclude(
+        etapa__in=estados_inactivos
+    ).exclude(
+        etapa__iexact='FINALIZADO'
+    ).exclude(
+        etapa__iexact='FINALIZADA'
+    ).exclude(
+        etapa__iexact='ENTREGADO'
+    ).exclude(
+        etapa__iexact='ENTREGADA'
+    ).exclude(
+        etapa__iexact='CANCELADO'
+    ).exclude(
+        etapa__iexact='CANCELADA'
+    ).exists()
 
 
 # ==============================================================================
@@ -57,7 +90,10 @@ def filtrar_dispositivos_taller(
     fecha_ingreso_desde: date = None, 
     fecha_ingreso_hasta: date = None, 
     id_marca: int = None, 
-    id_modelo: int = None
+    id_modelo: int = None,
+    marca: str = None,
+    modelo: str = None,
+    excluir_reparaciones_activas: bool = False
 ) -> QuerySet[Dispositivo]:
     """CU-33: Filtro de dispositivos para la vista del Administrador/Técnico."""
     
@@ -68,29 +104,50 @@ def filtrar_dispositivos_taller(
     qs = Dispositivo.objects.select_related(
         'id_usuario', 
         'id_usuario__perfilusuario', 
-        'id_modelo'
-    ).prefetch_related('reparacion_set')
+        'id_modelo',
+        'id_modelo__id_marca',
+        'id_modelo__id_tipo_dispositivo'
+    ).prefetch_related(
+        Prefetch(
+            'reparacion_set',
+            queryset=Reparacion.objects.select_related(
+                'id_usuario',
+                'id_usuario__perfilusuario'
+            ).order_by('-fecha_inicio', '-id_reparacion')
+        )
+    )
     
+    if excluir_reparaciones_activas:
+        estados_cerrados = ['entregado', 'entregada', 'cancelado', 'cancelada', 'finalizada', 'finalizado']
+        ids_con_reparacion_activa = Reparacion.objects.exclude(
+            etapa__in=estados_cerrados
+        ).values_list('id_dispositivo_id', flat=True)
+        qs = qs.exclude(id_dispositivo__in=ids_con_reparacion_activa)
+
     if dni_cliente:
-        qs = qs.filter(id_usuario__perfilusuario__dni=dni_cliente)
+        qs = qs.filter(id_usuario__perfilusuario__dni=str(dni_cliente).strip())
     if codigo_sec_reparacion:
-        qs = qs.filter(reparacion__codigo_sec=codigo_sec_reparacion)
+        qs = qs.filter(reparacion__codigo_sec=str(codigo_sec_reparacion).strip())
     if nro_serie:
-        qs = qs.filter(numero_serie=nro_serie)
+        qs = qs.filter(numero_serie__iexact=str(nro_serie).strip())
     if etapa_reparacion:
-        qs = qs.filter(reparacion__etapa=etapa_reparacion)
+        qs = qs.filter(reparacion__etapa__iexact=str(etapa_reparacion).strip())
     if id_tecnico_asignado is not None:
-        qs = qs.filter(reparacion__id_usuario=id_tecnico_asignado)
+        qs = qs.filter(reparacion__id_usuario_id=id_tecnico_asignado)
     if fecha_ingreso_desde:
         qs = qs.filter(reparacion__fecha_inicio__gte=fecha_ingreso_desde)
     if fecha_ingreso_hasta:
         qs = qs.filter(reparacion__fecha_inicio__lte=fecha_ingreso_hasta)
     if id_modelo is not None:
-        qs = qs.filter(id_modelo=id_modelo)
+        qs = qs.filter(id_modelo_id=id_modelo)
+    if modelo:
+        qs = qs.filter(id_modelo__nombre__iexact=str(modelo).strip())
     if id_marca is not None:
-        qs = qs.filter(id_modelo__id_marca=id_marca)
+        qs = qs.filter(id_modelo__id_marca_id=id_marca)
+    if marca:
+        qs = qs.filter(id_modelo__id_marca__nombre__iexact=str(marca).strip())
         
-    return qs.distinct()
+    return qs.distinct().order_by('-fecha_registro', '-id_dispositivo')
 
 def filtrar_mis_dispositivos(
     *, 
@@ -318,3 +375,217 @@ def obtener_categoria_reparacion(id_categoria: int) -> CategoriaReparacion:
     Levanta CategoriaReparacion.DoesNotExist (ObjectDoesNotExist) si no existe.
     """
     return CategoriaReparacion.objects.get(id_categoria=id_categoria)
+
+
+def obtener_reparacion_para_recepcion(id_reparacion: int) -> Reparacion:
+    """
+    CU-45: Selector específico para garantizar que la reparación es apta para recepción.
+    Busca la reparación. Si no existe, levanta ObjectDoesNotExist (Reparacion.DoesNotExist).
+    Regla de Negocio Crítica: Verifica que el estado actual de la reparación sea estrictamente
+    'ESPERANDO_DISPOSITIVO'. Si está en 'ESPERANDO_DIAGNOSTICO' o cualquier otro estado más avanzado,
+    levanta un ValidationError ("El dispositivo ya fue recepcionado o se encuentra en una etapa avanzada.").
+    """
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_dispositivo__id_modelo__id_tipo_dispositivo'
+        ).prefetch_related('categorias').get(id_reparacion=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise ObjectDoesNotExist(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    etapa_actual = (reparacion.etapa or '').strip().upper()
+    if etapa_actual != 'ESPERANDO_DISPOSITIVO':
+        raise ValidationError("El dispositivo ya fue recepcionado o se encuentra en una etapa avanzada.")
+
+    return reparacion
+
+
+# ==============================================================================
+# CU-58: FILTRAR REPARACIONES (CAPA DE LECTURA Y MOTOR DE BÚSQUEDA)
+# ==============================================================================
+
+def filtrar_reparaciones(
+    *,
+    usuario_ejecutor: Usuario,
+    filtros: dict
+) -> QuerySet[Reparacion]:
+    """
+    CU-58: Filtrar Reparaciones.
+    Motor de búsqueda multicriterio con Seguridad Horizontal y Vertical:
+    - Si el usuario es CLIENTE: acota estrictamente a sus propios dispositivos y descarta
+      parámetros de búsqueda reservados al personal (cliente_query, id_tecnico, codigo_seguridad).
+    - Si el usuario es ADMIN o TECNICO: permite búsqueda global y filtros por datos del cliente
+      (DNI, nombre, apellido, email, teléfono), técnico asignado y código de seguridad.
+    """
+    # 1. QuerySet base optimizado
+    qs = Reparacion.objects.select_related(
+        'id_dispositivo',
+        'id_dispositivo__id_usuario',
+        'id_dispositivo__id_usuario__perfilusuario',
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_dispositivo__id_modelo',
+        'id_dispositivo__id_modelo__id_marca',
+        'id_dispositivo__id_modelo__id_tipo_dispositivo'
+    ).prefetch_related('categorias')
+
+    # 2. Evaluación de Rol y Seguridad Innegociable
+    rol_codigo = ''
+    if hasattr(usuario_ejecutor, 'id_rol') and usuario_ejecutor.id_rol:
+        rol_codigo = (usuario_ejecutor.id_rol.codigo or '').upper()
+    elif hasattr(usuario_ejecutor, 'rol') and usuario_ejecutor.rol:
+        rol_codigo = (usuario_ejecutor.rol.codigo or '').upper()
+
+    if rol_codigo == 'CLIENTE':
+        # Cláusula de aislamiento estricto para clientes
+        qs = qs.filter(id_dispositivo__id_usuario=usuario_ejecutor)
+    elif rol_codigo in ('ADMIN', 'TECNICO'):
+        # Búsqueda multicriterio de cliente
+        cliente_query = str(filtros.get('cliente_query') or '').strip()
+        if cliente_query:
+            q_cliente = (
+                Q(id_dispositivo__id_usuario__perfilusuario__dni__icontains=cliente_query) |
+                Q(id_dispositivo__id_usuario__perfilusuario__nombre__icontains=cliente_query) |
+                Q(id_dispositivo__id_usuario__perfilusuario__apellido__icontains=cliente_query) |
+                Q(id_dispositivo__id_usuario__email__icontains=cliente_query) |
+                Q(id_dispositivo__id_usuario__perfilusuario__telefono__icontains=cliente_query)
+            )
+            qs = qs.filter(q_cliente)
+
+        # Filtro por técnico asignado
+        id_tecnico = filtros.get('id_tecnico')
+        if id_tecnico:
+            qs = qs.filter(id_usuario_id=id_tecnico)
+
+        # Filtro por código de seguridad (token de entrega)
+        codigo_seguridad = str(filtros.get('codigo_seguridad') or '').strip()
+        if codigo_seguridad:
+            qs = qs.filter(codigo_sec__iexact=codigo_seguridad)
+    else:
+        # Por seguridad preventiva, cualquier otro rol sin definir se acota a sus propios dispositivos
+        qs = qs.filter(id_dispositivo__id_usuario=usuario_ejecutor)
+
+    # 3. Filtros transversales (comunes a todos los roles)
+    id_dispositivo = filtros.get('id_dispositivo')
+    if id_dispositivo:
+        qs = qs.filter(id_dispositivo_id=id_dispositivo)
+
+    etapa = str(filtros.get('etapa') or '').strip()
+    if etapa:
+        qs = qs.filter(etapa__icontains=etapa)
+
+    id_categoria = filtros.get('id_categoria')
+    if id_categoria:
+        qs = qs.filter(categorias__id_categoria=id_categoria)
+
+    fecha_desde = filtros.get('fecha_desde')
+    fecha_hasta = filtros.get('fecha_hasta')
+    if fecha_desde and fecha_hasta:
+        if fecha_desde > fecha_hasta:
+            raise ValidationError("La fecha de inicio desde no puede ser posterior a la fecha hasta.")
+    if fecha_desde:
+        qs = qs.filter(fecha_inicio__gte=fecha_desde)
+    if fecha_hasta:
+        qs = qs.filter(fecha_inicio__lte=fecha_hasta)
+
+    return qs.distinct().order_by('-fecha_inicio', '-id_reparacion')
+
+
+# ==============================================================================
+# CU-08: CARGAR DIAGNÓSTICO TÉCNICO (VALIDACIÓN DE ESTADO OPERATIVO)
+# ==============================================================================
+
+def obtener_reparacion_para_diagnostico(id_reparacion: int) -> Reparacion:
+    """
+    CU-08: Selector específico para garantizar que la reparación es apta para recibir un diagnóstico técnico.
+    Busca la reparación. Si no existe, levanta ObjectDoesNotExist (Reparacion.DoesNotExist).
+    Regla de Negocio Estricta: Verifica que 'etapa' sea exactamente 'EN_DIAGNOSTICO'.
+    Si está en otro estado, levanta ValidationError ("La reparación no se encuentra en la etapa de diagnóstico").
+    """
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_usuario__perfilusuario',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_usuario'
+        ).get(id_reparacion=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise ObjectDoesNotExist(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    etapa_normalizada = (
+        (reparacion.etapa or '')
+        .strip()
+        .upper()
+        .replace(' ', '_')
+        .replace('Á', 'A')
+        .replace('É', 'E')
+        .replace('Í', 'I')
+        .replace('Ó', 'O')
+        .replace('Ú', 'U')
+    )
+    if etapa_normalizada not in ('EN_DIAGNOSTICO', 'ESPERANDO_DIAGNOSTICO'):
+        raise ValidationError("La reparación no se encuentra en la etapa de diagnóstico")
+
+    return reparacion
+
+
+# ==============================================================================
+# CU-56: CONSULTAR DIAGNÓSTICO TÉCNICO (LECTURA Y SEGURIDAD HORIZONTAL)
+# ==============================================================================
+
+def obtener_diagnostico_cliente(*, usuario_cliente: Usuario, id_reparacion: int):
+    """
+    CU-56: Consultar Diagnóstico Técnico.
+    Recupera el informe técnico emitido por el especialista para el cliente autenticado.
+    Aplica Seguridad Horizontal innegociable:
+    - Verifica que la reparación pertenezca a usuario_cliente.id (control de propiedad).
+      Si no coincide, levanta PermissionDenied (CU-56 Paso 2).
+    - Valida que exista un registro de Diagnóstico asociado. Si no existe aún
+      (por ejemplo, si la reparación sigue en 'Esperando Diagnóstico'), levanta NotFound / ValidationError (CU-56 Paso 3).
+    - Optimiza queries mediante select_related y prefetch_related para evitar el problema N+1.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+    from workshop_app.models import Reparacion, Diagnostico, DetalleInsumoReparacion
+
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_usuario',
+            'id_usuario__perfilusuario'
+        ).get(pk=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise NotFound(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    # Control de propiedad horizontal innegociable (CU-56 Paso 2)
+    cliente_id = getattr(usuario_cliente, 'id_usuario', None) or getattr(usuario_cliente, 'id', None)
+    if reparacion.id_dispositivo.id_usuario_id != cliente_id:
+        raise PermissionDenied("Acceso Denegado: Esta orden de reparación no pertenece a su cuenta.")
+
+    # Validar que exista el diagnóstico asociado (CU-56 Paso 3)
+    diagnostico = Diagnostico.objects.filter(id_reparacion=reparacion).select_related(
+        'id_reparacion',
+        'id_reparacion__id_usuario',
+        'id_reparacion__id_usuario__perfilusuario',
+        'id_reparacion__id_dispositivo',
+        'id_reparacion__id_dispositivo__id_modelo',
+        'id_reparacion__id_dispositivo__id_modelo__id_marca'
+    ).prefetch_related(
+        Prefetch(
+            'id_reparacion__detalleinsumoreparacion_set',
+            queryset=DetalleInsumoReparacion.objects.select_related('id_producto')
+        )
+    ).first()
+
+    if not diagnostico:
+        raise NotFound("El equipo aún está siendo evaluado por nuestros técnicos. Le notificaremos cuando el diagnóstico esté listo.")
+
+    return diagnostico
+

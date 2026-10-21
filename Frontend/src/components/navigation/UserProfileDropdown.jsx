@@ -1,12 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import { getDashboardPath } from '../../utils/roleRoutes';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function UserProfileDropdown({ align = 'right' }) {
-  const { user, logout } = useAuth();
+  const { user, login, logout } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
+  const [cambiandoSesion, setCambiandoSesion] = useState(false);
   const dropdownRef = useRef(null);
 
   const nombreUsuario = user?.nombre || user?.email?.split('@')[0] || 'Usuario';
@@ -45,6 +50,29 @@ export default function UserProfileDropdown({ align = 'right' }) {
   const handleLogout = () => {
     setIsOpen(false);
     logout();
+  };
+
+  const handleCambiarSesion = async (rolDestino) => {
+    setCambiandoSesion(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/auth/cambiar-sesion/`, {
+        rol: rolDestino
+      });
+
+      const tokens = res.data?.tokens;
+      const usuario = res.data?.usuario;
+
+      if (tokens && usuario) {
+        login(tokens, usuario);
+        setIsOpen(false);
+        navigate(getDashboardPath(usuario.rol), { replace: true });
+      }
+    } catch (err) {
+      console.error('Error al cambiar de sesión:', err);
+      alert('No fue posible cambiar la sesión. Verifique el backend.');
+    } finally {
+      setCambiandoSesion(false);
+    }
   };
 
   return (
@@ -187,6 +215,93 @@ export default function UserProfileDropdown({ align = 'right' }) {
                   Pronto
                 </span>
               </button>
+            </div>
+
+            {/* Separador */}
+            <div className="my-1.5 border-t border-slate-700/60" />
+
+            {/* Sección de Cambio Rápido de Sesión (Dev & Testing) */}
+            <div className="p-2.5 rounded-xl bg-slate-900/90 border border-cyan-500/30 space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-bold text-cyan-300 flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  <span>Cambiar Sesión a...</span>
+                </span>
+                <span className="text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                  Prueba
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                {/* Opción Cliente */}
+                <button
+                  type="button"
+                  disabled={cambiandoSesion || user?.email === 'cliente@ifixpos.com'}
+                  onClick={() => handleCambiarSesion('CLIENTE')}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer ${
+                    user?.email === 'cliente@ifixpos.com'
+                      ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-semibold cursor-default'
+                      : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-emerald-500/40 text-slate-200 hover:text-white'
+                  }`}
+                  title="Conmutar a Cliente (cliente@ifixpos.com)"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span className="font-medium">Cliente</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400">cliente@ifixpos.com</span>
+                </button>
+
+                {/* Opción Técnico */}
+                <button
+                  type="button"
+                  disabled={cambiandoSesion || user?.email === 'tecnico@ifixpos.com'}
+                  onClick={() => handleCambiarSesion('TECNICO')}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer ${
+                    user?.email === 'tecnico@ifixpos.com'
+                      ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-semibold cursor-default'
+                      : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-amber-500/40 text-slate-200 hover:text-white'
+                  }`}
+                  title="Conmutar a Técnico (tecnico@ifixpos.com)"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
+                    <span className="font-medium">Técnico</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400">tecnico@ifixpos.com</span>
+                </button>
+
+                {/* Opción Administrador (Cuenta de Google) */}
+                <button
+                  type="button"
+                  disabled={cambiandoSesion || user?.email === 'lucas.mino1508@gmail.com'}
+                  onClick={() => handleCambiarSesion('ADMIN')}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer ${
+                    user?.email === 'lucas.mino1508@gmail.com'
+                      ? 'bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-semibold cursor-default'
+                      : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-cyan-500/40 text-slate-200 hover:text-white'
+                  }`}
+                  title="Conmutar a Administrador (Google: lucas.mino1508@gmail.com)"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                    <span className="font-medium">Administrador</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400 truncate max-w-[110px]" title="lucas.mino1508@gmail.com">
+                    Google (Admin)
+                  </span>
+                </button>
+              </div>
+
+              {cambiandoSesion && (
+                <div className="text-center py-1">
+                  <span className="text-[10px] font-mono text-cyan-400 animate-pulse">
+                    Conmutando sesión...
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Separador */}

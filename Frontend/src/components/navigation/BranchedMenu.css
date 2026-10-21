@@ -7,8 +7,8 @@
   --bm-row: 38px;
   --bm-indent: 40px;
   --bm-line-w: 1.5;
-  --bm-draw: 380ms;
-  --bm-fold: 280ms;
+  --bm-draw: 360ms;
+  --bm-fold: 300ms;
   --bm-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --bm-muted: #64748b;
 
@@ -91,13 +91,13 @@
 }
 
 .branched-menu__head[data-active] {
-  color: #8b5cf6;
+  color: var(--bm-accent, #06b6d4);
 }
 
 .branched-menu__body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows var(--bm-fold) var(--bm-ease-out);
+  transition: grid-template-rows 300ms var(--bm-ease-out);
 }
 
 .branched-menu__section[data-open] .branched-menu__body {
@@ -140,11 +140,13 @@
 
 .branched-menu__base {
   stroke: var(--bm-line);
+  stroke-opacity: 0.85;
+  filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.35));
 }
 
 .branched-menu__reach {
   stroke: var(--bm-accent);
-  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.4));
+  filter: drop-shadow(0 0 6px var(--bm-accent));
   transition: stroke-dashoffset var(--bm-draw) var(--bm-ease-out);
 }
 
@@ -176,10 +178,11 @@
 }
 
 .branched-menu__item[data-active] {
-  color: #f8fafc;
-  background: linear-gradient(90deg, rgba(139, 92, 246, 0.15), rgba(6, 182, 212, 0.05));
-  border-left: 2px solid var(--bm-accent);
+  color: var(--bm-accent, #06b6d4) !important;
+  background: linear-gradient(90deg, rgba(6, 182, 212, 0.15), rgba(139, 92, 246, 0.05));
+  border-left: 2px solid var(--bm-accent, #06b6d4);
   font-weight: 600;
+  text-shadow: 0 0 10px rgba(6, 182, 212, 0.45);
 }
 
 .branched-menu__icon {
@@ -192,7 +195,8 @@
 }
 
 .branched-menu__item[data-active] .branched-menu__icon {
-  color: var(--bm-accent);
+  color: var(--bm-accent, #06b6d4);
+  filter: drop-shadow(0 0 6px var(--bm-accent, #06b6d4));
   transform: scale(1.1);
 }
 

@@ -16,6 +16,7 @@ import UserAddressesScreen from './pages/profile/UserAddressesScreen';
 
 import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
 import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
+import TechnicianModuleScreen from './pages/dashboards/TechnicianModuleScreen';
 import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
 import AdminConfigScreen from './pages/admin/AdminConfigScreen';
 import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
@@ -70,9 +71,15 @@ function App() {
               <Route path="/cliente/dispositivos/:id_dispositivo" element={<DispositivoDetalle />} />
               <Route path="/cliente/reparaciones/:id_reparacion" element={<ReparacionDetalle />} />
 
-              {/* Vista de Técnico (/tareas-tecnico): Técnicos y Administradores */}
+              {/* Vistas y Módulos de Técnico: Técnicos y Administradores */}
               <Route element={<RoleRoute allowedRoles={['tecnico', 'admin']} />}>
                 <Route path="/tareas-tecnico" element={<TechnicianTasksScreen />} />
+                <Route path="/tecnico/dispositivos/nueva-reparacion" element={<TechnicianModuleScreen forcedModule="nueva-reparacion" />} />
+                <Route path="/tecnico/dispositivos/en-curso" element={<TechnicianModuleScreen forcedModule="en-curso" />} />
+                <Route path="/tecnico/dispositivos/finalizadas" element={<TechnicianModuleScreen forcedModule="finalizadas" />} />
+                <Route path="/tecnico/caja/registrar-compra" element={<TechnicianModuleScreen forcedModule="registrar-compra" />} />
+                <Route path="/tecnico/caja/recepcionar-dispositivo" element={<TechnicianModuleScreen forcedModule="recepcionar-dispositivo" />} />
+                <Route path="/tecnico/insumos/recepcionar-compra" element={<TechnicianModuleScreen forcedModule="recepcionar-compra" />} />
               </Route>
 
               {/* Vistas de Administrador: Exclusivo Administradores */}

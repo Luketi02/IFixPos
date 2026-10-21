@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import CyberNumberInput from '../common/CyberNumberInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -556,13 +557,13 @@ export default function DireccionModal({
                 <label className="block text-xs font-semibold text-slate-300">
                   Piso <span className="text-slate-500 font-normal">(Opcional)</span>
                 </label>
-                <input
-                  type="number"
+                <CyberNumberInput
                   value={formData.piso}
                   onChange={(e) => setFormData((prev) => ({ ...prev, piso: e.target.value }))}
                   placeholder="Ej. 2, 4"
                   disabled={isSubmitting}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-[#F8FAFC] text-sm font-mono placeholder-slate-500 transition-all focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/40 focus:shadow-[0_0_15px_rgba(139,92,246,0.25)]"
+                  min="0"
+                  step="1"
                 />
               </div>
 

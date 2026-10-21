@@ -146,8 +146,27 @@ class AgregarAlCarritoInputSerializer(serializers.Serializer):
             'invalid': 'La cantidad debe ser un entero.'
         }
     )
-
-
+class QuitarDelCarritoInputSerializer(serializers.Serializer):
+    """
+    Aduana para la remoción o decremento de artículos del carrito.
+    """
+    id_producto = serializers.IntegerField(
+        required=True,
+        error_messages={
+            'required': 'El ID del producto es obligatorio.',
+            'invalid': 'El ID del producto debe ser un entero.'
+        }
+    )
+    cantidad = serializers.IntegerField(
+        required=False,
+        default=None,
+        allow_null=True,
+        min_value=1,
+        error_messages={
+            'min_value': 'La cantidad debe ser al menos 1.',
+            'invalid': 'La cantidad debe ser un entero.'
+        }
+    )
 class CarritoItemOutputSerializer(serializers.Serializer):
     """Serializador para cada ítem en el carrito del usuario."""
     id_carrito_producto = serializers.IntegerField()

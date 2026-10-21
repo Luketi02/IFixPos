@@ -274,3 +274,64 @@ def agregar_producto_a_carrito(
         'total_articulos_carrito': total_articulos,
         'stock_disponible': stock_disponible
     }
+
+
+@transaction.atomic
+def quitar_producto_de_carrito(
+    *,
+    usuario,
+    id_producto: int,
+    cantidad: Optional[int] = None
+) -> dict:
+    """
+    Elimina o decrementa un producto del carrito activo del usuario.
+    Si 'cantidad' es None o mayor/igual a la cantidad actual, se elimina el registro por completo.
+    """
+    from sales_app.models import CarritoCompra, CarritoProducto
+    from catalog_app.models import Producto
+
+    try:
+        producto = Producto.objects.get(id_producto=id_producto)
+    except Producto.DoesNotExist:
+        raise ValidationError("El producto especificado no existe.")
+
+    carrito = CarritoCompra.objects.filter(
+        id_usuario=usuario,
+        estado='activo'
+    ).order_by('-id_carrito').first()
+
+    if not carrito:
+        raise ValidationError("El usuario no posee un carrito de compras activo.")
+
+    item = CarritoProducto.objects.filter(
+        id_carrito=carrito,
+        id_producto=producto
+    ).first()
+
+    if not item:
+        raise ValidationError(f"El producto '{producto.nombre}' no se encuentra en el carrito.")
+
+    cant_actual = int(item.cantidad or 0)
+    eliminado_completo = False
+    cant_restante = 0
+
+    if cantidad is None or cantidad >= cant_actual:
+        item.delete()
+        eliminado_completo = True
+    else:
+        cant_restante = cant_actual - int(cantidad)
+        item.cantidad = cant_restante
+        item.save(update_fields=['cantidad'])
+
+    total_articulos = CarritoProducto.objects.filter(
+        id_carrito=carrito
+    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+    return {
+        'id_carrito': carrito.id_carrito,
+        'id_producto': producto.id_producto,
+        'producto_nombre': producto.nombre,
+        'eliminado_completo': eliminado_completo,
+        'cantidad_restante_item': cant_restante,
+        'total_articulos_carrito': total_articulos
+    }

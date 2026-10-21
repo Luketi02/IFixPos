@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import { formatearNombreConInicial } from '../../utils/roleRoutes';
-import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const MOCK_REPARACIONES = [
   {
@@ -90,39 +90,37 @@ export default function TechnicianTasksScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Header Superior para Taller / Mobile Friendly */}
-      <header className="border-b border-slate-800 bg-[#1E293B]/90 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          
+    <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
+      {/* 1. Barra Lateral Dinámica del Técnico */}
+      <AdminSidebar activeMenu="tech-tasks" />
+
+      {/* 2. Área de Contenido Principal (Columna Derecha) */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        {/* Header Superior del Taller */}
+        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-3">
-            <img
-              src={logoEmpresa}
-              alt="Logo IFixPos"
-              className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(139,92,246,0.4)]"
-            />
-            <div>
-              <span className="font-extrabold text-lg tracking-tight text-white">IFix<span className="text-[#06B6D4]">Pos</span></span>
-              <span className="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/30 uppercase font-mono tracking-widest">
-                Taller Técnico
-              </span>
-            </div>
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-mono text-slate-300">
+              Estación de Trabajo • Taller Técnico: <span className="text-emerald-400 font-semibold">Operativo</span>
+            </span>
           </div>
 
-          {/* Menú Desplegable de Perfil con Cerrar Sesión */}
-          <UserProfileDropdown align="right" />
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full hidden sm:inline-block">
+              Modo Especialista
+            </span>
+            <UserProfileDropdown align="right" />
+          </div>
+        </header>
 
-        </div>
-      </header>
-
-      {/* Contenido Principal Adaptado para PC y Tablets de Taller */}
-      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-        <motion.div
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35 }}
-          className="space-y-8"
-        >
+        {/* Contenido Principal */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35 }}
+            className="space-y-8"
+          >
           {/* Banner de Saludo Institucional */}
           <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-7 relative overflow-hidden shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -292,6 +290,7 @@ export default function TechnicianTasksScreen() {
           </div>
         </motion.div>
       </main>
+      </div>
     </div>
   );
 }

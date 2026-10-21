@@ -11,7 +11,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const AVATARES_PREDETERMINADOS = Array.from({ length: 60 }, (_, i) => `/avatars/avatar${i + 1}.png`);
 
 export default function EditProfileScreen() {
-  const { user, token, updateUser } = useAuth();
+  const { user, token, updateUser, login } = useAuth();
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
@@ -33,6 +33,32 @@ export default function EditProfileScreen() {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [serverError, setServerError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [menuSwitchAbierto, setMenuSwitchAbierto] = useState(false);
+  const [cambiandoSesionDev, setCambiandoSesionDev] = useState(false);
+
+  // Conmutador rápido de sesión de prueba
+  const handleCambiarSesion = async (rolDestino) => {
+    setCambiandoSesionDev(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/auth/cambiar-sesion/`, {
+        rol: rolDestino
+      });
+
+      const tokens = res.data?.tokens;
+      const usuario = res.data?.usuario;
+
+      if (tokens && usuario) {
+        login(tokens, usuario);
+        setMenuSwitchAbierto(false);
+        navigate(getDashboardPath(usuario.rol), { replace: true });
+      }
+    } catch (err) {
+      console.error('Error al cambiar de sesión:', err);
+      alert('No fue posible cambiar la sesión.');
+    } finally {
+      setCambiandoSesionDev(false);
+    }
+  };
 
   // Subir imagen física desde el explorador del dispositivo
   const handleFileUpload = async (e) => {
@@ -296,7 +322,100 @@ export default function EditProfileScreen() {
             <span>Volver a mi Panel</span>
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* Conmutador Rápido de Sesión (Dev/Test) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuSwitchAbierto(!menuSwitchAbierto)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-xs font-semibold transition-all cursor-pointer shadow-sm shadow-cyan-950/30"
+              >
+                <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+                <span>Cambiar Sesión a...</span>
+                <svg className={`w-3 h-3 text-cyan-400 transition-transform ${menuSwitchAbierto ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              <AnimatePresence>
+                {menuSwitchAbierto && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 6 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 6 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#1E293B] border border-cyan-500/40 shadow-2xl shadow-black/80 p-2 z-50 backdrop-blur-xl space-y-1"
+                  >
+                    <div className="px-2 py-1 text-[10px] font-mono uppercase text-slate-400 flex items-center justify-between border-b border-slate-700/60 pb-1.5 mb-1">
+                      <span>Seleccionar Cuenta</span>
+                      <span className="text-cyan-400 font-bold">Dev/Test</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={cambiandoSesionDev || user?.email === 'cliente@ifixpos.com'}
+                      onClick={() => handleCambiarSesion('CLIENTE')}
+                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-all cursor-pointer ${
+                        user?.email === 'cliente@ifixpos.com'
+                          ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-semibold cursor-default'
+                          : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-emerald-500/40 text-slate-200 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        <span className="font-semibold">Cliente</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">cliente@ifixpos.com</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={cambiandoSesionDev || user?.email === 'tecnico@ifixpos.com'}
+                      onClick={() => handleCambiarSesion('TECNICO')}
+                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-all cursor-pointer ${
+                        user?.email === 'tecnico@ifixpos.com'
+                          ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-semibold cursor-default'
+                          : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-amber-500/40 text-slate-200 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        <span className="font-semibold">Técnico</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">tecnico@ifixpos.com</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={cambiandoSesionDev || user?.email === 'lucas.mino1508@gmail.com'}
+                      onClick={() => handleCambiarSesion('ADMIN')}
+                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-all cursor-pointer ${
+                        user?.email === 'lucas.mino1508@gmail.com'
+                          ? 'bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-semibold cursor-default'
+                          : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-cyan-500/40 text-slate-200 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                        <span className="font-semibold">Administrador</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">Google (Admin)</span>
+                    </button>
+
+                    {cambiandoSesionDev && (
+                      <div className="text-center py-1">
+                        <span className="text-[10px] font-mono text-cyan-400 animate-pulse">
+                          Conmutando sesión...
+                        </span>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full uppercase font-semibold">
               Editar Perfil
             </span>

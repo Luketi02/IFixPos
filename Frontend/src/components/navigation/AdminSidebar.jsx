@@ -14,7 +14,12 @@ import {
   Layers01Icon,
   Notification03Icon,
   CursorPointer01Icon,
-  SmartPhone01Icon
+  SmartPhone01Icon,
+  PlusSignCircleIcon,
+  Clock01Icon,
+  CheckmarkCircle01Icon,
+  Coins01Icon,
+  PackageReceiveIcon
 } from '@hugeicons/core-free-icons';
 
 // ==============================================================================
@@ -61,7 +66,6 @@ export const ADMIN_MENU_ITEMS = [
       { value: 'workshop-orders', label: 'Órdenes de Reparación', icon: Settings02Icon },
       { value: 'workshop-diagnostics', label: 'Diagnósticos de Entrada', icon: CursorPointer01Icon },
       { value: 'workshop-logs', label: 'Bitácoras Técnicas', icon: Layers01Icon },
-      { value: 'admin-register-device', label: 'Empadronar Dispositivo', icon: SmartPhone01Icon, route: '/cliente/dispositivos/nuevo' }
     ]
   },
   {
@@ -109,19 +113,75 @@ export const CLIENT_MENU_ITEMS = [
 
 // ==============================================================================
 // MENÚ DE NAVEGACIÓN PARA TÉCNICOS (Taller)
+// Opciones Maestras en Acordeón con estructura estricta y rutas jerárquicas
 // ==============================================================================
 export const TECH_MENU_ITEMS = [
   {
-    label: 'Taller & Diagnósticos',
+    label: '📱 Dispositivos',
     children: [
-      { value: 'tech-tasks', label: 'Tareas y Reparaciones', icon: Settings02Icon, route: '/tareas-tecnico' },
-      { value: 'tech-register-device', label: 'Empadronar Dispositivo', icon: SmartPhone01Icon, route: '/cliente/dispositivos/nuevo' }
+      {
+        value: 'tech-repairs-new',
+        label: 'Nueva Reparación',
+        icon: PlusSignCircleIcon,
+        route: '/tecnico/dispositivos/nueva-reparacion'
+      },
+      {
+        value: 'tech-repairs-ongoing',
+        label: 'Reparaciones en curso',
+        icon: Clock01Icon,
+        route: '/tecnico/dispositivos/en-curso'
+      },
+      {
+        value: 'tech-repairs-finished',
+        label: 'Reparaciones finalizadas',
+        icon: CheckmarkCircle01Icon,
+        route: '/tecnico/dispositivos/finalizadas'
+      }
+    ]
+  },
+  {
+    label: '💰 Caja',
+    children: [
+      {
+        value: 'tech-cash-purchase',
+        label: 'Registrar compra',
+        icon: Coins01Icon,
+        route: '/tecnico/caja/registrar-compra'
+      },
+      {
+        value: 'tech-cash-receive-device',
+        label: 'Recepcionar dispositivo',
+        icon: SmartPhone01Icon,
+        route: '/tecnico/caja/recepcionar-dispositivo'
+      }
+    ]
+  },
+  {
+    label: '📦 Insumos',
+    children: [
+      {
+        value: 'tech-supplies-receive',
+        label: 'Recepcionar compra',
+        icon: PackageReceiveIcon,
+        route: '/tecnico/insumos/recepcionar-compra'
+      }
+    ]
+  },
+  {
+    label: '⚡ Taller & Tareas',
+    children: [
+      {
+        value: 'tech-tasks',
+        label: 'Resumen y Tareas del Día',
+        icon: Settings02Icon,
+        route: '/tareas-tecnico'
+      }
     ]
   }
 ];
 
 export default function AdminSidebar({
-  activeMenu = 'overview',
+  activeMenu,
   onSelectMenu,
   onNavigate,
   role: roleProp
@@ -137,18 +197,41 @@ export default function AdminSidebar({
   let badgeLabel = 'Admin ERP';
   let badgeColor = 'bg-violet-500/10 text-violet-400 border-violet-500/30';
   let sectionTitle = 'Módulos del Sistema';
+  let accentColor = '#8B5CF6';
+  let lineColor = '#334155';
 
   if (effectiveRole === 'cliente') {
     items = CLIENT_MENU_ITEMS;
     badgeLabel = 'Portal Clientes';
     badgeColor = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30';
     sectionTitle = 'Mi Cuenta & Servicios';
+    accentColor = '#06B6D4';
+    lineColor = '#334155';
   } else if (effectiveRole === 'tecnico') {
     items = TECH_MENU_ITEMS;
     badgeLabel = 'Taller Técnico';
-    badgeColor = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
+    badgeColor = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30';
     sectionTitle = 'Gestión de Taller';
+    // Cyber-Tech: enlace activo en Turquesa Neón (#06B6D4) y línea jerárquica en Púrpura Eléctrico (#8B5CF6)
+    accentColor = '#06B6D4';
+    lineColor = '#8B5CF6';
   }
+
+  // Identificar el ítem correspondiente a la ruta actual para el resaltado automático
+  const itemMatchByRoute = items
+    .flatMap((sec) => sec.children || [])
+    .find(
+      (kid) =>
+        kid.route &&
+        (location.pathname === kid.route ||
+          (kid.route !== '/admin/dashboard' &&
+            kid.route !== '/tienda' &&
+            kid.route !== '/tareas-tecnico' &&
+            location.pathname.startsWith(kid.route)))
+    );
+
+  const effectiveActiveMenu =
+    activeMenu || itemMatchByRoute?.value || items[0]?.children?.[0]?.value || 'overview';
 
   const handleSelect = (val, item) => {
     // 1. Si el ítem tiene una ruta explícita y es diferente a la ruta actual, navegar directamente
@@ -206,15 +289,20 @@ export default function AdminSidebar({
     }
   };
 
-  // Expandir automáticamente la categoría padre que contenga la opción o ruta activa (Punto 3)
+  // Expandir automáticamente la categoría padre que contenga la opción o ruta activa
   const activeSectionIndex = items.findIndex((section) =>
     section.children?.some(
       (kid) =>
-        kid.value === activeMenu ||
-        (kid.route && (location.pathname === kid.route || (kid.route !== '/admin/dashboard' && kid.route !== '/tienda' && location.pathname.startsWith(kid.route))))
+        kid.value === effectiveActiveMenu ||
+        (kid.route &&
+          (location.pathname === kid.route ||
+            (kid.route !== '/admin/dashboard' &&
+              kid.route !== '/tienda' &&
+              kid.route !== '/tareas-tecnico' &&
+              location.pathname.startsWith(kid.route))))
     )
   );
-  const defaultOpenIndices = activeSectionIndex >= 0 ? [activeSectionIndex] : [];
+  const defaultOpenIndices = activeSectionIndex >= 0 ? [activeSectionIndex] : [0];
 
   return (
     <aside className="w-full md:w-72 bg-[#1E293B] border-r border-slate-700/80 flex flex-col shrink-0 md:sticky md:top-0 md:h-screen z-40">
@@ -247,11 +335,11 @@ export default function AdminSidebar({
         <BranchedMenu
           items={items}
           defaultOpen={defaultOpenIndices}
-          defaultActive={activeMenu}
+          defaultActive={effectiveActiveMenu}
           onSelect={handleSelect}
           color="#94A3B8"
-          accentColor={effectiveRole === 'cliente' ? '#06B6D4' : '#8B5CF6'}
-          lineColor="#334155"
+          accentColor={accentColor}
+          lineColor={lineColor}
           width={260}
           rowHeight={38}
           indent={36}
@@ -260,7 +348,7 @@ export default function AdminSidebar({
           lineWidth={1.5}
           fontSize={13.5}
           drawDuration={360}
-          foldDuration={260}
+          foldDuration={300}
         />
       </div>
     </aside>

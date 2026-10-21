@@ -12,6 +12,7 @@ from .apis import (
     ProductoTiendaListApi,
     ProductoCreateApi,
     ProductoSubirImagenApi,
+    ProductoDetailApi,
     TipoDispositivoApi,
     TipoDispositivoEstadoApi
 )
@@ -32,6 +33,8 @@ urlpatterns = [
     path('productos/tienda/', ProductoTiendaListApi.as_view(), name='listar-productos-tienda'),
     path('productos/registrar/', ProductoCreateApi.as_view(), name='registrar-producto'),
     path('productos/subir-imagen/', ProductoSubirImagenApi.as_view(), name='subir-imagen-producto'),
+    path('productos/<int:id_producto>/', ProductoDetailApi.as_view(), name='detalle-producto'),
+    path('productos/<int:id_producto>/modificar/', ProductoDetailApi.as_view(), name='modificar-producto'),
     path('tipos-dispositivos/', TipoDispositivoApi.as_view(), name='tipos-dispositivos'),
     path('tipos-dispositivos/<int:id_tipo>/estado/', TipoDispositivoEstadoApi.as_view(), name='cambiar-estado-tipo-dispositivo'),
 ]

@@ -157,7 +157,7 @@ export default function BranchedMenu({
               <span>{item.label}</span>
               {kids && (
                 <svg
-                  className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-90 text-cyan-400' : ''}`}
+                  className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-300 ${isOpen ? 'rotate-90 text-cyan-400' : ''}`}
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"

@@ -1,6 +1,7 @@
 from django.test import TestCase
 
 # Create your tests here.
+from decimal import Decimal
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -1450,4 +1451,207 @@ class ProductoImagenesYDescuentosTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn('error', response.data)
+
+    def test_obtener_detalle_producto_exitoso(self):
+        from catalog_app.services import registrar_producto
+        self.client.force_authenticate(user=self.admin)
+
+        producto = registrar_producto(
+            usuario_admin=self.admin,
+            datos_validados={
+                'nombre': 'Pantalla OLED Galaxy S22',
+                'id_categoria': self.categoria.id_categoria,
+                'precio_venta': Decimal('45000.00'),
+                'stock_inicial': 5,
+                'stock_minimo': 2,
+                'apto_venta': True,
+                'apto_reparacion': True,
+                'consumible': False,
+                'modulo_automatico': True,
+                'imagen_principal': 'https://example.com/s22.jpg',
+                'imagenes': ['https://example.com/s22.jpg']
+            }
+        )
+
+        response = self.client.get(f'/api/catalog/productos/{producto.id_producto}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['nombre'], 'Pantalla OLED Galaxy S22')
+        self.assertEqual(response.data['stock_minimo'], 2)
+        self.assertTrue(response.data['modulo_automatico'])
+
+    def test_modificar_producto_exitoso_y_auditoria(self):
+        from catalog_app.services import registrar_producto
+        from core_app.models import LogSistema
+        from inventory_app.models import Stock
+        self.client.force_authenticate(user=self.admin)
+
+        producto = registrar_producto(
+            usuario_admin=self.admin,
+            datos_validados={
+                'nombre': 'Pantalla Original S22',
+                'id_categoria': self.categoria.id_categoria,
+                'precio_venta': Decimal('40000.00'),
+                'stock_inicial': 10,
+                'stock_minimo': 3,
+                'apto_venta': True,
+                'apto_reparacion': False,
+                'consumible': False,
+                'modulo_automatico': False
+            }
+        )
+
+        payload_modificacion = {
+            'nombre': 'Pantalla OLED Premium S22 Ultra',
+            'id_categoria': self.categoria.id_categoria,
+            'id_marca': self.marca.id_marca,
+            'id_modelo': self.modelo.id_modelo,
+            'precio': '48500.50',
+            'descripcion': 'Panel Dynamic AMOLED 2X 120Hz con digitalizador',
+            'estado': True,
+            'apto_venta': True,
+            'apto_reparacion': True,
+            'consumible': False,
+            'modulo_automatico': True,
+            'stock_minimo': 6,
+            'imagen_principal': '/media/productos/prod_nueva.png',
+            'imagenes': ['/media/productos/prod_nueva.png', '/media/productos/prod_detalle.png']
+        }
+
+        response = self.client.put(
+            f'/api/catalog/productos/{producto.id_producto}/modificar/',
+            payload_modificacion,
+            format='json'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['producto']['nombre'], 'Pantalla OLED Premium S22 Ultra')
+        self.assertEqual(Decimal(str(response.data['producto']['precio_venta'])), Decimal('48500.50'))
+        self.assertTrue(response.data['producto']['apto_reparacion'])
+        self.assertTrue(response.data['producto']['modulo_automatico'])
+        self.assertEqual(response.data['producto']['imagen_principal'], '/media/productos/prod_nueva.png')
+        self.assertEqual(len(response.data['producto']['imagenes']), 2)
+
+        # 1. Comprobar que Stock.stock_minimo se actualizó a 6
+        stock_db = Stock.objects.get(id_producto=producto)
+        self.assertEqual(stock_db.stock_minimo, 6)
+
+        # 2. Comprobar auditoría en LogSistema
+        log = LogSistema.objects.filter(
+            accion="Modificar Producto (CU-68)",
+            id_registro_afectado=str(producto.id_producto)
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertIn("Pantalla OLED Premium S22 Ultra", log.detalle)
+
+    def test_modificar_producto_rechaza_sin_proposito_funcional(self):
+        from catalog_app.services import registrar_producto
+        self.client.force_authenticate(user=self.admin)
+
+        producto = registrar_producto(
+            usuario_admin=self.admin,
+            datos_validados={
+                'nombre': 'Vidrio Templado',
+                'id_categoria': self.categoria.id_categoria,
+                'precio_venta': Decimal('1500.00'),
+                'stock_inicial': 20,
+                'stock_minimo': 5,
+                'apto_venta': True
+            }
+        )
+
+        payload_invalido = {
+            'nombre': 'Vidrio Templado Modificado',
+            'id_categoria': self.categoria.id_categoria,
+            'precio': '1800.00',
+            'apto_venta': False,
+            'apto_reparacion': False,
+            'consumible': False
+        }
+
+        response = self.client.put(
+            f'/api/catalog/productos/{producto.id_producto}/modificar/',
+            payload_invalido,
+            format='json'
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('propósito funcional', str(response.data))
+
+    def test_modificar_producto_denegado_para_no_admin(self):
+        from catalog_app.services import registrar_producto
+        producto = registrar_producto(
+            usuario_admin=self.admin,
+            datos_validados={
+                'nombre': 'Cable USB C',
+                'id_categoria': self.categoria.id_categoria,
+                'precio_venta': Decimal('2000.00'),
+                'stock_inicial': 10,
+                'apto_venta': True
+            }
+        )
+
+        # Cliente sin rol ADMIN
+        self.client.force_authenticate(user=self.cliente)
+        response = self.client.put(
+            f'/api/catalog/productos/{producto.id_producto}/modificar/',
+            {'nombre': 'Hack', 'id_categoria': self.categoria.id_categoria, 'precio': 100},
+            format='json'
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_producto_multiples_categorias_crear_y_modificar(self):
+        """
+        Verifica que un producto puede tener múltiples categorías (N a M)
+        a través del modelo intermedio DetalleCategoriaProducto.
+        """
+        from catalog_app.models import CategoriaProducto, DetalleCategoriaProducto, Producto
+
+        cat_pantalla = CategoriaProducto.objects.create(nombre="Pantallas OLED", descripcion="Displays", estado=True)
+        cat_periferico = CategoriaProducto.objects.create(nombre="Periféricos", descripcion="Accesorios", estado=True)
+        cat_gamer = CategoriaProducto.objects.create(nombre="Gamer", descripcion="Línea Gaming", estado=True)
+
+        self.client.force_authenticate(user=self.admin)
+
+        # 1. Crear producto con dos categorías: Pantalla y Periférico
+        payload_crear = {
+            'nombre': 'Monitor Gamer Portátil 144Hz',
+            'ids_categorias': [cat_pantalla.id_categoria, cat_periferico.id_categoria],
+            'precio': 125000.00,
+            'stock_inicial': 5,
+            'stock_minimo': 2,
+            'apto_venta': True,
+            'apto_reparacion': True
+        }
+        res_crear = self.client.post('/api/catalog/productos/registrar/', payload_crear, format='json')
+        self.assertEqual(res_crear.status_code, 201)
+        id_prod = res_crear.data['id_producto']
+
+        # Verificar que existen los 2 registros en la tabla intermedia DetalleCategoriaProducto
+        detalles = DetalleCategoriaProducto.objects.filter(id_producto_id=id_prod)
+        self.assertEqual(detalles.count(), 2)
+        cats_ids = set(detalles.values_list('id_categoria_id', flat=True))
+        self.assertEqual(cats_ids, {cat_pantalla.id_categoria, cat_periferico.id_categoria})
+
+        # 2. Modificar producto para agregar categoría 'Gamer' y quitar 'Pantalla'
+        payload_modificar = {
+            'nombre': 'Monitor Gamer Portátil 144Hz Pro',
+            'ids_categorias': [cat_periferico.id_categoria, cat_gamer.id_categoria],
+            'precio': 130000.00,
+            'apto_venta': True
+        }
+        res_mod = self.client.put(f'/api/catalog/productos/{id_prod}/modificar/', payload_modificar, format='json')
+        self.assertEqual(res_mod.status_code, 200)
+
+        detalles_mod = DetalleCategoriaProducto.objects.filter(id_producto_id=id_prod)
+        self.assertEqual(detalles_mod.count(), 2)
+        cats_ids_mod = set(detalles_mod.values_list('id_categoria_id', flat=True))
+        self.assertEqual(cats_ids_mod, {cat_periferico.id_categoria, cat_gamer.id_categoria})
+
+        # 3. Consultar detalle del producto y comprobar campo 'categorias'
+        res_detalle = self.client.get(f'/api/catalog/productos/{id_prod}/')
+        self.assertEqual(res_detalle.status_code, 200)
+        self.assertEqual(len(res_detalle.data['categorias']), 2)
+        nombres_cats = {c['nombre'] for c in res_detalle.data['categorias']}
+        self.assertEqual(nombres_cats, {'Periféricos', 'Gamer'})
+
+
 

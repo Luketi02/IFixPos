@@ -102,3 +102,47 @@ class CarritoDetalleApi(APIView):
         resumen = obtener_resumen_carrito(usuario=request.user)
         serializer = CarritoResumenOutputSerializer(resumen)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class QuitarDelCarritoApi(APIView):
+    """
+    Endpoint para remover o decrementar artículos del carrito de compras virtual.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from sales_app.serializers import QuitarDelCarritoInputSerializer
+        from sales_app.services import quitar_producto_de_carrito
+
+        serializer = QuitarDelCarritoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        id_producto = serializer.validated_data['id_producto']
+        cantidad = serializer.validated_data.get('cantidad', None)
+
+        try:
+            resultado = quitar_producto_de_carrito(
+                usuario=request.user,
+                id_producto=id_producto,
+                cantidad=cantidad
+            )
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        mensaje = (
+            f"Producto '{resultado['producto_nombre']}' eliminado del carrito."
+            if resultado['eliminado_completo']
+            else f"Se actualizó la cantidad de '{resultado['producto_nombre']}' en tu carrito."
+        )
+
+        return Response(
+            {
+                "mensaje": mensaje,
+                "resultado": resultado
+            },
+            status=status.HTTP_200_OK
+        )

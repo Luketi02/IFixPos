@@ -440,6 +440,81 @@ class ProductoSubirImagenApi(APIView):
         )
 
 
+class ProductoDetailApi(APIView):
+    """
+    CU-68: Modificar Producto y Consulta Detallada.
+    - GET: Retorna la información vigente completa del producto (datos descriptivos,
+      comerciales, imágenes, banderas operativas y stock mínimo).
+    - PUT / PATCH: Valida y aplica las modificaciones sobre el producto.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        if codigo_rol != 'ADMIN':
+            raise PermissionDenied("Se requiere rol de Administrador para gestionar productos.")
+
+    def get(self, request, id_producto: int):
+        from django.core.exceptions import ObjectDoesNotExist
+        from .selectors import obtener_producto
+        from .serializers import ProductoDetailOutputSerializer
+
+        try:
+            producto = obtener_producto(id_producto)
+        except ObjectDoesNotExist:
+            return Response(
+                {"error": f"No se encontró el producto con ID {id_producto}."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = ProductoDetailOutputSerializer(producto)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, id_producto: int):
+        return self._procesar_modificacion(request, id_producto)
+
+    def patch(self, request, id_producto: int):
+        return self._procesar_modificacion(request, id_producto)
+
+    def _procesar_modificacion(self, request, id_producto: int):
+        self._verificar_admin(request.user)
+        from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from .serializers import ProductoUpdateInputSerializer, ProductoDetailOutputSerializer
+        from .services import modificar_producto
+
+        serializer = ProductoUpdateInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            producto = modificar_producto(
+                usuario_admin=request.user,
+                id_producto=id_producto,
+                datos_validados=serializer.validated_data
+            )
+        except ObjectDoesNotExist:
+            return Response(
+                {"error": f"No se encontró el producto con ID {id_producto}."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output = ProductoDetailOutputSerializer(producto)
+        return Response(
+            {
+                "mensaje": f"Producto '{producto.nombre}' actualizado con éxito.",
+                "id_producto": producto.id_producto,
+                "producto": output.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+
 class TipoDispositivoApi(APIView):
     """
     CU-65: Crear Tipo de Dispositivo y Listado de Tipos de Dispositivos.

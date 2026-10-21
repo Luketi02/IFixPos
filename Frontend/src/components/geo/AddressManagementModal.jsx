@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import CyberNumberInput from '../common/CyberNumberInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -531,13 +532,13 @@ export default function AddressManagementModal({
                   <label className="block text-xs font-semibold text-slate-300">
                     Piso <span className="text-slate-500 font-normal">(Opcional)</span>
                   </label>
-                  <input
-                    type="number"
+                  <CyberNumberInput
                     value={formData.piso}
                     onChange={(e) => setFormData((prev) => ({ ...prev, piso: e.target.value }))}
                     placeholder="Ej. 2"
                     disabled={isSaving}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                    min="0"
+                    step="1"
                   />
                 </div>
 

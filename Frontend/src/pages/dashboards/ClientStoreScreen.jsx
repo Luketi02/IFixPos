@@ -31,6 +31,7 @@ export default function ClientStoreScreen() {
   // Estados del Carrito y Feedback UX
   // ---------------------------------------------------------------------------
   const [agregandoId, setAgregandoId] = useState(null);
+  const [quitandoId, setQuitandoId] = useState(null);
   const [resumenCarrito, setResumenCarrito] = useState({ total_articulos: 0, items: [], monto_subtotal: 0 });
   const [carritoDrawerAbierto, setCarritoDrawerAbierto] = useState(false);
   const [toastNotificacion, setToastNotificacion] = useState(null);
@@ -178,6 +179,43 @@ export default function ClientStoreScreen() {
       setErrorMessage(msg || 'No pudimos agregar el producto a tu carrito. Verifica el stock disponible.');
     } finally {
       setAgregandoId(null);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Lógica de "Quitar / Decrementar del Carrito" (POST /api/sales/carrito/quitar/)
+  // ---------------------------------------------------------------------------
+  const handleQuitarDelCarrito = async (idProducto, cantidadAQuitar = null) => {
+    if (!token) return;
+
+    setQuitandoId(idProducto);
+    try {
+      const payload = {
+        id_producto: idProducto
+      };
+      if (cantidadAQuitar !== null && cantidadAQuitar !== undefined) {
+        payload.cantidad = cantidadAQuitar;
+      }
+
+      await axios.post(
+        `${API_BASE_URL}/api/sales/carrito/quitar/`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      await refrescarCarrito();
+    } catch (err) {
+      console.error('Error al quitar del carrito:', err);
+      const dataErr = err.response?.data;
+      const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
+      setErrorMessage(msg || 'No pudimos actualizar tu carrito. Intenta nuevamente.');
+    } finally {
+      setQuitandoId(null);
     }
   };
 
@@ -865,28 +903,73 @@ export default function ClientStoreScreen() {
                       </p>
                     </div>
                   ) : (
-                    resumenCarrito.items.map((item) => (
-                      <div
-                        key={item.id_carrito_producto}
-                        className="p-4 rounded-xl bg-slate-900/70 border border-slate-700/60 flex items-center justify-between gap-3 shadow-inner"
-                      >
-                        <div className="space-y-1 min-w-0">
-                          <h3 className="text-white text-sm font-semibold truncate">
-                            {item.producto_nombre}
-                          </h3>
-                          <div className="flex items-center gap-3 text-xs text-slate-400">
-                            <span>Cant: <strong className="text-cyan-400 font-bold">{item.cantidad}</strong></span>
-                            <span>•</span>
-                            <span>{formatearMoneda(item.precio_unitario)} c/u</span>
+                    resumenCarrito.items.map((item) => {
+                      const estaProcesando = quitandoId === item.id_producto || agregandoId === item.id_producto;
+                      return (
+                        <div
+                          key={item.id_carrito_producto}
+                          className="p-4 rounded-xl bg-slate-900/70 border border-slate-700/60 flex items-center justify-between gap-3 shadow-inner hover:border-slate-600 transition-all"
+                        >
+                          <div className="space-y-1.5 min-w-0 flex-1">
+                            <h3 className="text-white text-sm font-semibold truncate" title={item.producto_nombre}>
+                              {item.producto_nombre}
+                            </h3>
+                            <div className="flex items-center gap-2 text-xs text-slate-400">
+                              <span>{formatearMoneda(item.precio_unitario)} c/u</span>
+                              <span>•</span>
+                              <span className="text-white font-mono font-bold">
+                                Subtotal: {formatearMoneda(item.subtotal)}
+                              </span>
+                            </div>
+
+                            {/* Controles de Cantidad (+ / -) */}
+                            <div className="flex items-center gap-2 pt-1">
+                              <div className="inline-flex items-center bg-slate-950/80 rounded-lg border border-slate-800 p-0.5">
+                                <button
+                                  type="button"
+                                  disabled={estaProcesando}
+                                  onClick={() => handleQuitarDelCarrito(item.id_producto, 1)}
+                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 transition-colors text-xs font-bold"
+                                  title="Disminuir una unidad"
+                                >
+                                  -
+                                </button>
+                                <span className="w-8 text-center font-mono font-bold text-xs text-cyan-300">
+                                  {item.cantidad}
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={estaProcesando}
+                                  onClick={() => handleAgregarAlCarrito({ id_producto: item.id_producto, nombre: item.producto_nombre, en_stock: true, precio_venta: item.precio_unitario }, 1)}
+                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 transition-colors text-xs font-bold"
+                                  title="Añadir una unidad"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Botón Quitar Totalmente del Carrito */}
+                          <div className="flex flex-col items-end justify-between h-full shrink-0 gap-2">
+                            <button
+                              type="button"
+                              disabled={estaProcesando}
+                              onClick={() => handleQuitarDelCarrito(item.id_producto, null)}
+                              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all disabled:opacity-40"
+                              title="Quitar producto del carrito"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                            <span className="text-xs font-black text-cyan-400 font-mono">
+                              {formatearMoneda(item.subtotal)}
+                            </span>
                           </div>
                         </div>
-                        <div className="text-right shrink-0">
-                          <span className="text-sm font-black text-white">
-                            {formatearMoneda(item.subtotal)}
-                          </span>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 

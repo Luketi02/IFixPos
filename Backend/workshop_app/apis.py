@@ -13,10 +13,18 @@ from .serializers import (
     MarcaOutputSerializer,
     ModeloDispositivoOutputSerializer,
     DispositivoFiltradoOutputSerializer,
+    DispositivoTallerFiltradoOutputSerializer,
+    FiltrarDispositivosTallerInputSerializer,
     DispositivoListOutputSerializer,
-    DispositivoUpdateInputSerializer
+    DispositivoUpdateInputSerializer,
+    IniciarReparacionInputSerializer
 )
-from .services import registrar_dispositivo, crear_dispositivo, editar_dispositivo_cliente
+from .services import (
+    registrar_dispositivo,
+    crear_dispositivo,
+    editar_dispositivo_cliente,
+    iniciar_reparacion
+)
 from .selectors import (
     obtener_tipos_dispositivos,
     obtener_marcas,
@@ -25,6 +33,28 @@ from .selectors import (
     filtrar_mis_dispositivos,
     filtrar_dispositivos_cliente
 )
+
+
+# ==============================================================================
+# HELPERS DE SEGURIDAD Y CONTROL DE ACCESO BASADO EN ROLES
+# ==============================================================================
+
+def _obtener_codigo_rol(usuario):
+    rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
+    return (getattr(rol, 'codigo', '') or '').upper()
+
+def _exigir_rol_admin(usuario):
+    if _obtener_codigo_rol(usuario) != 'ADMIN':
+        raise PermissionDenied("Se requiere rol de Administrador para realizar esta acción.")
+
+def _exigir_rol_taller(usuario):
+    if _obtener_codigo_rol(usuario) not in ('ADMIN', 'TECNICO'):
+        raise PermissionDenied("Se requiere rol de Administrador o Técnico para realizar esta acción.")
+
+def _exigir_rol_cliente(usuario):
+    if _obtener_codigo_rol(usuario) != 'CLIENTE':
+        raise PermissionDenied("Esta acción está reservada para clientes.")
+
 
 
 # ==============================================================================
@@ -115,46 +145,52 @@ class DispositivoCreateApi(APIView):
             "dispositivo": output_serializer.data
         }, status=status.HTTP_201_CREATED)
 
+# ==============================================================================
+# CU-33: FILTRAR DISPOSITIVO (TALLER / ADMINISTRACIÓN)
+# ==============================================================================
+
 class FiltrarDispositivosTallerApi(APIView):
+    """
+    CU-33: Filtrar Dispositivo.
+    Permite al personal del taller (ADMIN y TECNICO) filtrar y localizar
+    dispositivos y reparaciones según criterios exactos (DNI, código de seguridad,
+    marca, modelo, número de serie) y filtros categóricos/temporales
+    (etapa de reparación, técnico asignado, rango de fechas).
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        try:
-            dni_cliente = request.query_params.get('dni_cliente')
-            codigo_sec_reparacion = request.query_params.get('codigo_sec_reparacion')
-            nro_serie = request.query_params.get('nro_serie')
-            etapa_reparacion = request.query_params.get('etapa_reparacion')
-            
-            id_tecnico_asignado = request.query_params.get('id_tecnico_asignado')
-            id_marca = request.query_params.get('id_marca')
-            id_modelo = request.query_params.get('id_modelo')
-            
-            fecha_ingreso_desde = request.query_params.get('fecha_ingreso_desde')
-            fecha_ingreso_hasta = request.query_params.get('fecha_ingreso_hasta')
+        _exigir_rol_taller(request.user)
 
-            if id_tecnico_asignado is not None: id_tecnico_asignado = int(id_tecnico_asignado)
-            if id_marca is not None: id_marca = int(id_marca)
-            if id_modelo is not None: id_modelo = int(id_modelo)
+        serializer = FiltrarDispositivosTallerInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        filtros = serializer.validated_data
 
-            dispositivos = filtrar_dispositivos_taller(
-                dni_cliente=dni_cliente,
-                codigo_sec_reparacion=codigo_sec_reparacion,
-                nro_serie=nro_serie,
-                etapa_reparacion=etapa_reparacion,
-                id_tecnico_asignado=id_tecnico_asignado,
-                fecha_ingreso_desde=fecha_ingreso_desde, 
-                fecha_ingreso_hasta=fecha_ingreso_hasta,
-                id_marca=id_marca,
-                id_modelo=id_modelo
+        dispositivos = filtrar_dispositivos_taller(
+            dni_cliente=filtros.get('dni_cliente'),
+            codigo_sec_reparacion=filtros.get('codigo_sec_reparacion'),
+            nro_serie=filtros.get('nro_serie'),
+            marca=filtros.get('marca'),
+            id_marca=filtros.get('id_marca'),
+            modelo=filtros.get('modelo'),
+            id_modelo=filtros.get('id_modelo'),
+            etapa_reparacion=filtros.get('etapa_reparacion'),
+            id_tecnico_asignado=filtros.get('id_tecnico_asignado'),
+            fecha_ingreso_desde=filtros.get('fecha_ingreso_desde'),
+            fecha_ingreso_hasta=filtros.get('fecha_ingreso_hasta'),
+            excluir_reparaciones_activas=filtros.get('excluir_reparaciones_activas', False),
+        )
+
+        output_serializer = DispositivoTallerFiltradoOutputSerializer(dispositivos, many=True)
+        data = output_serializer.data
+
+        if not data:
+            return Response(
+                {"mensaje": "No se encontraron resultados", "resultados": []},
+                status=status.HTTP_200_OK
             )
-            
-            serializer = DispositivoFiltradoOutputSerializer(dispositivos, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        
-        except ValidationError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except ValueError:
-            return Response({"error": "Parámetro inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class FiltrarMisDispositivosApi(APIView):
@@ -194,11 +230,6 @@ class FiltrarMisDispositivosApi(APIView):
 # ==============================================================================
 # CU-34 (Filtrar Mis Dispositivos) y CU-07 (Editar Dispositivo)
 # ==============================================================================
-
-def _exigir_rol_cliente(usuario):
-    rol = getattr(usuario, 'id_rol', None)
-    if not rol or (rol.codigo or '').upper() != 'CLIENTE':
-        raise PermissionDenied("Esta acción está reservada para clientes.")
 
 
 class MisDispositivosApi(APIView):
@@ -294,20 +325,39 @@ class ReparacionDetalleApi(APIView):
 
 
 # ==============================================================================
-# CATEGORÍAS DE REPARACIÓN (CU-62, CU-63, CU-64)
+# CU-26: INICIAR REPARACIÓN (ORDEN DE SERVICIO)
 # ==============================================================================
 
-def _obtener_codigo_rol(usuario):
-    rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
-    return (getattr(rol, 'codigo', '') or '').upper()
+class IniciarReparacionApi(APIView):
+    """
+    CU-26: Iniciar Reparación.
+    Permite instanciar formalmente una nueva orden de servicio técnico para un
+    dispositivo previamente empadronado.
+    Accesible para CLIENTE, TECNICO y ADMIN autenticados.
+    """
+    permission_classes = [IsAuthenticated]
 
-def _exigir_rol_admin(usuario):
-    if _obtener_codigo_rol(usuario) != 'ADMIN':
-        raise PermissionDenied("Se requiere rol de Administrador para realizar esta acción.")
+    def post(self, request):
+        serializer = IniciarReparacionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-def _exigir_rol_taller(usuario):
-    if _obtener_codigo_rol(usuario) not in ('ADMIN', 'TECNICO'):
-        raise PermissionDenied("Se requiere rol de Administrador o Técnico para realizar esta acción.")
+        reparacion = iniciar_reparacion(
+            usuario_ejecutor=request.user,
+            datos_validados=serializer.validated_data
+        )
+
+        return Response({
+            "mensaje": "Orden de servicio iniciada exitosamente.",
+            "id_reparacion": reparacion.id_reparacion,
+            "codigo_seguridad": reparacion.codigo_sec,
+            "etapa": reparacion.etapa,
+            "fecha_inicio": reparacion.fecha_inicio
+        }, status=status.HTTP_201_CREATED)
+
+
+# ==============================================================================
+# CATEGORÍAS DE REPARACIÓN (CU-62, CU-63, CU-64)
+# ==============================================================================
 
 
 class CategoriaReparacionApi(APIView):
@@ -320,7 +370,17 @@ class CategoriaReparacionApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        _exigir_rol_taller(request.user)
+        rol = _obtener_codigo_rol(request.user)
+        estado = (
+            request.query_params.get('estado')
+            or request.query_params.get('estado_activo')
+        )
+
+        if rol == 'CLIENTE':
+            if not estado or str(estado).strip().lower() not in ('true', '1', 'activo', 'activa', 'si'):
+                raise PermissionDenied("Se requiere rol de Administrador o Técnico para realizar esta acción.")
+        else:
+            _exigir_rol_taller(request.user)
 
         from workshop_app.selectors import filtrar_categorias_reparacion
         from workshop_app.serializers import CategoriaReparacionOutputSerializer
@@ -393,3 +453,311 @@ class CategoriaReparacionEstadoApi(APIView):
         data["mensaje"] = f"Estado de la categoría de reparación actualizado a {'Activo' if categoria_modificada.estado_activo else 'Inactivo'}."
         data["categoria"] = output_serializer.data
         return Response(data, status=status.HTTP_200_OK)
+
+
+class RecepcionarDispositivoApi(APIView):
+    """
+    CU-45: Recepcionar Dispositivo.
+    Endpoint para que el personal del taller (Técnico o Administrador)
+    verifique los datos precargados, asiente el estado estético/físico
+    del equipo frente al cliente y avance la reparación al estado 'ESPERANDO_DIAGNOSTICO'.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _procesar_recepcion(self, request, id_reparacion: int):
+        _exigir_rol_taller(request.user)
+
+        from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from workshop_app.serializers import (
+            RecepcionarDispositivoInputSerializer,
+            ReparacionRecepcionadaOutputSerializer
+        )
+        from workshop_app.services import recepcionar_dispositivo_taller
+
+        serializer = RecepcionarDispositivoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reparacion = recepcionar_dispositivo_taller(
+                usuario_tecnico=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except ObjectDoesNotExist:
+            return Response(
+                {"error": f"No se encontró la orden de reparación con ID {id_reparacion}."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DjangoValidationError, DRFValidationError) as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output = ReparacionRecepcionadaOutputSerializer(reparacion)
+        return Response(
+            {
+                "mensaje": "Dispositivo recepcionado exitosamente. El equipo ingresó formalmente a la fila de diagnóstico.",
+                "reparacion": output.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request, id_reparacion: int):
+        return self._procesar_recepcion(request, id_reparacion)
+
+    def put(self, request, id_reparacion: int):
+        return self._procesar_recepcion(request, id_reparacion)
+
+
+class ListarReparacionesApi(APIView):
+    """
+    CU-58: Filtrar Reparaciones.
+    Motor de búsqueda de reparaciones con control de acceso horizontal y vertical:
+    - Autenticación requerida para todos los roles (CLIENTE, TECNICO, ADMIN).
+    - El cliente solo puede consultar y filtrar sus propias reparaciones.
+    - El personal técnico y administrativo puede realizar búsquedas globales por cliente,
+      técnico asignado, código de seguridad, etapa, categorías y rangos de fechas.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from workshop_app.serializers import (
+            FiltroReparacionesInputSerializer,
+            ReparacionListOutputSerializer
+        )
+        from workshop_app.selectors import filtrar_reparaciones
+
+        serializer = FiltroReparacionesInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reparaciones = filtrar_reparaciones(
+                usuario_ejecutor=request.user,
+                filtros=serializer.validated_data
+            )
+        except (DjangoValidationError, DRFValidationError) as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReparacionListOutputSerializer(
+            reparaciones,
+            many=True,
+            context={'request': request, 'usuario': request.user}
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-08: CARGAR DIAGNÓSTICO TÉCNICO (ENDPOINTS HTTP)
+# ==============================================================================
+
+class CargarDiagnosticoApi(APIView):
+    """
+    CU-08: Cargar Diagnóstico Técnico.
+    Endpoint exclusivo para Técnicos y Administradores para asentar la evaluación
+    técnica formal de una reparación en estado 'EN_DIAGNOSTICO', registrar insumos,
+    fijar el costo de mano de obra y avanzar la orden a 'ESPERANDO_CONFIRMACION'.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id_reparacion: int):
+        _exigir_rol_taller(request.user)
+
+        from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from workshop_app.serializers import (
+            CargarDiagnosticoInputSerializer,
+            DiagnosticoOutputSerializer
+        )
+        from workshop_app.services import cargar_diagnostico_tecnico
+
+        serializer = CargarDiagnosticoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            diagnostico = cargar_diagnostico_tecnico(
+                usuario_tecnico=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except ObjectDoesNotExist:
+            return Response(
+                {"error": f"No se encontró la orden de reparación con ID {id_reparacion}."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DjangoValidationError, DRFValidationError) as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output = DiagnosticoOutputSerializer(diagnostico)
+        return Response(
+            {
+                "mensaje": "Diagnóstico técnico registrado exitosamente. La orden transicionó a 'ESPERANDO_CONFIRMACION'.",
+                "diagnostico": output.data,
+                "reparacion": {
+                    "id_reparacion": diagnostico.id_reparacion_id,
+                    "etapa": "ESPERANDO_CONFIRMACION"
+                }
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+    def get(self, request, id_reparacion: int):
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied, NotFound as DRFNotFound, ValidationError as DRFValidationError
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied, ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from workshop_app.selectors import obtener_diagnostico_cliente
+        from workshop_app.serializers import DiagnosticoClienteOutputSerializer
+
+        try:
+            diagnostico = obtener_diagnostico_cliente(
+                usuario_cliente=request.user,
+                id_reparacion=id_reparacion
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: No posee permisos para consultar esta orden."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = DiagnosticoClienteOutputSerializer(diagnostico)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-56: CONSULTAR DIAGNÓSTICO TÉCNICO (CLIENTE)
+# ==============================================================================
+
+class ConsultarDiagnosticoClienteApi(APIView):
+    """
+    CU-56: Consultar Diagnóstico Técnico.
+    Endpoint exclusivo para clientes para consultar el informe técnico emitido
+    sobre su dispositivo, conociendo la falla detectada, repuestos requeridos y presupuesto total.
+    Aplica Seguridad Horizontal estricta (CU-56 Paso 2).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id_reparacion: int):
+        _exigir_rol_cliente(request.user)
+
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied, NotFound as DRFNotFound, ValidationError as DRFValidationError
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied, ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from workshop_app.selectors import obtener_diagnostico_cliente
+        from workshop_app.serializers import DiagnosticoClienteOutputSerializer
+
+        try:
+            diagnostico = obtener_diagnostico_cliente(
+                usuario_cliente=request.user,
+                id_reparacion=id_reparacion
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: No posee permisos para consultar esta orden."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = DiagnosticoClienteOutputSerializer(diagnostico)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-09: CONFIRMAR O RECHAZAR REPARACIÓN (CLIENTE)
+# ==============================================================================
+
+class DecisionReparacionApi(APIView):
+    """
+    CU-09: Confirmar o rechazar reparación.
+    Endpoint para que el cliente acepte o rechace el presupuesto técnico de su equipo.
+    Si acepta: avanza a 'EN_REPARACION' y genera Venta asociada a insumos en estado PENDIENTE.
+    Si rechaza: avanza a 'CANCELADO' y finaliza el ciclo operativo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id_reparacion: int):
+        _exigir_rol_cliente(request.user)
+
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied, NotFound as DRFNotFound, ValidationError as DRFValidationError
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied, ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from workshop_app.serializers import DecisionReparacionInputSerializer
+        from workshop_app.services import procesar_decision_reparacion
+
+        serializer = DecisionReparacionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reparacion = procesar_decision_reparacion(
+                usuario_cliente=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: No posee permisos sobre esta reparación."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        decision = serializer.validated_data['decision']
+        mensaje_exito = (
+            "Presupuesto de reparación aceptado exitosamente. Se ha generado la orden de insumos asociada."
+            if decision == 'ACEPTAR'
+            else "Presupuesto de reparación rechazado. La orden ha sido cancelada."
+        )
+
+        return Response(
+            {
+                "mensaje": mensaje_exito,
+                "reparacion": {
+                    "id_reparacion": reparacion.id_reparacion,
+                    "etapa": reparacion.etapa,
+                    "id_venta": reparacion.id_venta_id
+                }
+            },
+            status=status.HTTP_200_OK
+        )
+

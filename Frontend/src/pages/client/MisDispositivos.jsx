@@ -6,6 +6,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import DispositivoModal from '../../components/devices/DispositivoModal';
+import IniciarReparacionModal from '../../components/devices/IniciarReparacionModal';
 import { resolverUrlImagen } from '../../utils/imagenes';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
@@ -31,10 +32,13 @@ export default function MisDispositivos() {
   const [marcas, setMarcas] = useState([]);
   const [modelos, setModelos] = useState([]);
 
-  // Modal
+  // Modales
   const [modalAbierto, setModalAbierto] = useState(false);
   const [dispositivoEnEdicion, setDispositivoEnEdicion] = useState(null);
   const [aperturaId, setAperturaId] = useState(0);
+
+  const [modalReparacionAbierto, setModalReparacionAbierto] = useState(false);
+  const [dispositivoParaReparar, setDispositivoParaReparar] = useState(null);
 
   // Feedback
   const [errorMessage, setErrorMessage] = useState('');
@@ -394,7 +398,21 @@ export default function MisDispositivos() {
                               </svg>
                             </button>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDispositivoParaReparar(d);
+                                  setModalReparacionAbierto(true);
+                                }}
+                                aria-label={`Iniciar Reparación para ${d.marca} ${d.modelo}`}
+                                title="Iniciar Reparación"
+                                className="w-9 h-9 flex items-center justify-center rounded-lg bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-400 hover:text-cyan-300 border border-cyan-500/30 transition-all hover:shadow-[0_0_12px_rgba(6,182,212,0.3)]"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233l2.844-2.844a2.25 2.25 0 000-3.182l-.84-.84a2.25 2.25 0 00-3.182 0l-2.844 2.844m4.022 4.022l-4.022-4.022" />
+                                </svg>
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => abrirEdicion(d)}
@@ -444,6 +462,21 @@ export default function MisDispositivos() {
         onClose={cerrarModal}
         dispositivoData={dispositivoEnEdicion}
         onSaved={handleGuardado}
+      />
+
+      <IniciarReparacionModal
+        isOpen={modalReparacionAbierto}
+        onClose={() => {
+          setModalReparacionAbierto(false);
+          setDispositivoParaReparar(null);
+        }}
+        dispositivo={dispositivoParaReparar}
+        onSuccess={(resultado) => {
+          setSuccessMessage(
+            `¡Reparación iniciada exitosamente! Orden #${resultado?.id_reparacion} creada. Token de Entrega: ${resultado?.codigo_seguridad}`
+          );
+          setRecarga((n) => n + 1);
+        }}
       />
     </div>
   );

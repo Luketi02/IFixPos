@@ -7,6 +7,9 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import { resolverUrlImagen } from '../../utils/imagenes';
 import { formatearFecha } from '../../utils/fechas';
+import { formatearEstadoReparacion } from '../../utils/repairStatus';
+import IniciarReparacionModal from '../../components/devices/IniciarReparacionModal';
+import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -18,9 +21,12 @@ export default function DispositivoDetalle() {
 
   const [dispositivo, setDispositivo] = useState(null);
   const [cargadoId, setCargadoId] = useState(null);
+  const [recarga, setRecarga] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [modalReparacionAbierto, setModalReparacionAbierto] = useState(false);
 
-  const isLoading = cargadoId !== id_dispositivo;
+  const isLoading = cargadoId !== `${id_dispositivo}-${recarga}`;
 
   // Auto-ocultamiento de errores a los 6 segundos
   useEffect(() => {
@@ -28,6 +34,13 @@ export default function DispositivoDetalle() {
     const timer = setTimeout(() => setErrorMessage(''), 6000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
+
+  // Auto-ocultamiento de mensajes de éxito a los 6 segundos
+  useEffect(() => {
+    if (!successMessage) return undefined;
+    const timer = setTimeout(() => setSuccessMessage(''), 6000);
+    return () => clearTimeout(timer);
+  }, [successMessage]);
 
   useEffect(() => {
     let activo = true;
@@ -56,13 +69,13 @@ export default function DispositivoDetalle() {
         }
       })
       .finally(() => {
-        if (activo) setCargadoId(id_dispositivo);
+        if (activo) setCargadoId(`${id_dispositivo}-${recarga}`);
       });
 
     return () => {
       activo = false;
     };
-  }, [id_dispositivo, token]);
+  }, [id_dispositivo, token, recarga]);
 
   const imagenUrl = resolverUrlImagen(dispositivo?.imagen);
 
@@ -114,7 +127,7 @@ export default function DispositivoDetalle() {
             </Link>
           </div>
 
-          {/* Alerta de Error con fade-out */}
+          {/* Alertas de Feedback */}
           <AnimatePresence>
             {errorMessage && (
               <motion.div
@@ -131,6 +144,27 @@ export default function DispositivoDetalle() {
                   type="button"
                   onClick={() => setErrorMessage('')}
                   className="text-rose-400 hover:text-rose-200 text-xs font-mono"
+                >
+                  ✕
+                </button>
+              </motion.div>
+            )}
+
+            {successMessage && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25 }}
+                role="status"
+                className="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm flex items-start gap-3 shadow-lg shadow-emerald-950/20"
+              >
+                <span className="text-emerald-400 font-bold mt-0.5">✓</span>
+                <span className="flex-1">{successMessage}</span>
+                <button
+                  type="button"
+                  onClick={() => setSuccessMessage('')}
+                  className="text-emerald-400 hover:text-emerald-200 text-xs font-mono"
                 >
                   ✕
                 </button>
@@ -245,53 +279,94 @@ export default function DispositivoDetalle() {
                 </div>
               </div>
 
-              {/* 2. SECCIÓN REPARACIÓN ACTIVA (Destacada con Borde Brillante) */}
-              {dispositivo.reparacion_activa && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.3 }}
-                  className="relative rounded-2xl p-6 sm:p-7 bg-gradient-to-r from-cyan-950/30 via-[#1E293B] to-slate-900 border-2 border-[#06B6D4] shadow-[0_0_30px_rgba(6,182,212,0.18)]"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#06B6D4] animate-ping" />
-                        <span className="text-[11px] font-mono font-bold tracking-wider text-cyan-400 uppercase">
-                          Servicio Técnico en Curso
-                        </span>
+              {/* 2. SECCIÓN REPARACIÓN ACTIVA O INICIAR REPARACIÓN */}
+              {dispositivo.reparacion_activa ? (
+                <div className="space-y-4">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.3 }}
+                    className="relative rounded-2xl p-6 sm:p-7 bg-gradient-to-r from-cyan-950/30 via-[#1E293B] to-slate-900 border-2 border-[#06B6D4] shadow-[0_0_30px_rgba(6,182,212,0.18)]"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#06B6D4] animate-ping" />
+                          <span className="text-[11px] font-mono font-bold tracking-wider text-cyan-400 uppercase">
+                            Servicio Técnico en Curso
+                          </span>
+                        </div>
+                        <h2 className="text-xl font-black text-white">
+                          Orden #{dispositivo.reparacion_activa.id_reparacion}
+                        </h2>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 font-mono font-semibold">
+                            {formatearEstadoReparacion(dispositivo.reparacion_activa.etapa)}
+                          </span>
+                          <span className="text-slate-400 font-mono">
+                            Iniciada el {formatearFecha(dispositivo.reparacion_activa.fecha_inicio)}
+                          </span>
+                        </div>
+                        {dispositivo.reparacion_activa.desc_cliente && (
+                          <p className="text-xs text-slate-300 mt-2 italic bg-slate-950/40 p-3 rounded-xl border border-slate-800">
+                            &ldquo;{dispositivo.reparacion_activa.desc_cliente}&rdquo;
+                          </p>
+                        )}
                       </div>
-                      <h2 className="text-xl font-black text-white">
-                        Orden #{dispositivo.reparacion_activa.id_reparacion}
-                      </h2>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 font-mono font-semibold">
-                          {dispositivo.reparacion_activa.etapa}
-                        </span>
-                        <span className="text-slate-400 font-mono">
-                          Iniciada el {formatearFecha(dispositivo.reparacion_activa.fecha_inicio)}
-                        </span>
-                      </div>
-                      {dispositivo.reparacion_activa.desc_cliente && (
-                        <p className="text-xs text-slate-300 mt-2 italic bg-slate-950/40 p-3 rounded-xl border border-slate-800">
-                          &ldquo;{dispositivo.reparacion_activa.desc_cliente}&rdquo;
-                        </p>
-                      )}
-                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(`/cliente/reparaciones/${dispositivo.reparacion_activa.id_reparacion}`)
-                      }
-                      className="px-5 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] shrink-0 self-start sm:self-center flex items-center gap-2"
-                    >
-                      <span>Ver Estado de Reparación</span>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-                      </svg>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate(`/cliente/reparaciones/${dispositivo.reparacion_activa.id_reparacion}`)
+                        }
+                        className="px-5 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] shrink-0 self-start sm:self-center flex items-center gap-2"
+                      >
+                        <span>Ver Estado de Reparación</span>
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                        </svg>
+                      </button>
+                    </div>
+                  </motion.div>
+
+                  {/* Cápsula de orientación y próximos pasos según el estado técnico */}
+                  <CapsulaGuiaReparacion
+                    etapa={dispositivo.reparacion_activa.etapa}
+                    codigoSeguridad={dispositivo.reparacion_activa.codigo_sec}
+                  />
+                </div>
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="rounded-2xl p-6 sm:p-7 bg-gradient-to-r from-slate-900 via-[#1E293B] to-slate-900 border border-slate-700/80 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-5"
+                >
+                  <div className="space-y-1.5 text-center sm:text-left">
+                    <div className="flex items-center justify-center sm:justify-start gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-[11px] font-mono font-bold tracking-wider text-emerald-400 uppercase">
+                        Dispositivo Disponible • Sin Reparaciones Activas
+                      </span>
+                    </div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">
+                      ¿Este equipo requiere servicio técnico o diagnóstico?
+                    </h2>
+                    <p className="text-xs text-slate-300 max-w-xl">
+                      Inicia una nueva orden de servicio para registrar fallas, síntomas y obtener el Código de Seguridad (Token de Entrega) indispensable para presentar en el taller.
+                    </p>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setModalReparacionAbierto(true)}
+                    className="px-6 py-3.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold transition-all shadow-[0_0_25px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] shrink-0 flex items-center gap-2 cursor-pointer"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233l2.844-2.844a2.25 2.25 0 000-3.182l-.84-.84a2.25 2.25 0 00-3.182 0l-2.844 2.844m4.022 4.022l-4.022-4.022" />
+                    </svg>
+                    <span>Iniciar Reparación</span>
+                  </button>
                 </motion.div>
               )}
 
@@ -324,7 +399,7 @@ export default function DispositivoDetalle() {
                               Orden #{rep.id_reparacion}
                             </span>
                             <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono">
-                              {rep.etapa}
+                              {formatearEstadoReparacion(rep.etapa)}
                             </span>
                           </div>
 
@@ -375,6 +450,19 @@ export default function DispositivoDetalle() {
           )}
         </main>
       </div>
+
+      {/* Modal Iniciar Reparación */}
+      <IniciarReparacionModal
+        isOpen={modalReparacionAbierto}
+        onClose={() => setModalReparacionAbierto(false)}
+        dispositivo={dispositivo}
+        onSuccess={(resultado) => {
+          setSuccessMessage(
+            `¡Reparación iniciada exitosamente! Orden #${resultado?.id_reparacion} creada. Token de Entrega: ${resultado?.codigo_seguridad}`
+          );
+          setRecarga((n) => n + 1);
+        }}
+      />
     </div>
   );
 }
