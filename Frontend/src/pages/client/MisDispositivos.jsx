@@ -130,6 +130,10 @@ export default function MisDispositivos() {
   };
 
   const abrirEdicion = (dispositivo) => {
+    if (!dispositivo.editable) {
+      setErrorMessage('La edición está prohibida: el dispositivo ya posee historial técnico o se encuentra en proceso de reparación.');
+      return;
+    }
     setDispositivoEnEdicion(dispositivo);
     setAperturaId((n) => n + 1);
     setModalAbierto(true);
@@ -416,9 +420,18 @@ export default function MisDispositivos() {
                               <button
                                 type="button"
                                 onClick={() => abrirEdicion(d)}
+                                disabled={!d.editable}
                                 aria-label={`Editar ${d.marca} ${d.modelo}`}
-                                title="Editar"
-                                className="w-9 h-9 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-[#8B5CF6]/20 text-slate-300 hover:text-[#C4B5FD] border border-slate-700 hover:border-[#8B5CF6]/50 transition-all"
+                                title={
+                                  d.editable
+                                    ? `Editar ${d.marca} ${d.modelo}`
+                                    : 'Edición prohibida: el equipo posee historial técnico o se encuentra en proceso de reparación'
+                                }
+                                className={`w-9 h-9 flex items-center justify-center rounded-lg border transition-all ${
+                                  d.editable
+                                    ? 'bg-slate-800 hover:bg-[#8B5CF6]/20 text-slate-300 hover:text-[#C4B5FD] border-slate-700 hover:border-[#8B5CF6]/50 cursor-pointer shadow-sm'
+                                    : 'bg-slate-900/60 text-slate-600 border-slate-800/80 cursor-not-allowed opacity-40'
+                                }`}
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                                   <path

@@ -27,6 +27,7 @@ const extraerMensajeError = (err, porDefecto) => {
 export default function DispositivoModal({ isOpen, onClose, dispositivoData = null, onSaved }) {
   const { user, token } = useAuth();
   const esEdicion = Boolean(dispositivoData);
+  const noEsEditable = esEdicion && dispositivoData?.editable === false;
 
   // Catálogos
   const [tipos, setTipos] = useState([]);
@@ -201,6 +202,11 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
     e.preventDefault();
     setErrorMessage('');
 
+    if (noEsEditable) {
+      setErrorMessage('La edición está prohibida: este dispositivo ya posee historial técnico o se encuentra en proceso de reparación.');
+      return;
+    }
+
     const errorValidacion = validar();
     if (errorValidacion) {
       setErrorMessage(errorValidacion);
@@ -340,6 +346,19 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {/* Alerta si el dispositivo no es editable */}
+              {noEsEditable && (
+                <div className="p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/40 text-violet-200 text-xs flex items-start gap-3">
+                  <span className="text-violet-400 font-bold mt-px text-sm">🔒</span>
+                  <div className="flex-1">
+                    <p className="font-semibold text-violet-100">Edición Prohibida</p>
+                    <p className="mt-0.5 text-violet-300">
+                      Este dispositivo posee historial técnico o se encuentra en proceso de reparación. Por normativas de auditoría no puede ser modificado.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Tipo / Marca / Modelo */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -598,8 +617,8 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting || isLoadingCatalogs}
-                  className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={isSubmitting || isLoadingCatalogs || noEsEditable}
+                  className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? 'Guardando...' : esEdicion ? 'Guardar Cambios' : 'Registrar Dispositivo'}
                 </button>

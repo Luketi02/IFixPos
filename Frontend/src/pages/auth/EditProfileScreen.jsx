@@ -35,6 +35,7 @@ export default function EditProfileScreen() {
   const [successMsg, setSuccessMsg] = useState('');
   const [menuSwitchAbierto, setMenuSwitchAbierto] = useState(false);
   const [cambiandoSesionDev, setCambiandoSesionDev] = useState(false);
+  const [isDraggingAvatar, setIsDraggingAvatar] = useState(false);
 
   // Conmutador rápido de sesión de prueba
   const handleCambiarSesion = async (rolDestino) => {
@@ -60,9 +61,8 @@ export default function EditProfileScreen() {
     }
   };
 
-  // Subir imagen física desde el explorador del dispositivo
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
+  // Procesar archivo de imagen física (vía input o drop)
+  const procesarArchivoFoto = async (file) => {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
@@ -97,11 +97,23 @@ export default function EditProfileScreen() {
       setFormData((prev) => ({ ...prev, foto_perfil: urlServidor }));
     } catch (err) {
       console.error('Error al subir imagen de perfil:', err);
-      // Mantenemos la vista previa si no hubo respuesta del servidor
     } finally {
       setIsUploadingPhoto(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    await procesarArchivoFoto(file);
+  };
+
+  const handleDropAvatar = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingAvatar(false);
+    const file = e.dataTransfer?.files?.[0];
+    await procesarArchivoFoto(file);
   };
 
   // Auto-ocultar errores tras 6 segundos según las reglas del proyecto
@@ -519,7 +531,16 @@ export default function EditProfileScreen() {
                 onChange={handleFileUpload}
               />
 
-              <div className="flex flex-col sm:flex-row items-center gap-6 p-5 rounded-xl bg-slate-900/60 border border-slate-700/50">
+              <div
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingAvatar(true); }}
+                onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingAvatar(false); }}
+                onDrop={handleDropAvatar}
+                className={`flex flex-col sm:flex-row items-center gap-6 p-5 rounded-xl border transition-all ${
+                  isDraggingAvatar
+                    ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-400/50 scale-[1.01]'
+                    : 'bg-slate-900/60 border-slate-700/50'
+                }`}
+              >
                 {/* Previsualización */}
                 <div className="relative shrink-0">
                   {formData.foto_perfil ? (

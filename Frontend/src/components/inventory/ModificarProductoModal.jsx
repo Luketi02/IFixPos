@@ -44,6 +44,16 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
   const [guardandoNuevaCategoria, setGuardandoNuevaCategoria] = useState(false);
   const [errorNuevaCategoria, setErrorNuevaCategoria] = useState('');
 
+  // Estados para el sub-modal de creación rápida de nueva marca al vuelo
+  const [modalNuevaMarcaAbierto, setModalNuevaMarcaAbierto] = useState(false);
+  const [nuevaMarcaNombre, setNuevaMarcaNombre] = useState('');
+  const [guardandoNuevaMarca, setGuardandoNuevaMarca] = useState(false);
+  const [errorNuevaMarca, setErrorNuevaMarca] = useState('');
+
+  // Estados visuales para Drag & Drop de imágenes
+  const [isDraggingPortada, setIsDraggingPortada] = useState(false);
+  const [isDraggingGaleria, setIsDraggingGaleria] = useState(false);
+
   // Referencias a inputs de archivo ocultos
   const inputPortadaRef = useRef(null);
   const inputGaleriaRef = useRef(null);
@@ -88,6 +98,13 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     const t = setTimeout(() => setErrorNuevaCategoria(''), 6000);
     return () => clearTimeout(t);
   }, [errorNuevaCategoria]);
+
+  // Auto-ocultar error de creación de nueva marca tras 6 segundos (Regla 6)
+  useEffect(() => {
+    if (!errorNuevaMarca) return undefined;
+    const t = setTimeout(() => setErrorNuevaMarca(''), 6000);
+    return () => clearTimeout(t);
+  }, [errorNuevaMarca]);
 
   // Cargar dependencias y datos del producto al abrir el modal
   useEffect(() => {
@@ -297,6 +314,61 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     }
   };
 
+  // Abrir sub-modal para crear una nueva marca al vuelo
+  const abrirModalNuevaMarca = () => {
+    setNuevaMarcaNombre('');
+    setErrorNuevaMarca('');
+    setModalNuevaMarcaAbierto(true);
+  };
+
+  // Guardar nueva marca en la BD y seleccionarla de inmediato
+  const handleCrearNuevaMarca = async (e) => {
+    if (e) e.preventDefault();
+    const nombreLimpio = nuevaMarcaNombre.trim();
+    if (!nombreLimpio) {
+      setErrorNuevaMarca('El nombre de la marca es obligatorio.');
+      return;
+    }
+
+    setGuardandoNuevaMarca(true);
+    setErrorNuevaMarca('');
+
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/catalog/marcas/`,
+        { nombre: nombreLimpio },
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      );
+
+      const marcaCreada = res.data?.marca || res.data;
+      const nuevoIdMarca = String(marcaCreada.id_marca);
+
+      setMarcas((prev) => {
+        const existe = prev.some((m) => String(m.id_marca) === nuevoIdMarca);
+        if (existe) {
+          return prev.map((m) => (String(m.id_marca) === nuevoIdMarca ? { ...m, ...marcaCreada, estado_activo: true } : m));
+        }
+        return [...prev, marcaCreada];
+      });
+
+      setFormData((prev) => ({
+        ...prev,
+        id_marca: nuevoIdMarca
+      }));
+
+      setModalNuevaMarcaAbierto(false);
+    } catch (err) {
+      console.error('Error al registrar nueva marca:', err);
+      const dataErr = err.response?.data;
+      const msg = typeof dataErr === 'string'
+        ? dataErr
+        : dataErr?.error || dataErr?.detail || dataErr?.nombre?.[0] || 'Error al guardar la nueva marca.';
+      setErrorNuevaMarca(msg);
+    } finally {
+      setGuardandoNuevaMarca(false);
+    }
+  };
+
   // Abrir sub-modal para crear un nuevo modelo vinculado a la marca seleccionada
   const abrirModalNuevoModelo = () => {
     if (!formData.id_marca) {
@@ -451,6 +523,64 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     } finally {
       setSubiendoGaleria(false);
       if (inputGaleriaRef.current) inputGaleriaRef.current.value = '';
+    }
+  };
+
+  // Handlers para Drag & Drop de Portada Principal
+  const handleDropPortada = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingPortada(false);
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (!file.type.startsWith('image/')) {
+      setErrorMessage('El archivo soltado debe ser una imagen válida (JPG, PNG, WebP).');
+      return;
+    }
+    setSubiendoPortada(true);
+    setErrorMessage('');
+    try {
+      const urlSubida = await subirArchivoServidor(file);
+      if (urlSubida) {
+        setFormData((prev) => ({ ...prev, imagen_principal: urlSubida }));
+      }
+    } catch (err) {
+      console.error('Error al subir imagen de portada arrastrada:', err);
+      const msg = err.response?.data?.error || 'Error al subir la imagen. Verifique que sea menor a 5MB y formato válido.';
+      setErrorMessage(msg);
+    } finally {
+      setSubiendoPortada(false);
+    }
+  };
+
+  // Handlers para Drag & Drop de Galería Complementaria
+  const handleDropGaleria = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingGaleria(false);
+    const droppedFiles = Array.from(e.dataTransfer?.files || []).filter((f) => f.type.startsWith('image/'));
+    if (droppedFiles.length === 0) {
+      setErrorMessage('No se encontraron imágenes válidas para añadir a la galería.');
+      return;
+    }
+    setSubiendoGaleria(true);
+    setErrorMessage('');
+    try {
+      const urlsNuevas = [];
+      for (const file of droppedFiles) {
+        const url = await subirArchivoServidor(file);
+        if (url) urlsNuevas.push(url);
+      }
+      setFormData((prev) => ({
+        ...prev,
+        imagenes: [...prev.imagenes, ...urlsNuevas]
+      }));
+    } catch (err) {
+      console.error('Error al subir imágenes arrastradas a galería:', err);
+      setErrorMessage('Ocurrió un error al procesar las imágenes soltadas.');
+    } finally {
+      setSubiendoGaleria(false);
     }
   };
 
@@ -890,15 +1020,37 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
 
                       {/* Marca Comercial */}
                       <div className="space-y-1.5">
-                        <label htmlFor="edit-id-marca-producto" className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                          <span>Marca Comercial</span>
-                          <span className="text-[10px] text-slate-500 font-mono">Opcional</span>
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label htmlFor="edit-id-marca-producto" className="text-xs font-semibold text-slate-300">
+                            Marca Comercial
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={abrirModalNuevaMarca}
+                              className="text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors text-cyan-400 hover:text-cyan-300 hover:underline active:scale-95"
+                              title="Registrar y vincular una nueva marca comercial al vuelo"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              <span>Nueva Marca</span>
+                            </button>
+                            <span className="text-[10px] text-slate-500 font-mono">Opcional</span>
+                          </div>
+                        </div>
                         <select
                           id="edit-id-marca-producto"
                           name="id_marca"
                           value={formData.id_marca}
-                          onChange={handleCambiarMarca}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === '__crear_nueva_marca__') {
+                              abrirModalNuevaMarca();
+                              return;
+                            }
+                            handleCambiarMarca(e);
+                          }}
                           className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
                         >
                           <option value="">Sin marca / Genérico</option>
@@ -1192,8 +1344,17 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                       </div>
 
                       {formData.imagen_principal ? (
-                        /* Vista previa de Portada Cargada */
-                        <div className="relative group rounded-xl overflow-hidden border border-cyan-500/40 bg-slate-950 p-2 flex items-center gap-4">
+                        /* Vista previa de Portada Cargada con soporte Drag & Drop */
+                        <div
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingPortada(true); }}
+                          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingPortada(false); }}
+                          onDrop={handleDropPortada}
+                          className={`relative group rounded-xl overflow-hidden border p-2 flex items-center gap-4 transition-all ${
+                            isDraggingPortada
+                              ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-400/50 scale-[1.01]'
+                              : 'border-cyan-500/40 bg-slate-950'
+                          }`}
+                        >
                           <div className="w-24 h-24 rounded-lg overflow-hidden bg-slate-900 shrink-0 border border-slate-700">
                             <img
                               src={normalizarUrlImagen(formData.imagen_principal)}
@@ -1210,7 +1371,7 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                               <span className="text-xs text-slate-400">Archivo guardado en el servidor</span>
                             </div>
                             <p className="text-xs text-slate-300">
-                              Esta imagen representará al producto en las vistas compactas y en la tienda.
+                              Esta imagen representará al producto en las vistas compactas y en la tienda. Puedes soltar otra imagen encima para reemplazarla.
                             </p>
                             <div className="flex items-center gap-2 pt-1">
                               <button
@@ -1233,10 +1394,17 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                           </div>
                         </div>
                       ) : (
-                        /* Zona de carga si no hay portada */
+                        /* Zona de carga y Drag & Drop si no hay portada */
                         <div
                           onClick={() => inputPortadaRef.current?.click()}
-                          className="border-2 border-dashed border-slate-700 hover:border-cyan-500/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer bg-slate-950/40 hover:bg-slate-900/50 transition-all group"
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingPortada(true); }}
+                          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingPortada(false); }}
+                          onDrop={handleDropPortada}
+                          className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all group ${
+                            isDraggingPortada
+                              ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-400/50 scale-[1.01]'
+                              : 'border-slate-700 hover:border-cyan-500/60 bg-slate-950/40 hover:bg-slate-900/50'
+                          }`}
                         >
                           {subiendoPortada ? (
                             <div className="flex flex-col items-center gap-2 py-2">
@@ -1255,10 +1423,10 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                               </div>
                               <div className="text-center">
                                 <span className="text-xs font-semibold text-slate-200 group-hover:text-cyan-300 block transition-colors">
-                                  Cargar foto de portada desde el dispositivo
+                                  {isDraggingPortada ? '¡Suelta la imagen de portada aquí!' : 'Cargar foto de portada desde el dispositivo'}
                                 </span>
                                 <span className="text-[11px] text-slate-500">
-                                  Haz clic para seleccionar un archivo (JPG, PNG, WebP hasta 5MB)
+                                  Arrastra y suelta un archivo aquí, o haz clic para seleccionar (JPG, PNG, WebP hasta 5MB)
                                 </span>
                               </div>
                             </>
@@ -1268,14 +1436,23 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                     </div>
 
                     {/* 2. Galería Complementaria */}
-                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-3">
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingGaleria(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingGaleria(false); }}
+                      onDrop={handleDropGaleria}
+                      className={`p-4 rounded-xl bg-slate-900/60 border transition-all ${
+                        isDraggingGaleria
+                          ? 'border-purple-400 bg-purple-950/30 ring-2 ring-purple-400/50'
+                          : 'border-slate-700/60'
+                      }`}
+                    >
                       <div className="flex items-center justify-between">
                         <div>
                           <span className="text-xs font-mono uppercase tracking-wider text-purple-400 font-semibold block">
                             Galería Complementaria
                           </span>
                           <span className="text-[10px] text-slate-400">
-                            Se exhibirán en el carrusel de especificaciones de la vista expandida
+                            Se exhibirán en el carrusel de especificaciones de la vista expandida (admite arrastrar y soltar varias fotos)
                           </span>
                         </div>
                         <button
@@ -1305,7 +1482,7 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
 
                       {/* Grilla de Miniaturas de la Galería */}
                       {formData.imagenes && formData.imagenes.length > 0 ? (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 pt-1">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 pt-2">
                           {formData.imagenes.map((urlImg, idx) => (
                             <div
                               key={idx}
@@ -1336,9 +1513,15 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                           ))}
                         </div>
                       ) : (
-                        <div className="p-4 rounded-xl border border-dashed border-slate-800 bg-slate-950/30 text-center">
-                          <p className="text-xs text-slate-400">
-                            Aún no has agregado fotos adicionales a la galería.
+                        <div
+                          onClick={() => inputGaleriaRef.current?.click()}
+                          className="p-5 rounded-xl border border-dashed border-slate-800 hover:border-purple-500/50 bg-slate-950/30 text-center cursor-pointer transition-all"
+                        >
+                          <p className="text-xs text-slate-300 font-medium">
+                            {isDraggingGaleria ? '¡Suelta tus imágenes aquí para añadirlas a la galería!' : 'Arrastra y suelta imágenes aquí o haz clic para agregar a la galería'}
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            Puedes seleccionar varios archivos simultáneamente (JPG, PNG, WebP)
                           </p>
                         </div>
                       )}
@@ -1738,6 +1921,114 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                           </>
                         ) : (
                           <span>Crear y Asignar</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* Sub-Modal para Agregar Nueva Marca al Vuelo */}
+          <AnimatePresence>
+            {modalNuevaMarcaAbierto && (
+              <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-3 sm:p-4">
+                {/* Backdrop oscuro con desenfoque */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => !guardandoNuevaMarca && setModalNuevaMarcaAbierto(false)}
+                  className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm"
+                />
+
+                {/* Contenedor del Sub-Modal */}
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="relative w-full max-w-md bg-[#1E293B] border border-cyan-500/40 rounded-2xl shadow-2xl shadow-cyan-950/60 p-6 z-10 space-y-4"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-bold">
+                        🏷️
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white tracking-tight">Nueva Marca Comercial</h3>
+                        <p className="text-[11px] text-slate-400">Registrar y vincular al producto actual</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={guardandoNuevaMarca}
+                      onClick={() => setModalNuevaMarcaAbierto(false)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Alerta de Error en Sub-Modal */}
+                  <AnimatePresence>
+                    {errorNuevaMarca && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>{errorNuevaMarca}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <form onSubmit={handleCrearNuevaMarca} className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        Nombre de la Marca <span className="text-cyan-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={nuevaMarcaNombre}
+                        onChange={(e) => setNuevaMarcaNombre(e.target.value)}
+                        placeholder="Ej. Apple, Samsung, Xiaomi, Motorola, Sony..."
+                        autoFocus
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-700/60">
+                      <button
+                        type="button"
+                        disabled={guardandoNuevaMarca}
+                        onClick={() => setModalNuevaMarcaAbierto(false)}
+                        className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={guardandoNuevaMarca || !nuevaMarcaNombre.trim()}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 text-slate-950 font-bold text-xs hover:from-cyan-400 hover:to-violet-500 transition-all shadow-md shadow-cyan-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                      >
+                        {guardandoNuevaMarca ? (
+                          <>
+                            <svg className="animate-spin w-3.5 h-3.5 text-slate-950" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                            <span>Guardando...</span>
+                          </>
+                        ) : (
+                          <span>Crear y Vincular</span>
                         )}
                       </button>
                     </div>

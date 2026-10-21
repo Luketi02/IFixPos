@@ -367,8 +367,8 @@ class DispositivoListOutputSerializer(serializers.Serializer):
     editable = serializers.SerializerMethodField()
 
     def get_editable(self, obj):
-        # CU-07: un equipo con historial técnico no puede editarse.
-        return not obj.reparacion_set.all()
+        # CU-07: un equipo con historial técnico o en proceso de reparación no puede editarse.
+        return not obj.reparacion_set.exists()
 
 
 class DispositivoUpdateInputSerializer(serializers.Serializer):

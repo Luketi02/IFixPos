@@ -56,8 +56,8 @@ class MarcaApi(APIView):
     def _verificar_admin(self, user):
         rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
         codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
-        if codigo_rol != 'ADMIN':
-            raise PermissionDenied("Se requiere rol de Administrador para gestionar marcas.")
+        if codigo_rol not in ['ADMIN', 'TECNICO']:
+            raise PermissionDenied("Se requiere rol de Administrador o Técnico para gestionar marcas.")
 
     def get(self, request):
         from .selectors import obtener_todas_marcas
