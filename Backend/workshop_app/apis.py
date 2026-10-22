@@ -831,3 +831,166 @@ class CambiarEstadoReparacionApi(APIView):
         )
 
 
+# ==============================================================================
+# CU-46: Entregar Dispositivo (Endpoint HTTP)
+# ==============================================================================
+
+class EntregarDispositivoApi(APIView):
+    """
+    CU-46: Entregar Dispositivo.
+    Permite al personal del taller (Técnicos o Administradores) registrar formalmente
+    la entrega física del dispositivo al cliente, verificando código de seguridad o DNI,
+    inexistencia de saldos deudores y transicionando el estado a ENTREGADO de forma inmutable.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_taller(request.user)
+
+        from workshop_app.selectors import buscar_reparacion_para_entrega
+        from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
+        from sales_app.services import _calcular_total_operacion
+
+        codigo = request.query_params.get('codigo_seguridad') or request.query_params.get('token')
+        dni = request.query_params.get('dni_cliente') or request.query_params.get('dni')
+
+        if not codigo and not dni:
+            return Response(
+                {"error": "Debe especificar el código de seguridad o el DNI del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            reparacion = buscar_reparacion_para_entrega(
+                usuario_ejecutor=request.user,
+                codigo_seguridad=codigo,
+                dni_cliente=dni
+            )
+        except DRFPermissionDenied as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Extraer datos de cliente, dispositivo y estado financiero
+        disp = reparacion.id_dispositivo
+        cliente = getattr(reparacion, 'id_usuario', None) or (getattr(disp, 'id_usuario', None) if disp else None)
+        cliente_nombre = "Cliente"
+        cliente_dni = ""
+        cliente_email = ""
+        if cliente:
+            cliente_email = cliente.email or ""
+            perfil = getattr(cliente, 'perfilusuario', None)
+            if perfil:
+                cliente_nombre = f"{perfil.nombre or ''} {perfil.apellido or ''}".strip() or cliente_email
+                cliente_dni = perfil.dni or ""
+            else:
+                cliente_nombre = cliente_email
+
+        # Comprobar deuda pendiente
+        etapa_limpia = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+        venta_vinculada = getattr(reparacion, 'id_venta', None)
+        total_costo = _calcular_total_operacion(reparacion)
+
+        saldo_pendiente = "0.00"
+        if etapa_limpia == 'PAGADO':
+            saldo_pendiente = "0.00"
+        elif venta_vinculada and str(venta_vinculada.estado_venta).strip().upper() == 'PAGADO':
+            saldo_pendiente = "0.00"
+        else:
+            saldo_pendiente = str(total_costo)
+
+        disp_marca = ""
+        disp_modelo = ""
+        disp_imagen = ""
+        disp_serie = ""
+        if disp:
+            disp_serie = disp.numero_serie or ""
+            disp_imagen = disp.imagen or ""
+            if disp.id_modelo:
+                disp_modelo = disp.id_modelo.nombre or ""
+                if disp.id_modelo.id_marca:
+                    disp_marca = disp.id_modelo.id_marca.nombre or ""
+
+        return Response(
+            {
+                "id_reparacion": reparacion.id_reparacion,
+                "codigo_seguridad": reparacion.codigo_sec or "",
+                "etapa": reparacion.etapa,
+                "fecha_inicio": str(reparacion.fecha_inicio),
+                "cliente": {
+                    "nombre": cliente_nombre,
+                    "dni": cliente_dni,
+                    "email": cliente_email
+                },
+                "dispositivo": {
+                    "id_dispositivo": getattr(disp, 'id_dispositivo', None),
+                    "marca": disp_marca,
+                    "modelo": disp_modelo,
+                    "serie": disp_serie,
+                    "imagen": disp_imagen
+                },
+                "saldo_pendiente": saldo_pendiente,
+                "total_costo": str(total_costo)
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        _exigir_rol_taller(request.user)
+
+
+        from workshop_app.serializers import EntregarDispositivoInputSerializer
+        from workshop_app.services import entregar_dispositivo_cliente
+        from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
+
+        serializer = EntregarDispositivoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reparacion = entregar_dispositivo_cliente(
+                usuario_tecnico=request.user,
+                datos_validados=serializer.validated_data
+            )
+        except DRFPermissionDenied as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": "Equipo entregado con éxito.",
+                "id_reparacion": reparacion.id_reparacion,
+                "etapa": reparacion.etapa,
+                "fecha_entrega": str(reparacion.fecha_entrega)
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+

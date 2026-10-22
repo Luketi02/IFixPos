@@ -7,6 +7,8 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import NuevaReparacionTaller from '../../components/workshop/NuevaReparacionTaller';
 import RecepcionarDispositivo from '../../components/workshop/RecepcionarDispositivo';
+import CompletarPago from '../../components/workshop/CompletarPago';
+import EntregarDispositivo from '../../components/workshop/EntregarDispositivo';
 import ReparacionesEnCurso from '../../components/workshop/ReparacionesEnCurso';
 import CyberNumberInput from '../../components/common/CyberNumberInput';
 
@@ -22,6 +24,8 @@ export default function TechnicianModuleScreen({ forcedModule }) {
     if (currentPath.includes('/dispositivos/nueva-reparacion')) activeModule = 'nueva-reparacion';
     else if (currentPath.includes('/dispositivos/en-curso')) activeModule = 'en-curso';
     else if (currentPath.includes('/dispositivos/finalizadas')) activeModule = 'finalizadas';
+    else if (currentPath.includes('/caja/cobros')) activeModule = 'cobros';
+    else if (currentPath.includes('/caja/entregar-dispositivo')) activeModule = 'entregar-dispositivo';
     else if (currentPath.includes('/caja/registrar-compra')) activeModule = 'registrar-compra';
     else if (currentPath.includes('/caja/recepcionar-dispositivo')) activeModule = 'recepcionar-dispositivo';
     else if (currentPath.includes('/insumos/recepcionar-compra')) activeModule = 'recepcionar-compra';
@@ -33,10 +37,14 @@ export default function TechnicianModuleScreen({ forcedModule }) {
     'nueva-reparacion': 'tech-repairs-new',
     'en-curso': 'tech-repairs-ongoing',
     'finalizadas': 'tech-repairs-finished',
+    'cobros': 'tech-cash-charges',
+    'entregar-dispositivo': 'tech-cash-deliver-device',
     'registrar-compra': 'tech-cash-purchase',
     'recepcionar-dispositivo': 'tech-cash-receive-device',
     'recepcionar-compra': 'tech-supplies-receive'
   };
+
+
 
   // Estados generales
   const [alerta, setAlerta] = useState(null);
@@ -288,6 +296,25 @@ export default function TechnicianModuleScreen({ forcedModule }) {
               <RecepcionarDispositivo onAlerta={dispararAlerta} />
             </motion.div>
           )}
+
+          {/* ========================================================================= */}
+          {/* CASO: CAJA - COMPLETAR PAGO / COBROS (CU-21 & CU-20)                      */}
+          {/* ========================================================================= */}
+          {activeModule === 'cobros' && (
+            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+              <CompletarPago onAlerta={dispararAlerta} />
+            </motion.div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* CASO: CAJA - ENTREGAR DISPOSITIVO (CU-46)                                 */}
+          {/* ========================================================================= */}
+          {activeModule === 'entregar-dispositivo' && (
+            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+              <EntregarDispositivo onAlerta={dispararAlerta} />
+            </motion.div>
+          )}
+
 
 
           {/* ========================================================================= */}

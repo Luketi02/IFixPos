@@ -141,6 +141,12 @@ export const TECH_MENU_ITEMS = [
     label: '💰 Caja',
     children: [
       {
+        value: 'tech-cash-charges',
+        label: 'Cobrar Operación',
+        icon: Coins01Icon,
+        route: '/tecnico/caja/cobros'
+      },
+      {
         value: 'tech-cash-purchase',
         label: 'Registrar compra',
         icon: Coins01Icon,
@@ -151,9 +157,17 @@ export const TECH_MENU_ITEMS = [
         label: 'Recepcionar dispositivo',
         icon: SmartPhone01Icon,
         route: '/tecnico/caja/recepcionar-dispositivo'
+      },
+      {
+        value: 'tech-cash-deliver-device',
+        label: 'Entregar Dispositivo',
+        icon: CheckmarkCircle01Icon,
+        route: '/tecnico/caja/entregar-dispositivo'
       }
     ]
   },
+
+
   {
     label: '📦 Insumos',
     children: [

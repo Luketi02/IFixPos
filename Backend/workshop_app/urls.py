@@ -17,10 +17,12 @@ from .apis import (
     DecisionReparacionApi,
     CambiarEstadoReparacionApi,
     CategoriaReparacionApi,
-    CategoriaReparacionEstadoApi
+    CategoriaReparacionEstadoApi,
+    EntregarDispositivoApi
 )
 
 app_name = 'workshop_app'
+
 
 urlpatterns = [
     # Catálogos de dispositivos para selects del Frontend (CU-06)
@@ -68,5 +70,9 @@ urlpatterns = [
     # CU-62, CU-63, CU-64: Categorías de Reparación
     path('categorias-reparacion/', CategoriaReparacionApi.as_view(), name='categorias-reparacion'),
     path('categorias-reparacion/<int:id_categoria>/estado/', CategoriaReparacionEstadoApi.as_view(), name='cambiar-estado-categoria-reparacion'),
+
+    # CU-46: Entregar Dispositivo
+    path('reparaciones/entregar/', EntregarDispositivoApi.as_view(), name='entregar-dispositivo'),
 ]
+
 

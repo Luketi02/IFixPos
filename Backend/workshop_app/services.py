@@ -1,7 +1,9 @@
 from typing import Any
+from decimal import Decimal
 import os
 import secrets
 import string
+
 from django.conf import settings
 from django.utils import timezone as django_timezone
 from django.db import transaction
@@ -1066,12 +1068,19 @@ def procesar_decision_reparacion(
             DetalleInsumoReparacion.objects.filter(id_reparacion=reparacion).select_related('id_producto')
         )
 
-        # Calcular monto subtotal de insumos
+        # Calcular monto subtotal: Insumos presupuestados + Mano de obra técnica del diagnóstico
         monto_subtotal = Decimal('0.00')
         for insumo in insumos_presupuestados:
             precio = Decimal(str(insumo.precio_unitario or 0))
             cant = Decimal(str(insumo.cantidad or 0))
             monto_subtotal += precio * cant
+
+        # Sumar costo de mano de obra técnica del diagnóstico
+        costo_mano_obra = Decimal('0.00')
+        diag = reparacion.diagnostico_set.order_by('-id_diagnostico').first()
+        if diag and diag.costo_diagnostico:
+            costo_mano_obra = Decimal(str(diag.costo_diagnostico))
+        monto_subtotal += costo_mano_obra
 
         # Resolver método de entrega y costo de envío
         metodo_entrega = str(datos_validados.get('metodo_entrega') or 'RETIRO').strip().upper()
@@ -1540,5 +1549,128 @@ def cambiar_estado_reparacion(
     )
 
     return reparacion
+
+
+# ==============================================================================
+# CU-46: Entregar Dispositivo (Transacción Cierre, Deuda y Bitácora)
+# ==============================================================================
+
+def generar_y_enviar_comprobante_entrega(reparacion: Reparacion):
+    """
+    Función auxiliar (stub/servicio) de CU-46 para emitir y notificar el cierre
+    definitivo de la reparación junto con el comprobante de entrega y certificado de garantía.
+    """
+    cliente = getattr(reparacion, 'id_usuario', None)
+    if not cliente and hasattr(reparacion, 'id_dispositivo') and reparacion.id_dispositivo:
+        cliente = getattr(reparacion.id_dispositivo, 'id_usuario', None)
+
+    email_cliente = getattr(cliente, 'email', None) if cliente else None
+    disp_nombre = str(reparacion.id_dispositivo) if reparacion.id_dispositivo else 'Equipo'
+
+    # Stub: Registrar traza y preparar correo con garantía
+    if email_cliente:
+        try:
+            from core_app.services import registrar_y_enviar_notificacion_correo
+            registrar_y_enviar_notificacion_correo(
+                usuario=cliente,
+                asunto=f"¡Tu {disp_nombre} fue entregado con éxito! - Garantía IFixPos",
+                cuerpo_texto=(
+                    f"Hola. Confirmamos la entrega física de tu dispositivo ({disp_nombre}). "
+                    f"Orden #{reparacion.id_reparacion} cerrada. Tu servicio cuenta con garantía legal de reparación."
+                ),
+                tipo_notificacion="ENTREGA_DISPOSITIVO",
+                dispositivo=reparacion.id_dispositivo
+            )
+        except Exception:
+            # Fallback seguro para no romper la transacción si el mail falla
+            pass
+
+
+@transaction.atomic
+def entregar_dispositivo_cliente(
+    *,
+    usuario_tecnico: Usuario,
+    datos_validados: dict
+) -> Reparacion:
+    """
+    CU-46: Entregar Dispositivo.
+    Registra formalmente la restitución física del hardware al cliente:
+    1. Localiza y valida la reparación vía buscar_reparacion_para_entrega.
+    2. Regla Contable Estricta: Verifica que el saldo deudor sea 0 (estado PAGADO).
+    3. Cierre del Ciclo: Modifica etapa a 'ENTREGADO' de forma inmutable.
+    4. Bitácora: Asienta el evento en BitacoraReparacion (estado 7 = ENTREGADO).
+    5. Auditoría: Registra el log en LogSistema y despacha la notificación final.
+    """
+    from workshop_app.selectors import buscar_reparacion_para_entrega
+    from workshop_app.models import BitacoraReparacion
+    from core_app.models import LogSistema
+    from sales_app.services import _calcular_total_operacion
+
+    # Paso 1 y 2: Búsqueda y validación de aptitud para liberación
+    codigo_seguridad = datos_validados.get('codigo_seguridad')
+    dni_cliente = datos_validados.get('dni_cliente')
+
+    reparacion = buscar_reparacion_para_entrega(
+        usuario_ejecutor=usuario_tecnico,
+        codigo_seguridad=codigo_seguridad,
+        dni_cliente=dni_cliente
+    )
+
+    # Paso 3: Regla Contable Estricta - Inexistencia de saldos deudores
+    # Comprobar si la reparación fue pagada
+    etapa_limpia = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+    venta_vinculada = getattr(reparacion, 'id_venta', None)
+
+    esta_saldada = False
+    if etapa_limpia == 'PAGADO':
+        esta_saldada = True
+    elif venta_vinculada and str(venta_vinculada.estado_venta).strip().upper() == 'PAGADO':
+        esta_saldada = True
+    else:
+        # Si no tiene venta ni etapa PAGADO, verificar si el costo total es cero
+        total = _calcular_total_operacion(reparacion)
+        if total == Decimal('0.00'):
+            esta_saldada = True
+
+    if not esta_saldada:
+        raise ValidationError("Operación rechazada. La reparación posee un saldo deudor pendiente de cobro.")
+
+    # Paso 5: Transicionar irrevocablemente el estado a 'ENTREGADO'
+    reparacion.etapa = 'ENTREGADO'
+    reparacion.fecha_entrega = django_timezone.now().date()
+    reparacion.save(update_fields=['etapa', 'fecha_entrega'])
+
+    # Paso 6: Asentar en BitacoraReparacion (estado 7 = ENTREGADO)
+    comentarios_adicionales = (datos_validados.get('comentarios_entrega') or '').strip()
+    texto_bitacora = "Entrega física del equipo al cliente. " + comentarios_adicionales
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_tecnico,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=7,  # ENTREGADO
+        comentario=texto_bitacora.strip()[:1000]
+    )
+
+    # Paso 7: Auditoría en LogSistema y notificación final
+    email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
+    disp_info = str(reparacion.id_dispositivo) if reparacion.id_dispositivo else 'N/A'
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Entregar Dispositivo (CU-46)",
+        detalle=(
+            f"Entrega física del hardware ({disp_info}) registrada por {email_tecnico} "
+            f"para Orden #{reparacion.id_reparacion}. Proceso cerrado en estado terminal ENTREGADO."
+        )[:1000],
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_tecnico if hasattr(usuario_tecnico, 'pk') else None
+    )
+
+    generar_y_enviar_comprobante_entrega(reparacion)
+
+    return reparacion
+
 
 

@@ -3155,7 +3155,7 @@ class ConsultarDiagnosticoYDecisionReparacionTests(TestCase):
         self.assertEqual(venta.id_usuario, self.cliente)
         self.assertEqual(venta.estado_venta, 'PENDIENTE')
         self.assertEqual(venta.metodo_entrega, 'RETIRO')
-        self.assertEqual(venta.monto_subtotal, Decimal('450.00'))  # 150 + 300
+        self.assertEqual(venta.monto_subtotal, Decimal('650.00'))  # 450 insumos + 200 mano de obra
 
         # Verificar DetalleVenta (insumos replicados con precio congelado)
         detalles_venta = DetalleVenta.objects.filter(id_venta=venta)
@@ -3688,6 +3688,179 @@ class CU10ActualizarEstadoReparacionTestCase(TestCase):
         res = self.client.patch(url, payload, format='json')
 
         self.assertIn(res.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class EntregarDispositivoCU46TestCase(TestCase):
+    """
+    Pruebas unitarias e integrales para CU-46: Entregar Dispositivo.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Administrador total'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Técnico del taller'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Cliente del servicio'}
+        )
+
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin.entrega@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=date.today(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.entrega@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=date.today(),
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente.entrega@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            dni='40123456',
+            nombre='Carlos',
+            apellido='Entrega'
+        )
+
+        # Dispositivo
+        self.marca = Marca.objects.create(nombre='Motorola', estado_activo=True)
+        self.tipo_disp = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='Moto G84',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo_disp,
+            estado_activo=True
+        )
+
+
+        self.dispositivo = Dispositivo.objects.create(
+            numero_serie='IMEI-ENTREGA-999',
+            fecha_registro=date.today(),
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+
+        # Reparación lista para retirar pero ya pagada (más reciente)
+        self.reparacion_pagada = Reparacion.objects.create(
+            fecha_inicio=date(2026, 10, 21),
+            etapa='PAGADO',
+            codigo_sec='TOKEN-ENTREGA-OK',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.cliente
+        )
+
+        # Reparación lista para retirar pero pendiente de cobro (anterior)
+        self.reparacion_deudora = Reparacion.objects.create(
+            fecha_inicio=date(2026, 10, 1),
+            etapa='LISTO_PARA_RETIRAR',
+            codigo_sec='TOKEN-DEUDA-100',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.cliente
+        )
+
+        # Añadimos diagnóstico con costo para que tenga saldo adeudado > 0
+        Diagnostico.objects.create(
+            descripcion_falla='Cambio de pantalla',
+            fecha_diagnostico=date.today(),
+            costo_diagnostico=Decimal('25000.00'),
+            id_reparacion=self.reparacion_deudora
+        )
+
+    def test_entrega_exitosa_con_codigo_seguridad(self):
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            'codigo_seguridad': 'TOKEN-ENTREGA-OK',
+            'comentarios_entrega': 'Equipo probado frente al cliente, táctil funcionando.'
+        }
+        res = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['etapa'], 'ENTREGADO')
+
+        # Verificar actualización en base de datos
+        self.reparacion_pagada.refresh_from_db()
+        self.assertEqual(self.reparacion_pagada.etapa, 'ENTREGADO')
+        self.assertIsNotNone(self.reparacion_pagada.fecha_entrega)
+
+        # Verificar Bitácora
+        bitacora = BitacoraReparacion.objects.filter(id_reparacion=self.reparacion_pagada).last()
+        self.assertIsNotNone(bitacora)
+        self.assertEqual(bitacora.estado_alcanzado, 7)
+        self.assertIn('Equipo probado frente al cliente', bitacora.comentario)
+
+    def test_entrega_con_dni_permitida_solo_admin(self):
+        # Técnico intenta buscar por DNI -> 403 Forbidden
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            'dni_cliente': '40123456'
+        }
+        res_tec = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+        self.assertEqual(res_tec.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('Solo los administradores poseen privilegios', str(res_tec.data))
+
+        # Administrador busca por DNI -> Éxito
+        self.client.force_authenticate(user=self.admin)
+        res_adm = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+        self.assertEqual(res_adm.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_adm.data['etapa'], 'ENTREGADO')
+
+
+
+    def test_entrega_bloqueada_por_saldo_deudor_pendiente(self):
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            'codigo_seguridad': 'TOKEN-DEUDA-100'
+        }
+        res = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('saldo deudor pendiente de cobro', str(res.data))
+
+        # Verificar que NO transicionó a ENTREGADO
+        self.reparacion_deudora.refresh_from_db()
+        self.assertNotEqual(self.reparacion_deudora.etapa, 'ENTREGADO')
+
+    def test_entrega_bloqueada_si_reparacion_no_esta_lista(self):
+        self.client.force_authenticate(user=self.tecnico)
+        self.reparacion_pagada.etapa = 'EN_REPARACION'
+        self.reparacion_pagada.save()
+
+        payload = {
+            'codigo_seguridad': 'TOKEN-ENTREGA-OK'
+        }
+        res = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('El equipo no está apto para liberación o aún se encuentra en proceso', str(res.data))
+
+    def test_entrega_falla_si_no_se_envia_codigo_ni_dni(self):
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {}
+        res = self.client.post('/api/workshop/reparaciones/entregar/', payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Debe proporcionar el código de seguridad o el DNI del cliente', str(res.data))
+
 
 
 

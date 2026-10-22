@@ -1460,12 +1460,51 @@ class CambiarEstadoReparacionInputSerializer(serializers.Serializer):
             )
         return self.ESTADOS_VALIDOS[val_norm]
 
-    def validate_comentario(self, value):
-        comentario_limpio = str(value or '').strip()
-        if not comentario_limpio:
-            raise serializers.ValidationError(
-                "El comentario técnico es obligatorio y no puede estar vacío ni contener solo espacios."
-            )
         return comentario_limpio
+
+
+# ==============================================================================
+# CU-46: Entregar Dispositivo (La Aduana Comercial)
+# ==============================================================================
+
+class EntregarDispositivoInputSerializer(serializers.Serializer):
+    """
+    CU-46: Entregar Dispositivo (La Aduana Comercial).
+    Valida los datos de entrada para autorizar la liberación física del hardware.
+    Exige obligatoriamente código de seguridad o DNI del cliente.
+    """
+    codigo_seguridad = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=100
+    )
+    dni_cliente = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=50
+    )
+    comentarios_entrega = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=1000
+    )
+
+    def validate(self, attrs):
+        codigo = (attrs.get('codigo_seguridad') or '').strip()
+        dni = (attrs.get('dni_cliente') or '').strip()
+
+        if not codigo and not dni:
+            raise serializers.ValidationError(
+                "Debe proporcionar el código de seguridad o el DNI del cliente para autorizar la entrega."
+            )
+
+        attrs['codigo_seguridad'] = codigo if codigo else None
+        attrs['dni_cliente'] = dni if dni else None
+        attrs['comentarios_entrega'] = (attrs.get('comentarios_entrega') or '').strip()
+        return attrs
+
 
 

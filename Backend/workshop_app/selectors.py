@@ -621,3 +621,89 @@ def obtener_reparacion_para_cambio_estado(id_reparacion: int) -> Reparacion:
     return reparacion
 
 
+# ==============================================================================
+# CU-46: Entregar Dispositivo (Lectura y Validación de Búsqueda)
+# ==============================================================================
+
+def buscar_reparacion_para_entrega(
+    *,
+    usuario_ejecutor: Usuario,
+    codigo_seguridad: Optional[str] = None,
+    dni_cliente: Optional[str] = None
+) -> Reparacion:
+    """
+    CU-46: Entregar Dispositivo (Paso 1 y 2).
+    Localiza la reparación previa a la entrega física al cliente.
+    - Si se envía 'codigo_seguridad', busca por coincidencia exacta con codigo_sec.
+    - Si se envía 'dni_cliente', verifica PRIMERO que usuario_ejecutor sea ADMIN.
+      Si no es ADMIN, levanta PermissionDenied. Luego busca la reparación asociada al DNI.
+    - Si no existe ninguna coincidencia, levanta ObjectDoesNotExist ("No se encontró ninguna reparación con los datos provistos.").
+    - Validación de Estado Operativo: Verifica que etapa sea exactamente 'LISTO_PARA_RETIRAR'
+      (o equivalentes terminales listos como 'FINALIZADO', 'IRREPARABLE_PARA_DEVOLUCION').
+      Si no, levanta ValidationError ("El equipo no está apto para liberación o aún se encuentra en proceso.").
+    """
+    from rest_framework.exceptions import PermissionDenied
+
+    cod_sec = (codigo_seguridad or '').strip()
+    dni = (dni_cliente or '').strip()
+
+    reparacion = None
+
+    if cod_sec:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_usuario',
+            'id_usuario__perfilusuario',
+            'id_venta'
+        ).filter(codigo_sec__iexact=cod_sec).order_by('-fecha_inicio', '-id_reparacion').first()
+    elif dni:
+        # Verificar privilegios elevados de Administrador
+        rol_obj = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
+        cod_rol = (getattr(rol_obj, 'codigo', '') or '').upper()
+        if cod_rol != 'ADMIN':
+            raise PermissionDenied("Solo los administradores poseen privilegios para buscar entregas por DNI.")
+
+        etapas_busqueda = [
+            'LISTO_PARA_RETIRAR',
+            'FINALIZADO',
+            'FINALIZADA',
+            'IRREPARABLE_PARA_DEVOLUCION',
+            'PAGADO'
+        ]
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_usuario',
+            'id_usuario__perfilusuario',
+            'id_venta'
+        ).filter(
+            Q(id_usuario__perfilusuario__dni__iexact=dni) |
+            Q(id_dispositivo__id_usuario__perfilusuario__dni__iexact=dni),
+            etapa__in=etapas_busqueda
+        ).order_by('-fecha_inicio', '-id_reparacion').first()
+    else:
+        raise ObjectDoesNotExist("Debe proporcionar el código de seguridad o el DNI del cliente.")
+
+
+    if not reparacion:
+        raise ObjectDoesNotExist("No se encontró ninguna reparación con los datos provistos.")
+
+    etapa_limpia = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+    etapas_validas_entrega = [
+        'LISTO_PARA_RETIRAR',
+        'FINALIZADO',
+        'FINALIZADA',
+        'IRREPARABLE_PARA_DEVOLUCION',
+        'PAGADO'
+    ]
+
+    if etapa_limpia not in etapas_validas_entrega:
+        raise ValidationError("El equipo no está apto para liberación o aún se encuentra en proceso.")
+
+    return reparacion
+
+
+

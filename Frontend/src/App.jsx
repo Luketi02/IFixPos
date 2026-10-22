@@ -78,10 +78,13 @@ function App() {
                 <Route path="/tecnico/dispositivos/nueva-reparacion" element={<TechnicianModuleScreen forcedModule="nueva-reparacion" />} />
                 <Route path="/tecnico/dispositivos/en-curso" element={<TechnicianModuleScreen forcedModule="en-curso" />} />
                 <Route path="/tecnico/dispositivos/finalizadas" element={<TechnicianModuleScreen forcedModule="finalizadas" />} />
+                <Route path="/tecnico/caja/cobros" element={<TechnicianModuleScreen forcedModule="cobros" />} />
+                <Route path="/tecnico/caja/entregar-dispositivo" element={<TechnicianModuleScreen forcedModule="entregar-dispositivo" />} />
                 <Route path="/tecnico/caja/registrar-compra" element={<TechnicianModuleScreen forcedModule="registrar-compra" />} />
                 <Route path="/tecnico/caja/recepcionar-dispositivo" element={<TechnicianModuleScreen forcedModule="recepcionar-dispositivo" />} />
                 <Route path="/tecnico/insumos/recepcionar-compra" element={<TechnicianModuleScreen forcedModule="recepcionar-compra" />} />
               </Route>
+
 
               {/* Vistas de Administrador: Exclusivo Administradores */}
               <Route element={<RoleRoute allowedRoles={['admin']} />}>
