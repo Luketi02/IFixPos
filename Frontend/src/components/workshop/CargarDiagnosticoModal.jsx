@@ -283,7 +283,7 @@ export default function CargarDiagnosticoModal({
   const nombreEquipo =
     reparacion.dispositivo?.modelo
       ? `${reparacion.dispositivo?.marca || ''} ${reparacion.dispositivo.modelo}`.trim()
-      : `Equipo #${reparacion.id_reparacion}`;
+      : 'Dispositivo en Servicio';
 
   const clienteNombre =
     reparacion.cliente?.nombre_completo ||
@@ -305,8 +305,8 @@ export default function CargarDiagnosticoModal({
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-              <span className="text-[11px] font-mono text-cyan-400 font-semibold uppercase tracking-wider">
-                Orden Técnica #{reparacion.id_reparacion}
+              <span className="text-[11px] text-cyan-400 font-semibold uppercase tracking-wider">
+                Servicio Técnico Especializado
               </span>
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-white truncate">
@@ -587,7 +587,7 @@ export default function CargarDiagnosticoModal({
                       {!permitirCostoPropio && (
                         <span className="text-[10px] font-mono text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20 flex items-center gap-1">
                           <span>🔒</span>
-                          <span>Fijado por Sistema</span>
+                          <span>Fijado por administración</span>
                         </span>
                       )}
                     </div>

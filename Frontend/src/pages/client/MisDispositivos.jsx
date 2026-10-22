@@ -486,7 +486,7 @@ export default function MisDispositivos() {
         dispositivo={dispositivoParaReparar}
         onSuccess={(resultado) => {
           setSuccessMessage(
-            `¡Reparación iniciada exitosamente! Orden #${resultado?.id_reparacion} creada. Token de Entrega: ${resultado?.codigo_seguridad}`
+            `¡Reparación iniciada con éxito! Su solicitud ha sido registrada. Código para presentar en mostrador: ${resultado?.codigo_seguridad}`
           );
           setRecarga((n) => n + 1);
         }}

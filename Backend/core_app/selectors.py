@@ -1,3 +1,4 @@
+from typing import Any
 from typing import Optional
 from django.db.models import QuerySet
 from core_app.models import ConfiguracionSistema, Notificacion
@@ -39,9 +40,81 @@ def obtener_email_soporte() -> str:
         pass
     return obtener_configuracion_texto('emailSoporte', fallback='soporte@ifixnet.com')
 
-def obtener_notificaciones_usuario(id_usuario: int) -> QuerySet[Notificacion]:
-    """Obtiene las notificaciones de un usuario ordenadas por fecha más reciente."""
-    return Notificacion.objects.filter(id_usuario_id=id_usuario).order_by('-id_notificacion')
+def obtener_url_frontend() -> str:
+    """Obtiene la URL base del Frontend configurada en el sistema o fallback a localhost:5173."""
+    from django.conf import settings
+    fallback = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+    url = obtener_configuracion_texto('urlFrontend', fallback=fallback)
+    return str(url).rstrip('/')
+
+# Tipos de notificaciones que se envían por correo para códigos o verificaciones
+# y que no deben aparecer en la campanita del sistema
+TIPOS_EXCLUIDOS_CAMPANITA = [
+    'ACTIVACION',
+    'RECUPERACION',
+    'OTP',
+    'VERIFICACION',
+    'CODIGO_VERIFICACION',
+]
+
+
+def obtener_notificaciones_usuario(*args, usuario: Optional[Any] = None) -> QuerySet[Notificacion]:
+    """
+    Retorna todas las notificaciones filtradas por usuario garantizando la Seguridad Horizontal.
+    Excluye códigos y verificaciones por correo (no pertenecen a la campanita).
+    Ordenadas por fecha_envio descendente y secundariamente por id_notificacion descendente.
+    """
+    u = usuario if usuario is not None else (args[0] if args else None)
+    if u is None:
+        return Notificacion.objects.none()
+    user_id = getattr(u, 'id_usuario', None) or getattr(u, 'id', None) or u
+    return (
+        Notificacion.objects
+        .filter(id_usuario_id=user_id)
+        .exclude(tipo__in=TIPOS_EXCLUIDOS_CAMPANITA)
+        .order_by('-fecha_envio', '-id_notificacion')
+    )
+
+
+def contar_notificaciones_no_leidas(*, usuario: Any) -> int:
+    """
+    Retorna la cantidad entera (count) de notificaciones no leídas (leida=False) para un usuario.
+    Excluye alertas de verificación y códigos OTP.
+    """
+    user_id = getattr(usuario, 'id_usuario', None) or getattr(usuario, 'id', None) or usuario
+    return (
+        Notificacion.objects
+        .filter(id_usuario_id=user_id, leida=False)
+        .exclude(tipo__in=TIPOS_EXCLUIDOS_CAMPANITA)
+        .count()
+    )
+
+
+
+def obtener_notificacion_usuario(*, usuario: Any, id_notificacion: int) -> Notificacion:
+    """
+    Busca la notificación específica.
+    Si no existe, levanta ObjectDoesNotExist.
+    Si el id_usuario no coincide con el del usuario ejecutor, levanta PermissionDenied.
+    """
+    from django.core.exceptions import ObjectDoesNotExist
+    from rest_framework.exceptions import PermissionDenied
+
+    try:
+        notificacion = Notificacion.objects.get(pk=id_notificacion)
+    except Notificacion.DoesNotExist:
+        raise ObjectDoesNotExist(f"No existe ninguna notificación con ID {id_notificacion}.")
+
+    user_id = getattr(usuario, 'id_usuario', None) or getattr(usuario, 'id', None) or usuario
+    owner_id = notificacion.id_usuario_id
+    if hasattr(owner_id, 'id_usuario'):
+        owner_id = owner_id.id_usuario
+
+    if owner_id != (getattr(user_id, 'id_usuario', None) or getattr(user_id, 'id', None) or user_id):
+        raise PermissionDenied("Acceso Denegado: Esta notificación pertenece a otro usuario.")
+
+    return notificacion
+
 
 def obtener_notificacion_por_id(id_notificacion: int) -> Optional[Notificacion]:
     """Busca una notificación por su ID único."""

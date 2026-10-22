@@ -181,7 +181,7 @@ export default function CapsulaGuiaReparacion({ etapa, codigoSeguridad, classNam
         <div className="flex items-center gap-2 self-start sm:self-auto">
           {codigoSeguridad && (
             <span className="px-2.5 py-0.5 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/30 text-xs font-mono font-bold">
-              Código de seguridad: {codigoSeguridad}
+              Código para presentar en mostrador: {codigoSeguridad}
             </span>
           )}
           <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-bold uppercase ${guia.badgeClass}`}>

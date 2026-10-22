@@ -162,6 +162,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]
 
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'users_app.authentication.JWTAuthentication',

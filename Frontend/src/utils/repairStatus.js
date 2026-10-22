@@ -19,6 +19,11 @@ const DICCIONARIO_ESTADOS = {
   'en diagnostico': 'En Diagnóstico',
   en_diagnóstico: 'En Diagnóstico',
 
+  // Esperando confirmación de presupuesto
+  esperando_confirmacion: 'Esperando Confirmación',
+  'esperando confirmacion': 'Esperando Confirmación',
+  esperando_confirmación: 'Esperando Confirmación',
+
   // En reparación / proceso
   en_reparacion: 'En Reparación',
   'en reparacion': 'En Reparación',
@@ -27,11 +32,13 @@ const DICCIONARIO_ESTADOS = {
   'en proceso': 'En Proceso',
 
   // Esperando insumos o repuestos
-  esperando_repuesto: 'Esperando Repuesto',
-  'esperando repuesto': 'Esperando Repuesto',
-  esperando_insumo: 'Esperando Insumo',
-  'esperando insumo': 'Esperando Insumo',
-  esperando_insumos: 'Esperando Insumos',
+  esperando_repuesto: 'Esperando Repuestos',
+  'esperando repuesto': 'Esperando Repuestos',
+  esperando_repuestos: 'Esperando Repuestos',
+  'esperando repuestos': 'Esperando Repuestos',
+  esperando_insumo: 'Esperando Repuestos',
+  'esperando insumo': 'Esperando Repuestos',
+  esperando_insumos: 'Esperando Repuestos',
 
   // Finalizadas y entregadas
   finalizada: 'Finalizada',
@@ -56,11 +63,12 @@ const DICCIONARIO_NUMERICO_ESTADOS = {
   1: 'Esperando Dispositivo',
   2: 'Esperando Diagnóstico',
   3: 'En Diagnóstico',
-  4: 'En Reparación',
-  5: 'Esperando Insumo',
+  4: 'Esperando Confirmación',
+  5: 'En Reparación',
   6: 'Finalizada',
   7: 'Entregada',
-  8: 'Cancelada'
+  8: 'Cancelada',
+  9: 'Esperando Repuestos'
 };
 
 /**

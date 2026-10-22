@@ -6,10 +6,10 @@ from datetime import date
 from decimal import Decimal
 from rest_framework.exceptions import ValidationError
 
-from workshop_app.models import Dispositivo, CategoriaReparacion, Reparacion, BitacoraReparacion
+from workshop_app.models import Dispositivo, CategoriaReparacion, Reparacion, BitacoraReparacion, Diagnostico
 from catalog_app.models import TipoDispositivo, Marca, ModeloDispositivo
-from users_app.models import Usuario, RolUsuario
-from core_app.models import LogSistema
+from users_app.models import Usuario, RolUsuario, PerfilUsuario
+from core_app.models import LogSistema, Notificacion
 from workshop_app.selectors import (
     obtener_tipos_dispositivos,
     obtener_marcas,
@@ -3236,5 +3236,458 @@ class ConsultarDiagnosticoYDecisionReparacionTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("Acceso Denegado", str(res.data))
+
+    def test_serializer_decision_aceptar_rechaza_envio_con_efectivo(self):
+        """Valida que no se permita pagar en efectivo en mostrador cuando el método de entrega es ENVIO."""
+        from workshop_app.serializers import DecisionReparacionInputSerializer
+
+        # Inválido: ENVIO con EFECTIVO
+        s = DecisionReparacionInputSerializer(data={
+            'decision': 'ACEPTAR',
+            'metodo_entrega': 'ENVIO',
+            'metodo_pago': 'EFECTIVO'
+        })
+        self.assertFalse(s.is_valid())
+        self.assertIn('metodo_pago', s.errors)
+        self.assertIn('no está disponible para envíos a domicilio', s.errors['metodo_pago'][0])
+
+        # Válido: ENVIO con TRANSFERENCIA
+        s_valido = DecisionReparacionInputSerializer(data={
+            'decision': 'ACEPTAR',
+            'metodo_entrega': 'ENVIO',
+            'metodo_pago': 'TRANSFERENCIA'
+        })
+        self.assertTrue(s_valido.is_valid())
+
+    def test_servicio_decision_aceptar_rechaza_envio_con_efectivo(self):
+        """El servicio procesar_decision_reparacion rechaza defensivamente ENVIO con EFECTIVO."""
+        from rest_framework.exceptions import ValidationError
+        from workshop_app.services import procesar_decision_reparacion
+
+        with self.assertRaises(ValidationError) as ctx:
+            procesar_decision_reparacion(
+                usuario_cliente=self.cliente,
+                id_reparacion=self.reparacion_confirmacion.id_reparacion,
+                datos_validados={
+                    'decision': 'ACEPTAR',
+                    'metodo_entrega': 'ENVIO',
+                    'metodo_pago': 'EFECTIVO'
+                }
+            )
+        self.assertIn("no está disponible para envíos a domicilio", str(ctx.exception))
+
+    def test_api_decision_reparacion_rechaza_envio_con_efectivo_400(self):
+        """Endpoint HTTP POST /decision/ devuelve 400 Bad Request si se solicita ENVIO con EFECTIVO."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f'/api/workshop/reparaciones/{self.reparacion_confirmacion.id_reparacion}/decision/'
+        payload = {
+            'decision': 'ACEPTAR',
+            'metodo_entrega': 'ENVIO',
+            'metodo_pago': 'EFECTIVO'
+        }
+        res = self.client.post(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('metodo_pago', res.data)
+
+
+# ==============================================================================
+# CU-10: ACTUALIZAR ESTADO DE REPARACIÓN (TÉCNICO / TALLER)
+# ==============================================================================
+
+class CU10ActualizarEstadoReparacionTestCase(TestCase):
+    """
+    Suite de pruebas integral para el CU-10: Actualizar estado de reparación.
+    Verifica máquina de estados, selectores, servicios, bitácora, notificaciones y endpoints HTTP.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # Roles
+        self.rol_tecnico = RolUsuario.objects.create(
+            codigo='TECNICO',
+            nombre_rol='Técnico',
+            descripcion='Técnico del taller'
+        )
+        self.rol_admin = RolUsuario.objects.create(
+            codigo='ADMIN',
+            nombre_rol='Administrador',
+            descripcion='Administrador total'
+        )
+        self.rol_cliente = RolUsuario.objects.create(
+            codigo='CLIENTE',
+            nombre_rol='Cliente',
+            descripcion='Cliente del servicio'
+        )
+
+        # Usuarios
+        self.tecnico = Usuario.objects.create(
+            email='tecnico_cu10@ifixpos.com',
+            contrasena='hash_pwd',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.tecnico,
+            nombre='Carlos',
+            apellido='Técnico',
+            dni='20111222',
+            telefono='+5491122334455'
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin_cu10@ifixpos.com',
+            contrasena='hash_pwd',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.admin,
+            nombre='Admin',
+            apellido='Taller',
+            dni='20999888',
+            telefono='+5491199887766'
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente_cu10@gmail.com',
+            contrasena='hash_pwd',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            nombre='Martín',
+            apellido='Cliente',
+            dni='30111222',
+            telefono='+5491133445566'
+        )
+
+        # Catálogo y Dispositivo
+        self.tipo_tel = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        self.marca_samsung = Marca.objects.create(nombre='Samsung', estado_activo=True)
+        self.modelo_s21 = ModeloDispositivo.objects.create(
+            nombre='Galaxy S21',
+            id_marca=self.marca_samsung,
+            id_tipo_dispositivo=self.tipo_tel,
+            estado_activo=True
+        )
+        self.dispositivo = Dispositivo.objects.create(
+            numero_serie='S21-TEST-CU10',
+            fecha_registro=timezone.now().date(),
+            id_modelo=self.modelo_s21,
+            id_usuario=self.cliente
+        )
+
+        # Reparación en estado 'EN_REPARACION'
+        self.reparacion_en_curso = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='EN_REPARACION',
+            codigo_sec='REP1001',
+            desc_cliente='Display roto',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        # Diagnóstico asociado
+        self.diagnostico = Diagnostico.objects.create(
+            id_reparacion=self.reparacion_en_curso,
+            descripcion_falla='Display dañado por caída',
+            fecha_diagnostico=timezone.now().date(),
+            costo_diagnostico=Decimal('5000.00')
+        )
+
+        # Reparación en 'ESPERANDO_REPUESTOS'
+        self.reparacion_esperando_repuestos = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='ESPERANDO_REPUESTOS',
+            codigo_sec='REP1002',
+            desc_cliente='Módulo no disponible en stock local',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        # Reparación en 'FINALIZADO'
+        self.reparacion_finalizada = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='FINALIZADO',
+            codigo_sec='REP1003',
+            desc_cliente='Equipo reparado previamente',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        # Reparación en estado terminal 'ENTREGADO'
+        self.reparacion_entregada = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='ENTREGADO',
+            codigo_sec='REP1004',
+            desc_cliente='Entregado al cliente',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        # Reparación en estado terminal 'CANCELADO'
+        self.reparacion_cancelada = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='CANCELADO',
+            codigo_sec='REP1005',
+            desc_cliente='Presupuesto rechazado',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+    # --------------------------------------------------------------------------
+    # PRUEBAS DEL SELECTOR
+    # --------------------------------------------------------------------------
+
+    def test_selector_obtener_reparacion_para_cambio_estado_exitoso(self):
+        """El selector recupera exitosamente una reparación activa no terminal."""
+        from workshop_app.selectors import obtener_reparacion_para_cambio_estado
+        rep = obtener_reparacion_para_cambio_estado(self.reparacion_en_curso.id_reparacion)
+        self.assertEqual(rep.id_reparacion, self.reparacion_en_curso.id_reparacion)
+        self.assertEqual(rep.etapa, 'EN_REPARACION')
+
+    def test_selector_obtener_reparacion_inexistente_levanta_object_does_not_exist(self):
+        """El selector levanta ObjectDoesNotExist si el ID de reparación no existe."""
+        from django.core.exceptions import ObjectDoesNotExist
+        from workshop_app.selectors import obtener_reparacion_para_cambio_estado
+
+        with self.assertRaises(ObjectDoesNotExist):
+            obtener_reparacion_para_cambio_estado(999999)
+
+    def test_selector_obtener_reparacion_terminal_levanta_validation_error(self):
+        """El selector bloquea reparaciones en estado ENTREGADO o CANCELADO."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.selectors import obtener_reparacion_para_cambio_estado
+
+        with self.assertRaises(DjangoValidationError) as ctx_entregado:
+            obtener_reparacion_para_cambio_estado(self.reparacion_entregada.id_reparacion)
+        self.assertIn("estado terminal", str(ctx_entregado.exception))
+
+        with self.assertRaises(DjangoValidationError) as ctx_cancelado:
+            obtener_reparacion_para_cambio_estado(self.reparacion_cancelada.id_reparacion)
+        self.assertIn("estado terminal", str(ctx_cancelado.exception))
+
+    # --------------------------------------------------------------------------
+    # PRUEBAS DEL SERVICIO Y MÁQUINA DE ESTADOS
+    # --------------------------------------------------------------------------
+
+    def test_servicio_transicion_hacia_esperando_repuestos_desde_en_reparacion(self):
+        """Permite transicionar legítimamente de EN_REPARACION a ESPERANDO_REPUESTOS."""
+        from workshop_app.services import cambiar_estado_reparacion
+        from workshop_app.models import BitacoraReparacion
+        from core_app.models import Notificacion, LogSistema
+
+        rep = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion_en_curso.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'ESPERANDO_REPUESTOS',
+                'comentario': 'Pausado por falta de display original en stock.'
+            }
+        )
+
+        self.assertEqual(rep.etapa, 'ESPERANDO_REPUESTOS')
+
+        # Verificar Bitácora
+        bitacora = BitacoraReparacion.objects.filter(id_reparacion=rep).latest('id_bitacora')
+        self.assertEqual(bitacora.id_usuario, self.tecnico)
+        self.assertEqual(bitacora.comentario, 'Pausado por falta de display original en stock.')
+
+        # Verificar Notificación al cliente dueño del equipo
+        notif = Notificacion.objects.filter(id_dispositivo=self.dispositivo).latest('id_notificacion')
+        self.assertEqual(notif.id_usuario, self.cliente)
+        self.assertIn("ESPERANDO_REPUESTOS", notif.mensaje)
+        self.assertIn("Pausado por falta de display", notif.mensaje)
+
+        # Verificar LogSistema
+        log = LogSistema.objects.filter(tabla_afectada='reparacion', id_registro_afectado=str(rep.id_reparacion)).latest('id_log')
+        self.assertEqual(log.tipo, 'AUDITORIA_TALLER')
+        self.assertEqual(log.id_usuario, self.tecnico)
+
+    def test_servicio_transicion_hacia_esperando_repuestos_desde_estado_invalido_bloqueada(self):
+        """Bloquea pasar a ESPERANDO_REPUESTOS si el equipo no está en EN_REPARACION."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        # Equipo en ESPERANDO_CONFIRMACION
+        rep_esperando_conf = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='ESPERANDO_CONFIRMACION',
+            codigo_sec='REP1009',
+            desc_cliente='Presupuesto sin aceptar',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            cambiar_estado_reparacion(
+                usuario_tecnico=self.tecnico,
+                id_reparacion=rep_esperando_conf.id_reparacion,
+                datos_validados={
+                    'nuevo_estado': 'ESPERANDO_REPUESTOS',
+                    'comentario': 'Intento inválido.'
+                }
+            )
+        self.assertIn("Para pasar a 'Esperando Repuestos', el equipo debe encontrarse en 'En Reparación'", str(ctx.exception))
+
+    def test_servicio_transicion_hacia_finalizado_exitoso(self):
+        """Permite transicionar de EN_REPARACION a FINALIZADO si cuenta con diagnóstico."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        rep = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion_en_curso.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'FINALIZADO',
+                'comentario': 'Reparación completada y verificada en banco de pruebas.'
+            }
+        )
+
+        self.assertEqual(rep.etapa, 'FINALIZADO')
+
+    def test_servicio_transicion_hacia_finalizado_sin_diagnostico_bloqueada(self):
+        """Bloquea finalizar una orden si no posee diagnóstico técnico registrado."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        rep_sin_diag = Reparacion.objects.create(
+            fecha_inicio=timezone.now().date(),
+            etapa='EN_REPARACION',
+            codigo_sec='REP1010',
+            desc_cliente='En curso sin diag',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            cambiar_estado_reparacion(
+                usuario_tecnico=self.tecnico,
+                id_reparacion=rep_sin_diag.id_reparacion,
+                datos_validados={
+                    'nuevo_estado': 'FINALIZADO',
+                    'comentario': 'Intentando finalizar sin diagnóstico.'
+                }
+            )
+        self.assertIn("no cuenta con un diagnóstico técnico registrado", str(ctx.exception))
+
+    def test_servicio_transicion_hacia_en_reparacion_reanudacion(self):
+        """Permite reanudar a EN_REPARACION desde ESPERANDO_REPUESTOS."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        rep = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion_esperando_repuestos.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'EN_REPARACION',
+                'comentario': 'Llegó el repuesto solicitado del proveedor. Reanudando labor.'
+            }
+        )
+
+        self.assertEqual(rep.etapa, 'EN_REPARACION')
+
+    def test_servicio_transicion_hacia_en_reparacion_retrabajo_desde_finalizado(self):
+        """Permite transicionar de FINALIZADO a EN_REPARACION por retrabajo / control de calidad fallido."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        rep = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion_finalizada.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'EN_REPARACION',
+                'comentario': 'Reingreso a banco: falla detectada en control de calidad final.'
+            }
+        )
+
+        self.assertEqual(rep.etapa, 'EN_REPARACION')
+
+    def test_servicio_transicion_mismo_estado_bloqueada(self):
+        """Bloquea cambiar una reparación al mismo estado en que ya se encuentra."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        with self.assertRaises(ValidationError) as ctx:
+            cambiar_estado_reparacion(
+                usuario_tecnico=self.tecnico,
+                id_reparacion=self.reparacion_en_curso.id_reparacion,
+                datos_validados={
+                    'nuevo_estado': 'EN_REPARACION',
+                    'comentario': 'Mismo estado.'
+                }
+            )
+        self.assertIn("ya se encuentra en el estado", str(ctx.exception))
+
+    def test_servicio_comentario_vacio_bloqueado(self):
+        """Exige obligatoriamente comentario técnico no vacío."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        with self.assertRaises(ValidationError) as ctx:
+            cambiar_estado_reparacion(
+                usuario_tecnico=self.tecnico,
+                id_reparacion=self.reparacion_en_curso.id_reparacion,
+                datos_validados={
+                    'nuevo_estado': 'ESPERANDO_REPUESTOS',
+                    'comentario': '   '
+                }
+            )
+        self.assertIn("comentario técnico es obligatorio", str(ctx.exception))
+
+    # --------------------------------------------------------------------------
+    # PRUEBAS DEL ENDPOINT HTTP API (PATCH)
+    # --------------------------------------------------------------------------
+
+    def test_api_cambiar_estado_reparacion_exitoso_como_tecnico(self):
+        """El técnico autenticado actualiza el estado exitosamente con 200 OK."""
+        self.client.force_authenticate(user=self.tecnico)
+        url = f'/api/workshop/reparaciones/{self.reparacion_en_curso.id_reparacion}/estado/'
+        payload = {
+            'nuevo_estado': 'ESPERANDO_REPUESTOS',
+            'comentario': 'Falta módulo táctil. Aguardando envío de proveedor.'
+        }
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['reparacion']['etapa'], 'ESPERANDO_REPUESTOS')
+        self.assertIn("actualizado a 'ESPERANDO_REPUESTOS'", res.data['mensaje'])
+
+    def test_api_cambiar_estado_reparacion_exitoso_como_admin(self):
+        """El administrador del sistema puede también actualizar el estado con 200 OK."""
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/workshop/reparaciones/{self.reparacion_en_curso.id_reparacion}/estado/'
+        payload = {
+            'nuevo_estado': 'FINALIZADO',
+            'comentario': 'Aprobado y finalizado por auditoría de taller.'
+        }
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['reparacion']['etapa'], 'FINALIZADO')
+
+    def test_api_cambiar_estado_reparacion_rol_cliente_denegado_403(self):
+        """Un usuario con rol Cliente recibe 403 Forbidden al intentar actualizar el estado de una reparación."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f'/api/workshop/reparaciones/{self.reparacion_en_curso.id_reparacion}/estado/'
+        payload = {
+            'nuevo_estado': 'FINALIZADO',
+            'comentario': 'El cliente no puede autogestionar este cambio.'
+        }
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Se requiere rol de Administrador o Técnico", str(res.data))
+
+    def test_api_cambiar_estado_reparacion_no_autenticado_401(self):
+        """Petición anónima recibe 401 Unauthorized o 403 Forbidden."""
+        url = f'/api/workshop/reparaciones/{self.reparacion_en_curso.id_reparacion}/estado/'
+        payload = {
+            'nuevo_estado': 'FINALIZADO',
+            'comentario': 'Sin autenticación.'
+        }
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertIn(res.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
 
 

@@ -31,6 +31,13 @@ export default function ReparacionDetalle() {
   const [comentariosCliente, setComentariosCliente] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Regla de negocio: Si se selecciona envío a domicilio, no se permite efectivo en mostrador
+  useEffect(() => {
+    if (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO') {
+      setMetodoPago('TRANSFERENCIA');
+    }
+  }, [metodoEntrega, metodoPago]);
+
   const isLoading = cargadoId !== id_reparacion;
 
   // Auto-ocultamiento de alertas de error a los 6 segundos (Regla Global de UX)
@@ -142,6 +149,10 @@ export default function ReparacionDetalle() {
         setErrorMessage('Por favor seleccione el método de entrega y el medio de pago.');
         return;
       }
+      if (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO') {
+        setErrorMessage('El pago en efectivo en mostrador no está permitido para envíos a domicilio. Por favor seleccione Transferencia o Tarjeta.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -208,15 +219,15 @@ export default function ReparacionDetalle() {
                   <span className="text-slate-600">/</span>
                   <Link
                     to={`/cliente/dispositivos/${idDisp}`}
-                    className="text-slate-400 hover:text-cyan-400 transition-colors truncate max-w-[120px]"
+                    className="text-slate-400 hover:text-cyan-400 transition-colors truncate max-w-[140px]"
                   >
-                    Equipo #{idDisp}
+                    {reparacion?.dispositivo?.marca || 'Dispositivo'} {reparacion?.dispositivo?.modelo || ''}
                   </Link>
                 </>
               )}
               <span className="text-slate-600">/</span>
-              <span className="text-cyan-400 font-semibold font-mono">
-                Reparación #{id_reparacion}
+              <span className="text-cyan-400 font-semibold">
+                Seguimiento de Reparación
               </span>
             </div>
           </div>
@@ -346,8 +357,8 @@ export default function ReparacionDetalle() {
                   </div>
 
                   <div className="min-w-0">
-                    <span className="text-[11px] font-mono font-semibold text-slate-400 uppercase tracking-wider block">
-                      Orden de Reparación #{reparacion.id_reparacion}
+                    <span className="text-[11px] font-semibold text-cyan-400 uppercase tracking-wider block">
+                      Seguimiento del Servicio Técnico
                     </span>
                     <h1 className="text-xl sm:text-2xl font-black text-white truncate">
                       {reparacion.dispositivo?.marca} {reparacion.dispositivo?.modelo}
@@ -504,7 +515,7 @@ export default function ReparacionDetalle() {
                                 <div key={item.id_detalle_insumo || idx} className="p-3 flex items-center justify-between gap-3 hover:bg-slate-800/40 transition-colors">
                                   <div className="min-w-0">
                                     <p className="font-semibold text-slate-200 truncate">
-                                      {item.nombre_producto || `Producto #${item.id_producto}`}
+                                      {item.nombre_producto || 'Repuesto / Insumo'}
                                     </p>
                                     <p className="text-[11px] text-slate-400 font-mono">
                                       Cantidad: <strong className="text-slate-300">{item.cantidad}</strong> • Unitario: ${Number(item.precio_unitario).toFixed(2)}
@@ -630,7 +641,13 @@ export default function ReparacionDetalle() {
                                     </label>
                                     <select
                                       value={metodoEntrega}
-                                      onChange={(e) => setMetodoEntrega(e.target.value)}
+                                      onChange={(e) => {
+                                        const nuevoMetodo = e.target.value;
+                                        setMetodoEntrega(nuevoMetodo);
+                                        if (nuevoMetodo === 'ENVIO' && metodoPago === 'EFECTIVO') {
+                                          setMetodoPago('TRANSFERENCIA');
+                                        }
+                                      }}
                                       required
                                       className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                                     >
@@ -650,10 +667,22 @@ export default function ReparacionDetalle() {
                                       required
                                       className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                                     >
-                                      <option value="EFECTIVO">Efectivo en mostrador</option>
+                                      {metodoEntrega !== 'ENVIO' ? (
+                                        <option value="EFECTIVO">Efectivo en mostrador</option>
+                                      ) : (
+                                        <option value="EFECTIVO" disabled className="text-slate-500 bg-slate-950">
+                                          Efectivo en mostrador (No disponible para envíos)
+                                        </option>
+                                      )}
                                       <option value="TRANSFERENCIA">Transferencia Bancaria</option>
                                       <option value="TARJETA">Tarjeta de Débito / Crédito</option>
                                     </select>
+                                    {metodoEntrega === 'ENVIO' && (
+                                      <p className="text-[10px] text-amber-400/90 font-mono mt-1.5 flex items-center gap-1">
+                                        <span>ℹ️</span>
+                                        <span>Los envíos a domicilio requieren pago electrónico previo (Transferencia o Tarjeta).</span>
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
 
@@ -684,7 +713,7 @@ export default function ReparacionDetalle() {
 
                                   <button
                                     type="submit"
-                                    disabled={isSubmitting || !metodoEntrega || !metodoPago}
+                                    disabled={isSubmitting || !metodoEntrega || !metodoPago || (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO')}
                                     className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-400 hover:to-cyan-300 text-slate-950 font-black text-xs font-mono tracking-wider uppercase transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
                                   >
                                     {isSubmitting ? (
@@ -840,11 +869,11 @@ export default function ReparacionDetalle() {
                                         : 'bg-slate-800 text-slate-400'
                                     }`}
                                   >
-                                    {esUltimo ? 'Último cambio' : `Evento #${item.id_bitacora}`}
+                                    {esUltimo ? 'Última actualización' : 'Registro de avance'}
                                   </span>
-                                  {item.estado_alcanzado && (
+                                  {(item.estado_nombre || item.estado_alcanzado) && (
                                     <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-[#06B6D4] border border-[#06B6D4]/30">
-                                      {formatearEstadoReparacion(item.estado_alcanzado)}
+                                      {item.estado_nombre || formatearEstadoReparacion(item.estado_alcanzado)}
                                     </span>
                                   )}
                                 </div>
@@ -858,8 +887,13 @@ export default function ReparacionDetalle() {
                               </p>
 
                               {item.tecnico && (
-                                <p className="text-[10px] font-mono text-slate-400 mt-2 pt-2 border-t border-slate-800/80">
-                                  Registrado por: <span className="text-slate-300">{item.tecnico}</span>
+                                <p className="text-[10px] font-mono text-slate-400 mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                                  <span>Registrado por: <span className="text-slate-300 font-medium">{item.tecnico}</span></span>
+                                  {item.rol_usuario && (
+                                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                      {item.rol_usuario}
+                                    </span>
+                                  )}
                                 </p>
                               )}
                             </div>

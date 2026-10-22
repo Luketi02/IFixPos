@@ -21,6 +21,7 @@ import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
 import AdminConfigScreen from './pages/admin/AdminConfigScreen';
 import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
 import AdminInventoryScreen from './pages/admin/AdminInventoryScreen';
+import AdminRepairsScreen from './pages/admin/AdminRepairsScreen';
 import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
 import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
 import TiposDispositivoScreen from './pages/admin/catalogs/TiposDispositivoScreen';
@@ -88,6 +89,7 @@ function App() {
                 <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
                 <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
                 <Route path="/admin/inventario" element={<AdminInventoryScreen />} />
+                <Route path="/admin/reparaciones" element={<AdminRepairsScreen />} />
                 {/* Catálogos y Taxonomías Base */}
                 <Route path="/admin/catalogos/marcas" element={<MarcasScreen />} />
                 <Route path="/admin/catalogos/modelos" element={<ModelosScreen />} />

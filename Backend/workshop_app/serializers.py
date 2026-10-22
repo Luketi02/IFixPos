@@ -398,10 +398,34 @@ class DispositivoUpdateInputSerializer(serializers.Serializer):
 class BitacoraOutputSerializer(serializers.Serializer):
     """CU-61: Formato de eventos cronológicos en la bitácora técnica."""
     id_bitacora = serializers.IntegerField(read_only=True)
-    fecha_hora = serializers.TimeField(read_only=True)
+    fecha_hora = serializers.SerializerMethodField()
     estado_alcanzado = serializers.IntegerField(read_only=True)
+    estado_nombre = serializers.SerializerMethodField()
     comentario = serializers.CharField(read_only=True)
     tecnico = serializers.SerializerMethodField()
+    rol_usuario = serializers.SerializerMethodField()
+
+    def get_fecha_hora(self, obj):
+        if not obj.fecha_hora:
+            return ""
+        if hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%H:%M:%S")
+        val_str = str(obj.fecha_hora)
+        return val_str.split('.')[0] if '.' in val_str else val_str
+
+    def get_estado_nombre(self, obj):
+        MAPA = {
+            1: 'Esperando Dispositivo',
+            2: 'Esperando Diagnóstico',
+            3: 'En Diagnóstico',
+            4: 'Esperando Confirmación',
+            5: 'En Reparación',
+            6: 'Finalizada',
+            7: 'Entregada',
+            8: 'Cancelada',
+            9: 'Esperando Repuestos'
+        }
+        return MAPA.get(obj.estado_alcanzado, f"Estado {obj.estado_alcanzado}")
 
     def get_tecnico(self, obj):
         usuario = obj.id_usuario
@@ -411,6 +435,15 @@ class BitacoraOutputSerializer(serializers.Serializer):
         if perfil and (perfil.nombre or perfil.apellido):
             return f"{perfil.nombre or ''} {perfil.apellido or ''}".strip()
         return usuario.email
+
+    def get_rol_usuario(self, obj):
+        usuario = obj.id_usuario
+        if not usuario:
+            return ""
+        rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
+        if rol:
+            return getattr(rol, 'nombre_rol', getattr(rol, 'codigo', ''))
+        return ""
 
 
 class DetalleInsumoOutputSerializer(serializers.Serializer):
@@ -465,6 +498,7 @@ class ReparacionHistorialOutputSerializer(serializers.Serializer):
     tecnico = serializers.SerializerMethodField()
     resumen_diagnostico = serializers.SerializerMethodField()
     calificacion = serializers.SerializerMethodField()
+    bitacora = serializers.SerializerMethodField()
 
     def get_tecnico(self, obj):
         usuario = obj.id_usuario
@@ -485,6 +519,10 @@ class ReparacionHistorialOutputSerializer(serializers.Serializer):
             return None
         return CalificacionOutputSerializer(calif).data
 
+    def get_bitacora(self, obj):
+        items = obj.bitacorareparacion_set.all().order_by('id_bitacora')
+        return BitacoraOutputSerializer(items, many=True).data
+
 
 class ReparacionActivaOutputSerializer(serializers.Serializer):
     """CU-11: Datos de la reparación actualmente en curso sobre el equipo."""
@@ -494,12 +532,17 @@ class ReparacionActivaOutputSerializer(serializers.Serializer):
     codigo_sec = serializers.CharField(read_only=True, allow_null=True)
     desc_cliente = serializers.CharField(read_only=True, allow_null=True)
     diagnostico = serializers.SerializerMethodField()
+    bitacora = serializers.SerializerMethodField()
 
     def get_diagnostico(self, obj):
         diag = obj.diagnostico_set.first()
         if not diag:
             return None
         return DiagnosticoOutputSerializer(diag).data
+
+    def get_bitacora(self, obj):
+        items = obj.bitacorareparacion_set.all().order_by('id_bitacora')
+        return BitacoraOutputSerializer(items, many=True).data
 
 
 class DispositivoDetalleOutputSerializer(serializers.Serializer):
@@ -553,10 +596,12 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
 
     # Secciones anidadas
     dispositivo = DispositivoCabeceraOutputSerializer(source='id_dispositivo', read_only=True)
+    cliente = serializers.SerializerMethodField()
     diagnostico = serializers.SerializerMethodField()
     bitacora = serializers.SerializerMethodField()
     insumos = serializers.SerializerMethodField()
     calificacion = serializers.SerializerMethodField()
+    historial_reparaciones = serializers.SerializerMethodField()
 
     def _es_personal_autorizado(self):
         usuario = self.context.get('usuario') or (self.context.get('request').user if self.context.get('request') else None)
@@ -580,6 +625,24 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
             return obj.codigo_sec
         return None
 
+    def get_cliente(self, obj):
+        cliente = getattr(obj.id_dispositivo, 'id_usuario', None)
+        if not cliente:
+            return None
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre = getattr(perfil, 'nombre', '') or ''
+        apellido = getattr(perfil, 'apellido', '') or ''
+        nombre_completo = f"{nombre} {apellido}".strip() or cliente.email
+        return {
+            'id_cliente': cliente.id_usuario,
+            'nombre': nombre,
+            'apellido': apellido,
+            'nombre_completo': nombre_completo,
+            'dni': getattr(perfil, 'dni', None),
+            'email': cliente.email,
+            'telefono': getattr(perfil, 'telefono', None)
+        }
+
     def get_tecnico(self, obj):
         usuario = obj.id_usuario
         if not usuario:
@@ -596,7 +659,7 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         return DiagnosticoOutputSerializer(diag).data
 
     def get_bitacora(self, obj):
-        items = obj.bitacorareparacion_set.all().order_by('fecha_hora', 'id_bitacora')
+        items = obj.bitacorareparacion_set.all().order_by('id_bitacora')
         return BitacoraOutputSerializer(items, many=True).data
 
     def get_insumos(self, obj):
@@ -608,6 +671,41 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         if not calif:
             return None
         return CalificacionOutputSerializer(calif).data
+
+    def get_historial_reparaciones(self, obj):
+        disp = obj.id_dispositivo
+        if not disp:
+            return []
+        reps = disp.reparacion_set.exclude(id_reparacion=obj.id_reparacion).order_by('-fecha_inicio', '-id_reparacion')
+        resultado = []
+        for r in reps:
+            diag = r.diagnostico_set.first()
+            calif = r.calificacion_set.first()
+            tecnico = r.id_usuario
+            tec_nombre = tecnico.email if tecnico else 'N/A'
+            if tecnico and getattr(tecnico, 'perfilusuario', None):
+                p = tecnico.perfilusuario
+                if p.nombre or p.apellido:
+                    tec_nombre = f"{p.nombre or ''} {p.apellido or ''}".strip()
+            
+            bitacoras_data = BitacoraOutputSerializer(
+                r.bitacorareparacion_set.all().order_by('id_bitacora'),
+                many=True
+            ).data
+
+            resultado.append({
+                'id_reparacion': r.id_reparacion,
+                'fecha_inicio': r.fecha_inicio,
+                'fecha_entrega': r.fecha_entrega,
+                'etapa': r.etapa,
+                'codigo_sec': r.codigo_sec if self._es_personal_autorizado() else None,
+                'tecnico': tec_nombre,
+                'desc_cliente': r.desc_cliente,
+                'diagnostico': DiagnosticoOutputSerializer(diag).data if diag else None,
+                'calificacion': CalificacionOutputSerializer(calif).data if calif else None,
+                'bitacoras': bitacoras_data
+            })
+        return resultado
 
     def get_observaciones_fisicas(self, obj):
         bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado=2).order_by('-id_bitacora').first()
@@ -1026,9 +1124,11 @@ class ReparacionListOutputSerializer(serializers.Serializer):
         nombre_completo = f"{nombre} {apellido}".strip() or cliente.email
         return {
             'id_cliente': cliente.id_usuario,
-            'email': cliente.email,
+            'nombre': nombre,
+            'apellido': apellido,
             'nombre_completo': nombre_completo,
             'dni': getattr(perfil, 'dni', None),
+            'email': cliente.email,
             'telefono': getattr(perfil, 'telefono', None)
         }
 
@@ -1304,5 +1404,68 @@ class DecisionReparacionInputSerializer(serializers.Serializer):
                     "metodo_pago": "El método de pago es obligatorio cuando se acepta la reparación."
                 })
             attrs['metodo_pago'] = metodo_pago
+
+            # Regla de Negocio: Los envíos a domicilio no admiten pago en efectivo en mostrador
+            if metodo_entrega.upper() == 'ENVIO':
+                metodo_pago_upper = metodo_pago.upper()
+                if 'EFECTIVO' in metodo_pago_upper or metodo_pago_upper in ('MOSTRADOR', 'EFECTIVO_MOSTRADOR'):
+                    raise serializers.ValidationError({
+                        "metodo_pago": "El método de pago en efectivo en mostrador no está disponible para envíos a domicilio."
+                    })
         return attrs
+
+
+class CambiarEstadoReparacionInputSerializer(serializers.Serializer):
+    """
+    CU-10: Validación de entrada para actualizar el estado operativo de una reparación.
+    - nuevo_estado: Requerido, string normalizado contra estados válidos del sistema.
+    - comentario: Requerido, string no vacío para justificación técnica de auditoría.
+    """
+    nuevo_estado = serializers.CharField(
+        max_length=50,
+        required=True,
+        error_messages={
+            "required": "El nuevo estado de la reparación es obligatorio.",
+            "blank": "El nuevo estado de la reparación no puede estar en blanco."
+        }
+    )
+    comentario = serializers.CharField(
+        max_length=1000,
+        required=True,
+        error_messages={
+            "required": "El comentario técnico es obligatorio.",
+            "blank": "El comentario técnico no puede estar en blanco."
+        }
+    )
+
+    ESTADOS_VALIDOS = {
+        'ESPERANDO_REPUESTOS': 'ESPERANDO_REPUESTOS',
+        'ESPERANDO_REPUESTO': 'ESPERANDO_REPUESTOS',
+        'ESPERANDO_INSUMO': 'ESPERANDO_REPUESTOS',
+        'ESPERANDO_INSUMOS': 'ESPERANDO_REPUESTOS',
+        'EN_REPARACION': 'EN_REPARACION',
+        'REPARACION_EN_CURSO': 'EN_REPARACION',
+        'FINALIZADO': 'FINALIZADO',
+        'FINALIZADA': 'FINALIZADO',
+        'ESPERANDO_DIAGNOSTICO': 'ESPERANDO_DIAGNOSTICO',
+        'ESPERANDO_CONFIRMACION': 'ESPERANDO_CONFIRMACION'
+    }
+
+    def validate_nuevo_estado(self, value):
+        val_norm = str(value or '').strip().upper().replace(' ', '_')
+        if val_norm not in self.ESTADOS_VALIDOS:
+            validos_legibles = ", ".join(sorted(set(self.ESTADOS_VALIDOS.values())))
+            raise serializers.ValidationError(
+                f"Estado '{value}' inválido. Los estados permitidos son: {validos_legibles}."
+            )
+        return self.ESTADOS_VALIDOS[val_norm]
+
+    def validate_comentario(self, value):
+        comentario_limpio = str(value or '').strip()
+        if not comentario_limpio:
+            raise serializers.ValidationError(
+                "El comentario técnico es obligatorio y no puede estar vacío ni contener solo espacios."
+            )
+        return comentario_limpio
+
 

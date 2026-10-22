@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import { normalizeRole } from '../../utils/roleRoutes';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
@@ -12,6 +13,16 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export default function RegisterDeviceScreen() {
   const navigate = useNavigate();
   const { user, token } = useAuth();
+
+  // Regla de Negocio Estricta: Únicamente los clientes pueden registrar dispositivos
+  useEffect(() => {
+    if (user) {
+      const rol = normalizeRole(user.role || user.id_rol?.codigo);
+      if (rol && rol !== 'cliente') {
+        navigate(rol === 'admin' ? '/admin/dashboard' : '/tareas-tecnico', { replace: true });
+      }
+    }
+  }, [user, navigate]);
 
   // Estados de catálogos en cascada
   const [tiposDispositivos, setTiposDispositivos] = useState([]);

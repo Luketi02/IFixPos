@@ -589,3 +589,35 @@ def obtener_diagnostico_cliente(*, usuario_cliente: Usuario, id_reparacion: int)
 
     return diagnostico
 
+
+# ==============================================================================
+# CU-10: Actualizar Estado de Reparación
+# ==============================================================================
+
+def obtener_reparacion_para_cambio_estado(id_reparacion: int) -> Reparacion:
+    """
+    CU-10: Recupera la reparación para actualización de estado operativo.
+    - Si no existe, levanta ObjectDoesNotExist.
+    - Si se encuentra en un estado terminal irreversible ('ENTREGADO' o 'CANCELADO'),
+      levanta ValidationError.
+    """
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+            'id_usuario',
+            'id_usuario__perfilusuario'
+        ).get(pk=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise ObjectDoesNotExist(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    etapa_actual = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+    estados_terminales = ('ENTREGADO', 'ENTREGADA', 'CANCELADO', 'CANCELADA')
+    if etapa_actual in estados_terminales:
+        raise ValidationError("La reparación se encuentra en un estado terminal y no puede ser modificada.")
+
+    return reparacion
+
+

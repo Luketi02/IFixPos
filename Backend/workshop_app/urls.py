@@ -15,6 +15,7 @@ from .apis import (
     CargarDiagnosticoApi,
     ConsultarDiagnosticoClienteApi,
     DecisionReparacionApi,
+    CambiarEstadoReparacionApi,
     CategoriaReparacionApi,
     CategoriaReparacionEstadoApi
 )
@@ -56,6 +57,9 @@ urlpatterns = [
 
     # CU-09: Confirmar o Rechazar Reparación (Cliente)
     path('reparaciones/<int:id_reparacion>/decision/', DecisionReparacionApi.as_view(), name='decision-reparacion'),
+
+    # CU-10: Actualizar Estado de Reparación (Técnico / Taller)
+    path('reparaciones/<int:id_reparacion>/estado/', CambiarEstadoReparacionApi.as_view(), name='cambiar-estado-reparacion'),
 
     # CU-58: Filtrar Reparaciones
     path('reparaciones/', ListarReparacionesApi.as_view(), name='listar-reparaciones'),

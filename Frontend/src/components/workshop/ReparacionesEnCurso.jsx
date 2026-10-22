@@ -6,13 +6,14 @@ import useAuth from '../../context/useAuth';
 import { formatearEstadoReparacion, obtenerColorBadgeEstado } from '../../utils/repairStatus';
 import { formatearFecha } from '../../utils/fechas';
 import CargarDiagnosticoModal from './CargarDiagnosticoModal';
+import CambiarEstadoModal from './CambiarEstadoModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 /**
  * Pantalla / Módulo de Reparaciones en Curso para el personal del taller técnico.
  * Lista las reparaciones activas, permite filtrado dinámico y habilita el botón
- * "Cargar Diagnóstico" para órdenes que aguardan su evaluación formal.
+ * "Cargar Diagnóstico" y el botón "Actualizar Estado" (CU-10).
  */
 export default function ReparacionesEnCurso({ onAlerta }) {
   const { token } = useAuth();
@@ -25,9 +26,13 @@ export default function ReparacionesEnCurso({ onAlerta }) {
   const [filtroEstado, setFiltroEstado] = useState('TODOS');
   const [busquedaTexto, setBusquedaTexto] = useState('');
 
-  // Modal de Diagnóstico
+  // Modal de Diagnóstico (CU-08)
   const [modalAbierto, setModalAbierto] = useState(false);
   const [reparacionSeleccionada, setReparacionSeleccionada] = useState(null);
+
+  // Modal de Actualizar Estado (CU-10)
+  const [modalEstadoAbierto, setModalEstadoAbierto] = useState(false);
+  const [reparacionParaEstado, setReparacionParaEstado] = useState(null);
 
   // Cargar reparaciones activas del taller
   const cargarReparaciones = useCallback(async () => {
@@ -72,14 +77,23 @@ export default function ReparacionesEnCurso({ onAlerta }) {
       onAlerta('success', mensaje);
     }
 
-    // Actualizar localmente la tarjeta a 'ESPERANDO_CONFIRMACION'
-    setReparaciones((prev) =>
-      prev.map((r) =>
-        r.id_reparacion === idReparacion
-          ? { ...r, etapa: 'ESPERANDO_CONFIRMACION' }
-          : r
-      )
-    );
+    // Recargar la grilla completa para traer los datos y estados frescos del backend
+    cargarReparaciones();
+  };
+
+  // Manejador al abrir el modal de actualización de estado (CU-10)
+  const handleAbrirCambiarEstado = (rep) => {
+    setReparacionParaEstado(rep);
+    setModalEstadoAbierto(true);
+  };
+
+  // Callback de éxito tras actualizar el estado
+  const handleCambioEstadoExitoso = (mensaje) => {
+    if (typeof onAlerta === 'function') {
+      onAlerta('success', mensaje);
+    }
+    // Recargar la grilla para que refleje el nuevo estado en tiempo real
+    cargarReparaciones();
   };
 
   // Filtrado reactivo por pestañas y búsqueda
@@ -245,11 +259,26 @@ export default function ReparacionesEnCurso({ onAlerta }) {
           <AnimatePresence>
             {reparacionesFiltradas.map((rep) => {
               const etapaRaw = (rep.etapa || '').toUpperCase();
-              const etapaNorm = etapaRaw.replace(/[\s\-]+/g, '_');
+              const etapaNormalizada = etapaRaw
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[\s\-]+/g, '_');
+
               const esDiagnosticoPendiente =
-                etapaNorm === 'ESPERANDO_DIAGNOSTICO' ||
-                etapaNorm === 'EN_DIAGNOSTICO' ||
-                etapaNorm.includes('ESPERANDO_DIAG');
+                etapaNormalizada === 'ESPERANDO_DIAGNOSTICO' ||
+                etapaNormalizada === 'EN_DIAGNOSTICO' ||
+                etapaNormalizada.includes('ESPERANDO_DIAG');
+
+              // Estados donde NO está permitido actualizar el estado manualmente
+              const estadosBloqueadosActualizar = [
+                'ESPERANDO_DIAGNOSTICO',
+                'ESPERANDO_DISPOSITIVO',
+                'ESPERANDO_CONFIRMACION'
+              ];
+
+              const puedeActualizarEstado =
+                !estadosBloqueadosActualizar.includes(etapaNormalizada) &&
+                !etapaNormalizada.includes('ESPERANDO_DIAG');
 
               const clienteDisplay =
                 rep.cliente?.nombre_completo ||
@@ -325,25 +354,48 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                     )}
                   </div>
 
-                  {/* 4. Botón de Acción Condicional */}
-                  <div className="pt-3 border-t border-slate-700/60 flex items-center justify-end gap-2">
-                    {esDiagnosticoPendiente ? (
-                      <button
-                        type="button"
-                        onClick={() => handleAbrirDiagnostico(rep)}
-                        className="w-full py-2.5 px-4 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm transition-all shadow-[0_0_18px_rgba(6,182,212,0.4)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <span>Cargar Diagnóstico</span>
-                      </button>
-                    ) : (
-                      <div className="w-full py-2 px-3 rounded-xl bg-slate-900/40 border border-slate-800 text-center text-[11px] font-mono text-slate-400">
-                        Diagnóstico Emitido • {formatearEstadoReparacion(rep.etapa)}
-                      </div>
-                    )}
-                  </div>
+                  {/* 4. Botones de Acción de la Reparación */}
+                  {(esDiagnosticoPendiente || puedeActualizarEstado) ? (
+                    <div className="pt-3 border-t border-slate-700/60 flex flex-col sm:flex-row items-center gap-2">
+                      {esDiagnosticoPendiente && (
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirDiagnostico(rep)}
+                          className="w-full sm:flex-1 py-2.5 px-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-1.5"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span>Cargar Diagnóstico</span>
+                        </button>
+                      )}
+
+                      {/* Botón secundario: Actualizar Estado */}
+                      {puedeActualizarEstado && (
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirCambiarEstado(rep)}
+                          className={`w-full ${esDiagnosticoPendiente ? 'sm:flex-1' : ''} py-2.5 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-[#8B5CF6] hover:text-purple-300 border border-[#8B5CF6]/40 hover:border-[#8B5CF6]/80 font-bold text-xs transition-all shadow-sm hover:shadow-[0_0_15px_rgba(139,92,246,0.25)] flex items-center justify-center gap-1.5`}
+                          title="Actualizar estado operativo del equipo"
+                        >
+                          <span className="text-sm leading-none">⚙️</span>
+                          <span>Actualizar Estado</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="pt-3 border-t border-slate-700/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                      <span className="flex items-center gap-1.5 text-amber-400/90">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        {etapaNormalizada === 'ESPERANDO_DISPOSITIVO'
+                          ? 'Aguardando recepción en taller'
+                          : etapaNormalizada === 'ESPERANDO_CONFIRMACION'
+                          ? 'Aguardando confirmación del cliente'
+                          : 'Gestión no disponible en esta etapa'}
+                      </span>
+                      <span className="text-slate-500 font-mono">#{rep.id_reparacion}</span>
+                    </div>
+                  )}
                 </motion.div>
               );
             })}
@@ -351,7 +403,7 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         </div>
       )}
 
-      {/* 4. Modal Inteligente de Cargar Diagnóstico */}
+      {/* 4. Modal Inteligente de Cargar Diagnóstico (CU-08) */}
       <CargarDiagnosticoModal
         isOpen={modalAbierto}
         onClose={() => {
@@ -360,6 +412,17 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         }}
         reparacion={reparacionSeleccionada}
         onSuccess={handleDiagnosticoExitoso}
+      />
+
+      {/* 5. Modal Inteligente de Actualizar Estado (CU-10) */}
+      <CambiarEstadoModal
+        isOpen={modalEstadoAbierto}
+        onClose={() => {
+          setModalEstadoAbierto(false);
+          setReparacionParaEstado(null);
+        }}
+        reparacion={reparacionParaEstado}
+        onSuccess={handleCambioEstadoExitoso}
       />
     </div>
   );

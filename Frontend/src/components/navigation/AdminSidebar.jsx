@@ -63,9 +63,7 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Taller & Reparaciones',
     children: [
-      { value: 'workshop-orders', label: 'Órdenes de Reparación', icon: Settings02Icon },
-      { value: 'workshop-diagnostics', label: 'Diagnósticos de Entrada', icon: CursorPointer01Icon },
-      { value: 'workshop-logs', label: 'Bitácoras Técnicas', icon: Layers01Icon },
+      { value: 'admin-repairs', label: 'Reparaciones', icon: Settings02Icon, route: '/admin/reparaciones' }
     ]
   },
   {
@@ -278,6 +276,8 @@ export default function AdminSidebar({
       navigate('/admin/catalogos/categorias-producto');
     } else if (val === 'catalog-categorias-reparacion') {
       navigate('/admin/catalogos/categorias-reparacion');
+    } else if (val === 'admin-repairs') {
+      navigate('/admin/reparaciones');
     } else {
       if (effectiveRole === 'cliente') {
         navigate('/tienda');

@@ -25,6 +25,8 @@ export default function DispositivoDetalle() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [modalReparacionAbierto, setModalReparacionAbierto] = useState(false);
+  const [bitacoraActivaAbierta, setBitacoraActivaAbierta] = useState(true);
+  const [reparacionHistorialBitacoraAbierta, setReparacionHistorialBitacoraAbierta] = useState({});
 
   const isLoading = cargadoId !== `${id_dispositivo}-${recarga}`;
 
@@ -245,8 +247,8 @@ export default function DispositivoDetalle() {
                       <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[11px] font-mono font-semibold uppercase">
                         {dispositivo.tipo || 'Dispositivo'}
                       </span>
-                      <span className="text-xs text-slate-400 font-mono">
-                        ID: <span className="text-slate-200">#{dispositivo.id_dispositivo}</span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[11px] font-medium">
+                        Equipo Registrado
                       </span>
                     </div>
 
@@ -297,7 +299,7 @@ export default function DispositivoDetalle() {
                           </span>
                         </div>
                         <h2 className="text-xl font-black text-white">
-                          Orden #{dispositivo.reparacion_activa.id_reparacion}
+                          Seguimiento de Reparación en Curso
                         </h2>
                         <div className="flex flex-wrap items-center gap-2 text-xs">
                           <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 font-mono font-semibold">
@@ -395,8 +397,8 @@ export default function DispositivoDetalle() {
                       >
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-bold text-white font-mono">
-                              Orden #{rep.id_reparacion}
+                            <span className="text-xs font-bold text-white">
+                              Servicio de Reparación
                             </span>
                             <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono">
                               {formatearEstadoReparacion(rep.etapa)}
@@ -425,6 +427,38 @@ export default function DispositivoDetalle() {
                               <span className="text-[11px] text-slate-400 font-mono">
                                 ({rep.calificacion.puntuacion}/5)
                               </span>
+                            </div>
+                          )}
+
+                          {/* Bitácora histórica colapsable */}
+                          {rep.bitacora && rep.bitacora.length > 0 && (
+                            <div className="pt-2 border-t border-slate-800/80 mt-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setReparacionHistorialBitacoraAbierta((prev) => ({
+                                    ...prev,
+                                    [rep.id_reparacion]: !prev[rep.id_reparacion]
+                                  }))
+                                }
+                                className="text-[11px] font-mono text-[#8B5CF6] hover:text-[#C4B5FD] flex items-center justify-between w-full py-0.5 cursor-pointer"
+                              >
+                                <span>Ver historial de avances ({rep.bitacora.length} registros)</span>
+                                <span>{reparacionHistorialBitacoraAbierta[rep.id_reparacion] ? '▲' : '▼'}</span>
+                              </button>
+                              {reparacionHistorialBitacoraAbierta[rep.id_reparacion] && (
+                                <div className="mt-2 space-y-2 pl-2 border-l-2 border-purple-900/60 text-xs">
+                                  {rep.bitacora.map((hb) => (
+                                    <div key={hb.id_bitacora} className="p-2 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px]">
+                                      <div className="flex items-center justify-between text-purple-300 font-semibold mb-0.5">
+                                        <span>{hb.estado_nombre || formatearEstadoReparacion(hb.estado_alcanzado)}</span>
+                                        <span className="font-mono text-[10px] text-slate-400">{hb.fecha_hora}</span>
+                                      </div>
+                                      <p className="text-slate-300 text-[11px]">{hb.comentario}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -458,7 +492,7 @@ export default function DispositivoDetalle() {
         dispositivo={dispositivo}
         onSuccess={(resultado) => {
           setSuccessMessage(
-            `¡Reparación iniciada exitosamente! Orden #${resultado?.id_reparacion} creada. Token de Entrega: ${resultado?.codigo_seguridad}`
+            `¡Reparación iniciada con éxito! Su solicitud para ${dispositivo?.marca || ''} ${dispositivo?.modelo || ''} ha sido registrada. Código para presentar en mostrador: ${resultado?.codigo_seguridad}`
           );
           setRecarga((n) => n + 1);
         }}

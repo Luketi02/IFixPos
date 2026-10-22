@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import secrets
 import string
@@ -494,6 +495,11 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
         nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
         nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
 
+        from core_app.selectors import obtener_url_frontend
+
+        url_frontend = obtener_url_frontend()
+        url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
         asunto = f"Orden de Servicio #{reparacion.id_reparacion} - Ingreso de Reparación (IFixPos)"
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
@@ -505,6 +511,8 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             f"- Código de Seguridad / Token: {reparacion.codigo_sec}\n"
             f"- Problema Informado: {reparacion.desc_cliente}\n\n"
             f"Presente el código de seguridad '{reparacion.codigo_sec}' en el mostrador del taller para confirmar la entrega física del equipo.\n\n"
+            f"Acceda a los detalles y seguimiento en línea de su reparación aquí:\n"
+            f"{url_reparacion}\n\n"
             f"IFixPos - Taller de Reparaciones"
         )
 
@@ -521,6 +529,10 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Descripción:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
             f"</table>"
             f"<p style='color: #64748b; font-size: 13px;'>Presente este código en el mostrador físico del taller al entregar su equipo.</p>"
+            f"<div style='margin: 24px 0; text-align: center;'>"
+            f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Ver Reparación y Seguimiento</a>"
+            f"</div>"
+            f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
             f"</div>"
         )
 
@@ -530,8 +542,9 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             cuerpo_texto=cuerpo_texto,
             tipo_notificacion="REPARACION",
             cuerpo_html=cuerpo_html,
-            mensaje_notificacion=f"Nueva orden de servicio #{reparacion.id_reparacion} generada para su dispositivo.",
+            mensaje_notificacion=f"Nueva orden de servicio generada para su dispositivo ({nombre_marca} {nombre_modelo}). Presione aquí para obtener más detalles.",
             codigo_sensible=reparacion.codigo_sec,
+            dispositivo=dispositivo,
             adjuntar_logo=True
         )
     except Exception as e:
@@ -650,6 +663,11 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
 
         obs_texto = observaciones_fisicas or 'Sin observaciones registradas'
 
+        from core_app.selectors import obtener_url_frontend
+
+        url_frontend = obtener_url_frontend()
+        url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
         asunto = f"Comprobante de Recepción Física - Orden #{reparacion.id_reparacion} (IFixPos)"
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
@@ -662,6 +680,8 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             f"- Problemas Reportados: {reparacion.desc_cliente}\n"
             f"- Estado Estético / Observaciones Físicas: {obs_texto}\n\n"
             f"Su dispositivo ha ingresado formalmente a la fila de diagnóstico técnico. Le notificaremos a la brevedad.\n\n"
+            f"Consulte el avance y estado de su reparación en:\n"
+            f"{url_reparacion}\n\n"
             f"IFixPos - Taller de Reparaciones"
         )
 
@@ -678,6 +698,10 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Falla Informada:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
             f"</table>"
             f"<p style='color: #64748b; font-size: 13px;'>Este comprobante certifica la tenencia física del equipo y su condición estética al ingreso.</p>"
+            f"<div style='margin: 24px 0; text-align: center;'>"
+            f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Ver Estado de la Reparación</a>"
+            f"</div>"
+            f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
             f"</div>"
         )
 
@@ -687,8 +711,9 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             cuerpo_texto=cuerpo_texto,
             tipo_notificacion="REPARACION",
             cuerpo_html=cuerpo_html,
-            mensaje_notificacion=f"Dispositivo recepcionado físicamente en mostrador para la orden #{reparacion.id_reparacion}.",
+            mensaje_notificacion=f"Recibimos su dispositivo ({nombre_marca} {nombre_modelo}) en nuestro taller. Presione aquí para ver el comprobante y el seguimiento.",
             codigo_sensible=reparacion.codigo_sec,
+            dispositivo=dispositivo,
             adjuntar_logo=True
         )
     except Exception as e:
@@ -718,6 +743,7 @@ def recepcionar_dispositivo_taller(
     reparacion.credencial_acceso = datos_validados.get('credencial_acceso') or 'Ninguna'
     reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
     reparacion.hora_recepcion = django_timezone.now().time()
+    reparacion.id_usuario = usuario_tecnico
     reparacion.save()
 
     # Actualizar relación M2M de categorías si fueron especificadas
@@ -756,6 +782,113 @@ def recepcionar_dispositivo_taller(
     )
 
     return reparacion
+
+
+def generar_y_enviar_notificacion_diagnostico(
+    reparacion: Reparacion,
+    diagnostico: Any,
+    insumos_data: list = None
+) -> None:
+    """
+    CU-08: Notifica al cliente por correo electrónico que el diagnóstico técnico y presupuesto
+    están disponibles para su revisión, incluyendo el enlace directo a la reparación.
+    """
+    try:
+        from core_app.services import registrar_y_enviar_notificacion_correo
+        from core_app.selectors import obtener_url_frontend
+
+        dispositivo = reparacion.id_dispositivo
+        cliente = dispositivo.id_usuario
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre_cliente = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() or cliente.email
+
+        modelo = getattr(dispositivo, 'id_modelo', None)
+        nombre_modelo = getattr(modelo, 'nombre', 'N/D')
+        nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
+        nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
+
+        url_frontend = obtener_url_frontend()
+        url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
+        asunto = f"Diagnóstico y Presupuesto Disponible - Reparación #{reparacion.id_reparacion} (IFixPos)"
+
+        mano_obra_val = getattr(diagnostico, 'costo_diagnostico', None)
+        mano_obra_str = f"${mano_obra_val}" if mano_obra_val is not None else "A convenir"
+
+        insumos_texto = ""
+        insumos_html = ""
+        if insumos_data:
+            from catalog_app.models import Producto
+            filas_html = []
+            filas_txt = []
+            for item in insumos_data:
+                prod = Producto.objects.filter(pk=item.get('id_producto')).first()
+                nombre_prod = prod.nombre if prod else f"Insumo #{item.get('id_producto')}"
+                cant = item.get('cantidad', 1)
+                precio = prod.precio_venta if prod else 0
+                filas_txt.append(f"  * {cant}x {nombre_prod} (${precio} c/u)")
+                filas_html.append(
+                    f"<tr><td style='padding: 6px; border-bottom: 1px solid #eee;'>{nombre_prod}</td>"
+                    f"<td style='padding: 6px; border-bottom: 1px solid #eee; text-align: center;'>{cant}</td>"
+                    f"<td style='padding: 6px; border-bottom: 1px solid #eee; text-align: right;'>${precio}</td></tr>"
+                )
+            insumos_texto = "\nInsumos y repuestos requeridos:\n" + "\n".join(filas_txt) + "\n"
+            insumos_html = (
+                f"<h4 style='color: #334155; margin-top: 15px; margin-bottom: 8px;'>Repuestos e Insumos Presupuestados:</h4>"
+                f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 13px;'>"
+                f"<tr style='background: #f8fafc;'><th style='padding: 6px; text-align: left;'>Producto</th>"
+                f"<th style='padding: 6px; text-align: center;'>Cant.</th>"
+                f"<th style='padding: 6px; text-align: right;'>Unitario</th></tr>"
+                f"{''.join(filas_html)}"
+                f"</table>"
+            )
+
+        cuerpo_texto = (
+            f"Estimado/a {nombre_cliente},\n\n"
+            f"Le informamos que el equipo técnico ha completado el diagnóstico para la Reparación #{reparacion.id_reparacion} "
+            f"y el presupuesto ya se encuentra disponible para su revisión y confirmación.\n\n"
+            f"Detalles del Diagnóstico:\n"
+            f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
+            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- Diagnóstico de la Falla: {diagnostico.descripcion_falla}\n"
+            f"- Mano de Obra Estimada: {mano_obra_str}\n"
+            f"{insumos_texto}\n"
+            f"Por favor ingrese al siguiente enlace para revisar el presupuesto en detalle y aceptar o rechazar la reparación:\n"
+            f"{url_reparacion}\n\n"
+            f"IFixPos - Taller de Reparaciones"
+        )
+
+        cuerpo_html = (
+            f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Diagnóstico y Presupuesto Disponible</h2>"
+            f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
+            f"<p>El equipo técnico ha completado la revisión de su dispositivo. El presupuesto correspondiente a la <strong>Orden #{reparacion.id_reparacion}</strong> ya se encuentra disponible para su aprobación:</p>"
+            f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 15px;'>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Diagnóstico Técnico:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{diagnostico.descripcion_falla}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Mano de Obra:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>{mano_obra_str}</strong></td></tr>"
+            f"</table>"
+            f"{insumos_html}"
+            f"<div style='margin: 26px 0; text-align: center;'>"
+            f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Revisar y Responder Presupuesto</a>"
+            f"</div>"
+            f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
+            f"</div>"
+        )
+
+        registrar_y_enviar_notificacion_correo(
+            usuario=cliente,
+            asunto=asunto,
+            cuerpo_texto=cuerpo_texto,
+            tipo_notificacion="DIAGNOSTICO_DISPONIBLE",
+            cuerpo_html=cuerpo_html,
+            mensaje_notificacion="Su presupuesto ya se encuentra disponible para revisión",
+            dispositivo=dispositivo,
+            adjuntar_logo=True
+        )
+    except Exception as e:
+        print(f"[CU-08 Diagnóstico] Advertencia al generar o despachar notificación de diagnóstico: {e}")
 
 
 # ==============================================================================
@@ -803,8 +936,9 @@ def cargar_diagnostico_tecnico(
             precio_unitario=producto.precio_venta
         )
 
-    # Paso 4: Transición de Estado de Reparación
+    # Paso 4: Transición de Estado de Reparación y asignación de técnico responsable
     reparacion.etapa = 'ESPERANDO_CONFIRMACION'
+    reparacion.id_usuario = usuario_tecnico
     reparacion.save()
 
     # Paso 5: Registro inmutable en BitacoraReparacion
@@ -817,15 +951,11 @@ def cargar_diagnostico_tecnico(
         comentario="Carga de diagnóstico"
     )
 
-    # Paso 6: Notificación automática al cliente y Auditoría en LogSistema
-    cliente = reparacion.id_dispositivo.id_usuario
-    Notificacion.objects.create(
-        id_usuario=cliente,
-        mensaje="Su presupuesto ya se encuentra disponible para revisión",
-        tipo="DIAGNOSTICO_DISPONIBLE",
-        fecha_envio=django_timezone.now().date(),
-        leida=False,
-        id_dispositivo=reparacion.id_dispositivo
+    # Paso 6: Notificación automática por correo al cliente y persistencia en Notificacion
+    generar_y_enviar_notificacion_diagnostico(
+        reparacion=reparacion,
+        diagnostico=diagnostico,
+        insumos_data=insumos_data
     )
 
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
@@ -945,6 +1075,14 @@ def procesar_decision_reparacion(
 
         # Resolver método de entrega y costo de envío
         metodo_entrega = str(datos_validados.get('metodo_entrega') or 'RETIRO').strip().upper()
+        nombre_pago = str(datos_validados.get('metodo_pago') or 'EFECTIVO').strip()
+
+        # Validación de coherencia operativa: No se permite efectivo en mostrador si es envío a domicilio
+        if metodo_entrega == 'ENVIO':
+            pago_norm = nombre_pago.upper()
+            if 'EFECTIVO' in pago_norm or pago_norm in ('MOSTRADOR', 'EFECTIVO_MOSTRADOR'):
+                raise ValidationError("El método de pago en efectivo en mostrador no está disponible para envíos a domicilio.")
+
         costo_envio = Decimal('0.00')
         if metodo_entrega == 'ENVIO':
             cfg_envio = ConfiguracionSistema.objects.filter(clave='envioLocal').first()
@@ -1028,9 +1166,35 @@ def procesar_decision_reparacion(
         comentario=comentario_bitacora
     )
 
-    # Paso 7: Notificación interna dirigida al técnico asignado
-    tecnico = reparacion.id_usuario
-    if tecnico:
+    # Paso 7: Notificación interna dirigida al técnico asignado (nunca al cliente)
+    id_cliente = getattr(usuario_cliente, 'id_usuario', None) or getattr(usuario_cliente, 'id', None)
+    tecnico_destinatario = None
+
+    # 1. Comprobar si reparacion.id_usuario es personal del taller y no el cliente
+    if reparacion.id_usuario and reparacion.id_usuario_id != id_cliente:
+        rol_rep_user = getattr(getattr(reparacion.id_usuario, 'id_rol', None) or getattr(reparacion.id_usuario, 'rol', None), 'codigo', '').upper()
+        if rol_rep_user in ('TECNICO', 'ADMIN'):
+            tecnico_destinatario = reparacion.id_usuario
+
+    # 2. Si no, buscar el técnico que realizó la última bitácora técnica de diagnóstico o recepción
+    if not tecnico_destinatario:
+        bitacora_tec = BitacoraReparacion.objects.filter(
+            id_reparacion=reparacion,
+            id_usuario__id_rol__codigo__in=['TECNICO', 'ADMIN']
+        ).exclude(id_usuario_id=id_cliente).order_by('-id_bitacora').first()
+        if bitacora_tec:
+            tecnico_destinatario = bitacora_tec.id_usuario
+
+    # 3. Fallback: Buscar técnico activo del taller
+    if not tecnico_destinatario:
+        from users_app.models import Usuario
+        tecnico_destinatario = Usuario.objects.filter(
+            id_rol__codigo='TECNICO',
+            estado_activo=True
+        ).first()
+
+    # Emitir notificación exclusivamente si el destinatario es personal del taller y no el cliente
+    if tecnico_destinatario and tecnico_destinatario.id_usuario != id_cliente:
         decision_verbo = "aceptó" if decision == 'ACEPTAR' else "rechazó"
         modelo_nombre = (
             reparacion.id_dispositivo.id_modelo.nombre
@@ -1038,13 +1202,20 @@ def procesar_decision_reparacion(
             else "Equipo"
         )
         Notificacion.objects.create(
-            id_usuario=tecnico,
-            mensaje=f"El cliente {decision_verbo} el presupuesto para la reparación #{reparacion.id_reparacion} ({modelo_nombre}).",
+            id_usuario=tecnico_destinatario,
+            mensaje=f"El cliente {decision_verbo} el presupuesto para el equipo {modelo_nombre}. Presione aquí para ver la orden de trabajo.",
             tipo=f"DECISION_REPARACION_{decision}",
             fecha_envio=django_timezone.now().date(),
             leida=False,
             id_dispositivo=reparacion.id_dispositivo
         )
+
+    # Notificación por correo de confirmación de decisión al cliente con link a la reparación
+    generar_y_enviar_confirmacion_decision_cliente(
+        reparacion=reparacion,
+        decision=decision,
+        comentarios=comentarios
+    )
 
     # Paso 8: Auditoría en LogSistema para trazabilidad
     email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
@@ -1064,4 +1235,310 @@ def procesar_decision_reparacion(
     )
 
     return reparacion
+
+
+def generar_y_enviar_confirmacion_decision_cliente(
+    reparacion: Reparacion,
+    decision: str,
+    comentarios: str = ''
+) -> None:
+    """
+    CU-09: Notifica al cliente por correo electrónico confirmando la aceptación o rechazo
+    del presupuesto de reparación, adjuntando el enlace directo a la orden de servicio.
+    """
+    try:
+        from core_app.services import registrar_y_enviar_notificacion_correo
+        from core_app.selectors import obtener_url_frontend
+
+        dispositivo = reparacion.id_dispositivo
+        cliente = getattr(dispositivo, 'id_usuario', None)
+        if not cliente:
+            return
+
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre_cliente = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() or cliente.email
+
+        modelo = getattr(dispositivo, 'id_modelo', None)
+        nombre_modelo = getattr(modelo, 'nombre', 'N/D')
+        nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
+        nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
+
+        url_frontend = obtener_url_frontend()
+        url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
+        decision_humana = "Aceptado" if decision == 'ACEPTAR' else "Rechazado"
+        asunto = f"Presupuesto {decision_humana} - Orden #{reparacion.id_reparacion} (IFixPos)"
+
+        detalle_decision = (
+            "Su presupuesto ha sido aprobado. El equipo técnico iniciará de inmediato los trabajos de reparación."
+            if decision == 'ACEPTAR'
+            else "Ha cancelado el presupuesto. Su dispositivo estará disponible en mostrador para su retiro."
+        )
+
+        cuerpo_texto = (
+            f"Estimado/a {nombre_cliente},\n\n"
+            f"Confirmamos el registro de su decisión para la Reparación #{reparacion.id_reparacion}.\n\n"
+            f"Detalles:\n"
+            f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
+            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- Decisión Registrada: Presupuesto {decision_humana}\n"
+            f"- Estado Actual de la Orden: {reparacion.etapa}\n"
+            f"- Nota: {detalle_decision}\n\n"
+            f"Puede consultar los detalles de su orden y la bitácora en:\n"
+            f"{url_reparacion}\n\n"
+            f"IFixPos - Taller de Reparaciones"
+        )
+
+        badge_bg = '#dcfce7' if decision == 'ACEPTAR' else '#fee2e2'
+        badge_fg = '#15803d' if decision == 'ACEPTAR' else '#b91c1c'
+
+        cuerpo_html = (
+            f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Confirmación de Decisión</h2>"
+            f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
+            f"<p>Confirmamos la recepción de su decisión para la <strong>Orden #{reparacion.id_reparacion}</strong>:</p>"
+            f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Decisión:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: {badge_bg}; color: {badge_fg}; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>Presupuesto {decision_humana}</span></td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Detalle:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{detalle_decision}</td></tr>"
+            f"</table>"
+            f"<div style='margin: 24px 0; text-align: center;'>"
+            f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Ver Estado de la Reparación</a>"
+            f"</div>"
+            f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
+            f"</div>"
+        )
+
+        if decision == 'ACEPTAR':
+            mensaje_decision = f"Confirmamos que ha aceptado el presupuesto para su dispositivo ({nombre_marca} {nombre_modelo}). Comenzamos a trabajar en su equipo. Presione aquí para ver los detalles."
+        else:
+            mensaje_decision = f"Confirmamos que ha cancelado el presupuesto para su dispositivo ({nombre_marca} {nombre_modelo}). Su equipo está disponible para retirar en el taller. Presione aquí para más información."
+
+        registrar_y_enviar_notificacion_correo(
+            usuario=cliente,
+            asunto=asunto,
+            cuerpo_texto=cuerpo_texto,
+            tipo_notificacion=f"DECISION_REPARACION_{decision}",
+            cuerpo_html=cuerpo_html,
+            mensaje_notificacion=mensaje_decision,
+            dispositivo=dispositivo,
+            adjuntar_logo=True
+        )
+    except Exception as e:
+        print(f"[CU-09 Decisión] Advertencia al generar o despachar notificación de decisión al cliente: {e}")
+
+
+def generar_y_enviar_notificacion_cambio_estado(
+    reparacion: Reparacion,
+    nuevo_estado: str,
+    comentario: str
+) -> None:
+    """
+    CU-10: Notifica al cliente por correo electrónico ante cada cambio de estado realizado
+    sobre su reparación por el equipo de taller, adjuntando la justificación técnica y el enlace directo.
+    """
+    try:
+        from core_app.services import registrar_y_enviar_notificacion_correo
+        from core_app.selectors import obtener_url_frontend
+
+        dispositivo = reparacion.id_dispositivo
+        cliente = getattr(dispositivo, 'id_usuario', None)
+        if not cliente:
+            return
+
+        perfil = getattr(cliente, 'perfilusuario', None)
+        nombre_cliente = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() or cliente.email
+
+        modelo = getattr(dispositivo, 'id_modelo', None)
+        nombre_modelo = getattr(modelo, 'nombre', 'N/D')
+        nombre_marca = getattr(getattr(modelo, 'id_marca', None), 'nombre', 'N/D')
+        nombre_tipo = getattr(getattr(modelo, 'id_tipo_dispositivo', None), 'nombre', 'N/D')
+
+        url_frontend = obtener_url_frontend()
+        url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
+        TITULOS_ESTADOS = {
+            'ESPERANDO_DISPOSITIVO': 'Esperando Dispositivo',
+            'ESPERANDO_DIAGNOSTICO': 'Esperando Diagnóstico',
+            'EN_DIAGNOSTICO': 'En Diagnóstico',
+            'ESPERANDO_CONFIRMACION': 'Esperando Confirmación',
+            'EN_REPARACION': 'En Reparación',
+            'ESPERANDO_REPUESTOS': 'Esperando Repuestos',
+            'FINALIZADO': 'Reparación Finalizada',
+            'ENTREGADO': 'Dispositivo Entregado',
+            'CANCELADO': 'Reparación Cancelada',
+        }
+        estado_humano = TITULOS_ESTADOS.get(nuevo_estado, nuevo_estado.replace('_', ' ').title())
+
+        asunto = f"Actualización de Estado: {estado_humano} - Orden #{reparacion.id_reparacion} (IFixPos)"
+
+        cuerpo_texto = (
+            f"Estimado/a {nombre_cliente},\n\n"
+            f"Le informamos que se ha registrado una actualización en el estado de su Orden de Servicio #{reparacion.id_reparacion}.\n\n"
+            f"Detalles de la Actualización:\n"
+            f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
+            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- Nuevo Estado: {estado_humano}\n"
+            f"- Observaciones del Técnico: {comentario}\n\n"
+            f"Puede acceder a los detalles y a la bitácora completa de cambios en el siguiente enlace:\n"
+            f"{url_reparacion}\n\n"
+            f"IFixPos - Taller de Reparaciones"
+        )
+
+        cuerpo_html = (
+            f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Actualización de Reparación</h2>"
+            f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
+            f"<p>Se ha registrado un nuevo avance en la <strong>Orden #{reparacion.id_reparacion}</strong> de su dispositivo:</p>"
+            f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nuevo Estado:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>{estado_humano}</span></td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Comentarios Técnicos:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{comentario}</td></tr>"
+            f"</table>"
+            f"<div style='margin: 24px 0; text-align: center;'>"
+            f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Ver Detalles y Bitácora</a>"
+            f"</div>"
+            f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
+            f"</div>"
+        )
+
+        registrar_y_enviar_notificacion_correo(
+            usuario=cliente,
+            asunto=asunto,
+            cuerpo_texto=cuerpo_texto,
+            tipo_notificacion="CAMBIO_ESTADO_REPARACION",
+            cuerpo_html=cuerpo_html,
+            mensaje_notificacion=f"Actualización de su dispositivo ({nombre_marca} {nombre_modelo}): su reparación ahora está en {nuevo_estado} ({estado_humano}). Observación técnica: {comentario}. Presione aquí para obtener más detalles.",
+            dispositivo=dispositivo,
+            adjuntar_logo=True
+        )
+    except Exception as e:
+        print(f"[CU-10 Cambio Estado] Advertencia al generar o despachar notificación de cambio de estado: {e}")
+
+
+# ==============================================================================
+# CU-10: Actualizar Estado de Reparación (Técnico / Taller)
+# ==============================================================================
+
+@transaction.atomic
+def cambiar_estado_reparacion(
+    *,
+    usuario_tecnico: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+) -> Reparacion:
+    """
+    CU-10: Actualizar estado de reparación (exclusivo Técnico / Taller).
+    Máquina de estados que controla el avance, reanudación y retrabajo en taller:
+    - Recupera la reparación validando que no esté en estado terminal con
+      `obtener_reparacion_para_cambio_estado(id_reparacion)`.
+    - Aplica las reglas estrictas de transición de estados:
+        * Hacia 'ESPERANDO_REPUESTOS': Solo permitido si está en 'EN_REPARACION'.
+        * Hacia 'FINALIZADO': Solo permitido si está en 'EN_REPARACION'. Requiere diagnóstico registrado.
+        * Hacia 'EN_REPARACION': Permitido como reanudación desde 'ESPERANDO_REPUESTOS'
+          o como retrabajo desde 'FINALIZADO'.
+    - Actualiza el atributo etapa en Reparacion.
+    - Instancia un nuevo registro inmutable en BitacoraReparacion.
+    - Notifica automáticamente al cliente dueño del dispositivo por correo y campanita con link.
+    - Registra el evento en LogSistema con trazabilidad del técnico ejecutor.
+    """
+    from workshop_app.selectors import obtener_reparacion_para_cambio_estado
+    from workshop_app.models import BitacoraReparacion
+    from core_app.models import Notificacion, LogSistema
+
+    MAPA_ESTADOS_NUMERICOS = {
+        'ESPERANDO_DISPOSITIVO': 1,
+        'ESPERANDO_DIAGNOSTICO': 2,
+        'EN_DIAGNOSTICO': 3,
+        'ESPERANDO_CONFIRMACION': 4,
+        'EN_REPARACION': 5,
+        'FINALIZADO': 6,
+        'ENTREGADO': 7,
+        'CANCELADO': 8,
+        'ESPERANDO_REPUESTOS': 9
+    }
+
+    nuevo_estado = (datos_validados.get('nuevo_estado') or '').strip().upper().replace(' ', '_')
+    comentario = (datos_validados.get('comentario') or '').strip()
+
+    if not comentario:
+        raise ValidationError("El comentario técnico es obligatorio para justificar el cambio de estado.")
+
+    reparacion = obtener_reparacion_para_cambio_estado(id_reparacion)
+    etapa_actual = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+
+    if etapa_actual == nuevo_estado:
+        raise ValidationError(f"La reparación ya se encuentra en el estado '{nuevo_estado}'.")
+
+    # MÁQUINA DE ESTADOS - REGLAS DE TRANSICIÓN OPERATIVAS
+    if nuevo_estado == 'ESPERANDO_REPUESTOS':
+        if etapa_actual != 'EN_REPARACION':
+            raise ValidationError(
+                f"Transición no permitida: Para pasar a 'Esperando Repuestos', el equipo debe encontrarse en 'En Reparación' (actualmente: '{reparacion.etapa}')."
+            )
+
+    elif nuevo_estado == 'FINALIZADO':
+        if etapa_actual != 'EN_REPARACION':
+            raise ValidationError(
+                f"Transición no permitida: Para finalizar la reparación, el equipo debe encontrarse en 'En Reparación' (actualmente: '{reparacion.etapa}')."
+            )
+        # Verificar que posea diagnóstico técnico cargado
+        if not reparacion.diagnostico_set.exists():
+            raise ValidationError(
+                "No se puede finalizar la orden porque el equipo no cuenta con un diagnóstico técnico registrado."
+            )
+
+    elif nuevo_estado == 'EN_REPARACION':
+        # Permitido como reanudación desde 'ESPERANDO_REPUESTOS' o retrabajo desde 'FINALIZADO'
+        if etapa_actual not in ('ESPERANDO_REPUESTOS', 'FINALIZADO'):
+            raise ValidationError(
+                f"Transición no permitida: No es posible pasar a 'En Reparación' desde '{reparacion.etapa}'. Esta acción solo es válida desde 'Esperando Repuestos' (reanudación) o desde 'Finalizado' (retrabajo)."
+            )
+
+    else:
+        raise ValidationError(
+            f"Transición no permitida: No es posible cambiar manualmente de '{reparacion.etapa}' hacia '{nuevo_estado}'."
+        )
+
+    # Paso 6: Actualizar etapa en Reparacion
+    reparacion.etapa = nuevo_estado
+    reparacion.save(update_fields=['etapa'])
+
+    # Paso 8: Registro inmutable en BitacoraReparacion
+    estado_int = MAPA_ESTADOS_NUMERICOS.get(nuevo_estado, 5)
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_tecnico,
+        fecha_hora=django_timezone.now().time(),
+        estado_alcanzado=estado_int,
+        comentario=comentario
+    )
+
+    # Paso 7: Notificación automática por correo y campanita al cliente con link
+    generar_y_enviar_notificacion_cambio_estado(
+        reparacion=reparacion,
+        nuevo_estado=nuevo_estado,
+        comentario=comentario
+    )
+
+    # Paso 9: Registro de auditoría en LogSistema
+    email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Actualizar estado de reparación (CU-10)",
+        detalle=(
+            f"Reparación #{reparacion.id_reparacion} actualizada de '{etapa_actual}' a '{nuevo_estado}' "
+            f"por técnico {email_tecnico}. Justificación: {comentario}"
+        )[:1000],
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_tecnico if hasattr(usuario_tecnico, 'pk') else None
+    )
+
+    return reparacion
+
 

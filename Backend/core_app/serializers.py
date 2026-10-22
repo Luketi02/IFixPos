@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from core_app.models import ConfiguracionSistema
+from core_app.models import ConfiguracionSistema, Notificacion
 
 
 class ConfiguracionUpdateInputSerializer(serializers.Serializer):
@@ -158,3 +158,70 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                 )
 
         return attrs
+
+
+class NotificacionOutputSerializer(serializers.ModelSerializer):
+    """
+    Serializador de salida (La Aduana) para el centro de notificaciones.
+    Expone los campos clave de la alerta para su consumo seguro en el frontend,
+    incluyendo metadatos del equipo y enlace directo a la reparación.
+    """
+    id_reparacion = serializers.SerializerMethodField()
+    datos_dispositivo = serializers.SerializerMethodField()
+    url_destino = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Notificacion
+        fields = [
+            'id_notificacion',
+            'mensaje',
+            'tipo',
+            'fecha_envio',
+            'leida',
+            'id_dispositivo',
+            'id_beneficio',
+            'id_reparacion',
+            'datos_dispositivo',
+            'url_destino',
+        ]
+
+    def _obtener_reparacion(self, obj):
+        if not hasattr(obj, '_reparacion_cache'):
+            rep = None
+            if obj.id_dispositivo:
+                import re
+                match = re.search(r'#(\d+)', obj.mensaje or '')
+                if match:
+                    id_rep = int(match.group(1))
+                    rep = obj.id_dispositivo.reparacion_set.filter(pk=id_rep).first()
+                if not rep:
+                    rep = obj.id_dispositivo.reparacion_set.order_by('-id_reparacion').first()
+            obj._reparacion_cache = rep
+        return obj._reparacion_cache
+
+    def get_id_reparacion(self, obj):
+        reparacion = self._obtener_reparacion(obj)
+        return reparacion.id_reparacion if reparacion else None
+
+    def get_datos_dispositivo(self, obj):
+        if not obj.id_dispositivo:
+            return None
+        disp = obj.id_dispositivo
+        modelo = getattr(disp, 'id_modelo', None)
+        reparacion = self._obtener_reparacion(obj)
+        return {
+            'id_dispositivo': disp.id_dispositivo,
+            'marca': modelo.id_marca.nombre if modelo and modelo.id_marca else 'N/D',
+            'modelo': modelo.nombre if modelo else 'N/D',
+            'tipo': modelo.id_tipo_dispositivo.nombre if modelo and modelo.id_tipo_dispositivo else 'Dispositivo',
+            'numero_serie': disp.numero_serie or 'S/N',
+            'estado_reparacion': reparacion.etapa if reparacion else None,
+        }
+
+    def get_url_destino(self, obj):
+        reparacion = self._obtener_reparacion(obj)
+        if reparacion:
+            return f"/cliente/reparaciones/{reparacion.id_reparacion}"
+        if obj.id_dispositivo:
+            return f"/cliente/dispositivos/{obj.id_dispositivo.id_dispositivo}"
+        return None

@@ -221,3 +221,293 @@ class ConfiguracionGlobalTests(TestCase):
         self.assertEqual(conf_log_sec.valor, 'True')
         self.assertEqual(conf_cuil.valor, '30-98765432-1')
 
+
+# ==============================================================================
+# GESTIÓN DE NOTIFICACIONES (LA CAMPANITA) - TESTS
+# ==============================================================================
+
+class GestionNotificacionesTests(TestCase):
+    """
+    Pruebas unitarias y de integración para la Gestión de Notificaciones (La Campanita).
+    Verifica selectores con seguridad horizontal, contadores, serializadores,
+    servicios transaccionales y endpoints HTTP protegidos.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # Roles
+        self.rol_cliente = RolUsuario.objects.create(
+            codigo='CLIENTE',
+            nombre_rol='Cliente',
+            descripcion='Cliente del sistema.'
+        )
+
+        # Usuarios
+        self.usuario_a = Usuario.objects.create(
+            email='usuario_a@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        self.usuario_b = Usuario.objects.create(
+            email='usuario_b@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+        # Importar modelos y selectores necesarios
+        from core_app.models import Notificacion
+        self.Notificacion = Notificacion
+
+        # Notificaciones Usuario A (2 no leídas, 1 leída)
+        self.notif_a1 = Notificacion.objects.create(
+            id_usuario=self.usuario_a,
+            mensaje='Su dispositivo ingresó a taller.',
+            tipo='ESTADO_REPARACION',
+            fecha_envio=date(2026, 10, 15),
+            leida=False
+        )
+        self.notif_a2 = Notificacion.objects.create(
+            id_usuario=self.usuario_a,
+            mensaje='Diagnóstico técnico completado.',
+            tipo='DIAGNOSTICO_LISTO',
+            fecha_envio=date(2026, 10, 16),
+            leida=False
+        )
+        self.notif_a3 = Notificacion.objects.create(
+            id_usuario=self.usuario_a,
+            mensaje='Reparación finalizada con éxito.',
+            tipo='REPARACION_FINALIZADA',
+            fecha_envio=date(2026, 10, 17),
+            leida=True
+        )
+
+        # Notificación Usuario B
+        self.notif_b1 = Notificacion.objects.create(
+            id_usuario=self.usuario_b,
+            mensaje='Bienvenido a IFixPos.',
+            tipo='BIENVENIDA',
+            fecha_envio=date(2026, 10, 18),
+            leida=False
+        )
+
+    # 1. PRUEBAS DE SELECTORES
+    def test_selector_obtener_notificaciones_usuario_seguridad_horizontal_y_orden(self):
+        """El selector debe retornar únicamente las notificaciones del usuario ordenadas desc."""
+        from core_app.selectors import obtener_notificaciones_usuario
+        notifs = obtener_notificaciones_usuario(usuario=self.usuario_a)
+        self.assertEqual(notifs.count(), 3)
+        # Verificar que no incluye la del usuario B
+        self.assertNotIn(self.notif_b1, notifs)
+        # Verificar orden: fecha más reciente primero (a3: 17/10, a2: 16/10, a1: 15/10)
+        lista_ids = list(notifs.values_list('id_notificacion', flat=True))
+        self.assertEqual(lista_ids, [self.notif_a3.id_notificacion, self.notif_a2.id_notificacion, self.notif_a1.id_notificacion])
+
+    def test_selector_contar_notificaciones_no_leidas(self):
+        """Retorna la cantidad exacta de alertas con leida=False para el usuario."""
+        from core_app.selectors import contar_notificaciones_no_leidas
+        count_a = contar_notificaciones_no_leidas(usuario=self.usuario_a)
+        self.assertEqual(count_a, 2)
+        count_b = contar_notificaciones_no_leidas(usuario=self.usuario_b)
+        self.assertEqual(count_b, 1)
+
+    def test_selector_obtener_notificacion_usuario_legitima(self):
+        """Recupera la notificación específica si pertenece al usuario solicitante."""
+        from core_app.selectors import obtener_notificacion_usuario
+        notif = obtener_notificacion_usuario(usuario=self.usuario_a, id_notificacion=self.notif_a1.id_notificacion)
+        self.assertEqual(notif.id_notificacion, self.notif_a1.id_notificacion)
+
+    def test_selector_obtener_notificacion_usuario_ajena_levanta_permission_denied(self):
+        """Levanta PermissionDenied si el usuario intenta acceder a una notificación de otro usuario."""
+        from rest_framework.exceptions import PermissionDenied
+        from core_app.selectors import obtener_notificacion_usuario
+        with self.assertRaises(PermissionDenied):
+            obtener_notificacion_usuario(usuario=self.usuario_a, id_notificacion=self.notif_b1.id_notificacion)
+
+    def test_selector_obtener_notificacion_inexistente_levanta_object_does_not_exist(self):
+        """Levanta ObjectDoesNotExist si la notificación no existe en la BD."""
+        from django.core.exceptions import ObjectDoesNotExist
+        from core_app.selectors import obtener_notificacion_usuario
+        with self.assertRaises(ObjectDoesNotExist):
+            obtener_notificacion_usuario(usuario=self.usuario_a, id_notificacion=999999)
+
+    # 2. PRUEBAS DE SERIALIZADOR
+    def test_serializer_notificacion_output(self):
+        """El serializador debe exponer los campos clave solicitados."""
+        from core_app.serializers import NotificacionOutputSerializer
+        serializer = NotificacionOutputSerializer(self.notif_a1)
+        data = serializer.data
+        self.assertEqual(data['id_notificacion'], self.notif_a1.id_notificacion)
+        self.assertEqual(data['mensaje'], self.notif_a1.mensaje)
+        self.assertEqual(data['tipo'], self.notif_a1.tipo)
+        self.assertEqual(data['leida'], False)
+        self.assertIn('fecha_envio', data)
+        self.assertIn('id_dispositivo', data)
+        self.assertIn('id_beneficio', data)
+
+    # 3. PRUEBAS DE SERVICIOS
+    def test_servicio_marcar_notificacion_leida(self):
+        """El servicio actualiza leida=True y persiste el cambio."""
+        from core_app.services import marcar_notificacion_leida
+        self.assertFalse(self.notif_a1.leida)
+        notif_actualizada = marcar_notificacion_leida(usuario=self.usuario_a, id_notificacion=self.notif_a1.id_notificacion)
+        self.assertTrue(notif_actualizada.leida)
+        self.notif_a1.refresh_from_db()
+        self.assertTrue(self.notif_a1.leida)
+
+    def test_servicio_marcar_todas_notificaciones_leidas(self):
+        """Marca masivamente todas las no leídas del usuario y no afecta a otros usuarios."""
+        from core_app.services import marcar_todas_notificaciones_leidas
+        from core_app.selectors import contar_notificaciones_no_leidas
+        total_actualizadas = marcar_todas_notificaciones_leidas(usuario=self.usuario_a)
+        self.assertEqual(total_actualizadas, 2)
+        # Confirmar que en A ahora son 0 no leídas
+        self.assertEqual(contar_notificaciones_no_leidas(usuario=self.usuario_a), 0)
+        # Confirmar que B sigue teniendo 1 no leída
+        self.assertEqual(contar_notificaciones_no_leidas(usuario=self.usuario_b), 1)
+
+    # 4. PRUEBAS DE ENDPOINTS HTTP
+    def test_api_listar_notificaciones_requiere_autenticacion(self):
+        """GET /api/core/notificaciones/ responde 401 o 403 si no está autenticado."""
+        response = self.client.get('/api/core/notificaciones/')
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_api_listar_notificaciones_exitoso(self):
+        """GET /api/core/notificaciones/ responde 200 con no_leidas_count y array de notificaciones."""
+        self.client.force_authenticate(user=self.usuario_a)
+        response = self.client.get('/api/core/notificaciones/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('no_leidas_count', response.data)
+        self.assertIn('notificaciones', response.data)
+        self.assertEqual(response.data['no_leidas_count'], 2)
+        self.assertEqual(len(response.data['notificaciones']), 3)
+
+    def test_api_marcar_notificacion_leida_exitoso(self):
+        """PATCH /api/core/notificaciones/<id>/leer/ marca la notificación y responde 200."""
+        self.client.force_authenticate(user=self.usuario_a)
+        url = f'/api/core/notificaciones/{self.notif_a1.id_notificacion}/leer/'
+        response = self.client.patch(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.notif_a1.refresh_from_db()
+        self.assertTrue(self.notif_a1.leida)
+
+    def test_api_marcar_notificacion_ajena_responde_403(self):
+        """PATCH sobre notificación de otro usuario responde 403 Forbidden."""
+        self.client.force_authenticate(user=self.usuario_a)
+        url = f'/api/core/notificaciones/{self.notif_b1.id_notificacion}/leer/'
+        response = self.client.patch(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_api_marcar_notificacion_inexistente_responde_404(self):
+        """PATCH sobre ID inexistente responde 404 Not Found."""
+        self.client.force_authenticate(user=self.usuario_a)
+        url = '/api/core/notificaciones/999999/leer/'
+        response = self.client.patch(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_api_marcar_todas_leidas_exitoso(self):
+        """PATCH /api/core/notificaciones/leer-todas/ marca todas las alertas y responde 200."""
+        from core_app.selectors import contar_notificaciones_no_leidas
+        self.client.force_authenticate(user=self.usuario_a)
+        response = self.client.patch('/api/core/notificaciones/leer-todas/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('actualizadas'), 2)
+        self.assertEqual(contar_notificaciones_no_leidas(usuario=self.usuario_a), 0)
+
+    def test_selector_excluye_codigos_y_verificaciones_por_correo(self):
+        """Las notificaciones de tipo ACTIVACION, RECUPERACION u OTP no deben aparecer en la campanita."""
+        from core_app.selectors import obtener_notificaciones_usuario, contar_notificaciones_no_leidas
+        from core_app.models import Notificacion
+
+        # Crear notificación de código OTP
+        notif_otp = Notificacion.objects.create(
+            id_usuario=self.usuario_a,
+            mensaje='Su código de verificación es [******]',
+            tipo='ACTIVACION',
+            fecha_envio=date.today(),
+            leida=False
+        )
+
+        notifs = obtener_notificaciones_usuario(usuario=self.usuario_a)
+        self.assertNotIn(notif_otp, notifs)
+
+        # El contador tampoco debe computar notificaciones de código
+        count = contar_notificaciones_no_leidas(usuario=self.usuario_a)
+        self.assertEqual(count, 2)
+
+    def test_api_eliminar_notificacion_exitoso(self):
+        """DELETE /api/core/notificaciones/<id>/eliminar/ elimina la notificación y responde 200."""
+        self.client.force_authenticate(user=self.usuario_a)
+        url = f'/api/core/notificaciones/{self.notif_a1.id_notificacion}/eliminar/'
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        from core_app.models import Notificacion
+        self.assertFalse(Notificacion.objects.filter(pk=self.notif_a1.id_notificacion).exists())
+
+    def test_api_eliminar_todas_notificaciones_exitoso(self):
+        """DELETE /api/core/notificaciones/eliminar-todas/ elimina todas las alertas del usuario."""
+        self.client.force_authenticate(user=self.usuario_a)
+        response = self.client.delete('/api/core/notificaciones/eliminar-todas/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        from core_app.selectors import obtener_notificaciones_usuario
+        self.assertEqual(obtener_notificaciones_usuario(usuario=self.usuario_a).count(), 0)
+
+    def test_serializador_notificacion_expone_datos_dispositivo_y_url_reparacion(self):
+        """Valida que NotificacionOutputSerializer exponga id_reparacion, datos_dispositivo y url_destino."""
+        from catalog_app.models import Marca, ModeloDispositivo, TipoDispositivo
+        from workshop_app.models import Dispositivo, Reparacion
+        from core_app.serializers import NotificacionOutputSerializer
+        from core_app.models import Notificacion
+
+        tipo = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        marca = Marca.objects.create(nombre='Samsung', estado_activo=True)
+        modelo = ModeloDispositivo.objects.create(nombre='Galaxy S23', id_marca=marca, id_tipo_dispositivo=tipo, estado_activo=True)
+        dispositivo = Dispositivo.objects.create(
+            id_modelo=modelo,
+            id_usuario=self.usuario_a,
+            numero_serie='S23-TEST-99',
+            fecha_registro=date.today()
+        )
+        reparacion = Reparacion.objects.create(
+            fecha_inicio=date.today(),
+            etapa='EN_REPARACION',
+            id_dispositivo=dispositivo,
+            id_usuario=self.usuario_a,
+            desc_cliente='Pantalla rota'
+        )
+
+        notif = Notificacion.objects.create(
+            id_usuario=self.usuario_a,
+            mensaje=f'El estado de su reparación #{reparacion.id_reparacion} ha cambiado a En Reparación.',
+            tipo='CAMBIO_ESTADO_REPARACION',
+            fecha_envio=date.today(),
+            leida=False,
+            id_dispositivo=dispositivo
+        )
+
+        serializer = NotificacionOutputSerializer(notif)
+        data = serializer.data
+
+        self.assertEqual(data['id_reparacion'], reparacion.id_reparacion)
+        self.assertIsNotNone(data['datos_dispositivo'])
+        self.assertEqual(data['datos_dispositivo']['marca'], 'Samsung')
+        self.assertEqual(data['datos_dispositivo']['modelo'], 'Galaxy S23')
+        self.assertEqual(data['datos_dispositivo']['tipo'], 'Smartphone')
+        self.assertEqual(data['datos_dispositivo']['numero_serie'], 'S23-TEST-99')
+        self.assertEqual(data['datos_dispositivo']['estado_reparacion'], 'EN_REPARACION')
+        self.assertEqual(data['url_destino'], f'/cliente/reparaciones/{reparacion.id_reparacion}')
+
+    def test_selector_obtener_url_frontend_fallback_y_custom(self):
+        """Valida que obtener_url_frontend retorna la URL base sin slash al final."""
+        from core_app.selectors import obtener_url_frontend
+        url_defecto = obtener_url_frontend()
+        self.assertTrue(url_defecto.startswith('http'))
+        self.assertFalse(url_defecto.endswith('/'))
+
+

@@ -29,7 +29,9 @@ def registrar_y_enviar_notificacion_correo(
     cuerpo_html: Optional[str] = None,
     mensaje_notificacion: Optional[str] = None,
     codigo_sensible: Optional[str] = None,
-    adjuntar_logo: bool = True
+    adjuntar_logo: bool = True,
+    dispositivo: Optional[Any] = None,
+    beneficio: Optional[Any] = None
 ) -> Notificacion:
     """
     Motor centralizado de notificaciones y despacho de correos en IFixPos.
@@ -56,7 +58,9 @@ def registrar_y_enviar_notificacion_correo(
             mensaje=mensaje_sanitizado,
             tipo=tipo_notificacion,
             fecha_envio=django_timezone.now().date(),
-            leida=False
+            leida=False,
+            id_dispositivo=dispositivo,
+            id_beneficio=beneficio
         )
 
         # --- 3. Despacho del correo electrónico con el código real ---
@@ -226,4 +230,68 @@ def guardar_logo_empresa(*, archivo: Any, usuario_admin: Any) -> str:
         )
 
     return url_relativa
+
+
+@transaction.atomic
+def marcar_notificacion_leida(*, usuario: Any, id_notificacion: int) -> Notificacion:
+    """
+    Marca una notificación específica como leída (leida=True) tras verificar seguridad horizontal.
+    Usa obtener_notificacion_usuario para validar pertenencia y existencia.
+    """
+    from core_app.selectors import obtener_notificacion_usuario
+
+    notificacion = obtener_notificacion_usuario(usuario=usuario, id_notificacion=id_notificacion)
+    if not notificacion.leida:
+        notificacion.leida = True
+        notificacion.save(update_fields=['leida'])
+    return notificacion
+
+
+@transaction.atomic
+def marcar_todas_notificaciones_leidas(*, usuario: Any) -> int:
+    """
+    Marca masivamente todas las notificaciones pendientes de un usuario a leida=True.
+    Retorna la cantidad entera de alertas actualizadas.
+    """
+    from core_app.selectors import TIPOS_EXCLUIDOS_CAMPANITA
+
+    user_id = getattr(usuario, 'id_usuario', None) or getattr(usuario, 'id', None) or usuario
+    actualizadas = (
+        Notificacion.objects
+        .filter(id_usuario_id=user_id, leida=False)
+        .exclude(tipo__in=TIPOS_EXCLUIDOS_CAMPANITA)
+        .update(leida=True)
+    )
+    return actualizadas
+
+
+@transaction.atomic
+def eliminar_notificacion(*, usuario: Any, id_notificacion: int) -> bool:
+    """
+    Elimina físicamente una notificación garantizando que pertenezca al usuario ejecutor.
+    """
+    from core_app.selectors import obtener_notificacion_usuario
+
+    notificacion = obtener_notificacion_usuario(usuario=usuario, id_notificacion=id_notificacion)
+    notificacion.delete()
+    return True
+
+
+@transaction.atomic
+def eliminar_todas_notificaciones(*, usuario: Any) -> int:
+    """
+    Elimina todas las notificaciones visibles de la campanita para el usuario.
+    Retorna la cantidad de registros eliminados.
+    """
+    from core_app.selectors import TIPOS_EXCLUIDOS_CAMPANITA
+
+    user_id = getattr(usuario, 'id_usuario', None) or getattr(usuario, 'id', None) or usuario
+    eliminadas, _ = (
+        Notificacion.objects
+        .filter(id_usuario_id=user_id)
+        .exclude(tipo__in=TIPOS_EXCLUIDOS_CAMPANITA)
+        .delete()
+    )
+    return eliminadas
+
 

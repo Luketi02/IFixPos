@@ -746,19 +746,19 @@ export default function IniciarReparacionModal({
                   .
                 </p>
                 <div className="flex items-center justify-center gap-2 mt-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-mono text-xs font-semibold">
-                    Orden #{resultado.id_reparacion}
+                  <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 text-xs font-semibold">
+                    Servicio Técnico Registrado
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/30 font-mono text-xs">
+                  <span className="px-2.5 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/30 text-xs font-medium">
                     {formatearEstadoReparacion(resultado.etapa)}
                   </span>
                 </div>
               </div>
 
-              {/* CRÍTICO: Bloque del Código de Seguridad (Token de Entrega) */}
+              {/* CRÍTICO: Bloque del Código para Presentar en Mostrador */}
               <div className="p-6 rounded-2xl bg-gradient-to-b from-[#090D16] to-[#0F172A] border-2 border-[#06B6D4] shadow-[0_0_30px_rgba(6,182,212,0.25)] relative overflow-hidden group">
                 <span className="text-[10px] font-mono font-bold tracking-widest uppercase text-cyan-400 block mb-1">
-                  CÓDIGO DE SEGURIDAD (TOKEN DE ENTREGA)
+                  CÓDIGO PARA PRESENTAR EN MOSTRADOR
                 </span>
 
                 <div className="flex items-center justify-center gap-3 my-2">

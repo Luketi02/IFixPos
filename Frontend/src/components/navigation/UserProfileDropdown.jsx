@@ -4,10 +4,11 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { getDashboardPath } from '../../utils/roleRoutes';
+import NotificationBell from './NotificationBell';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function UserProfileDropdown({ align = 'right' }) {
+export default function UserProfileDropdown({ align = 'right', showNotificationBell = true }) {
   const { user, login, logout } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
@@ -76,9 +77,14 @@ export default function UserProfileDropdown({ align = 'right' }) {
   };
 
   return (
-    <div className="relative inline-block text-left" ref={dropdownRef}>
-      {/* Botón Disparador del Perfil */}
-      <button
+    <div className="flex items-center gap-2 sm:gap-3">
+      {/* Campanita de Notificaciones (La Campanita) */}
+      {showNotificationBell && <NotificationBell />}
+
+      {/* Cápsula / Menú de Perfil de Usuario */}
+      <div className="relative inline-block text-left" ref={dropdownRef}>
+        {/* Botón Disparador del Perfil */}
+        <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
@@ -326,6 +332,7 @@ export default function UserProfileDropdown({ align = 'right' }) {
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
     </div>
   );
 }

@@ -125,6 +125,19 @@ class DispositivoCreateApi(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
+        # Regla de Negocio Estricta: Únicamente los clientes pueden registrar dispositivos
+        rol_codigo = ''
+        if hasattr(request.user, 'id_rol') and request.user.id_rol:
+            rol_codigo = (request.user.id_rol.codigo or '').upper()
+        elif hasattr(request.user, 'rol') and request.user.rol:
+            rol_codigo = (request.user.rol.codigo or '').upper()
+
+        if rol_codigo != 'CLIENTE':
+            return Response(
+                {"error": "Acceso denegado: Únicamente los clientes pueden registrar dispositivos en el sistema."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Aceptar indistintamente DispositivoInputSerializer (nuevo) o DispositivoCreateInputSerializer
         serializer = DispositivoInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -760,4 +773,61 @@ class DecisionReparacionApi(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class CambiarEstadoReparacionApi(APIView):
+    """
+    CU-10: Actualizar estado de reparación.
+    Endpoint exclusivo para técnicos y administradores de taller.
+    Permite modificar la etapa de avance operativo de una reparación en curso
+    respetando las reglas de la máquina de estados e insertando bitácora y notificación.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, id_reparacion: int):
+        _exigir_rol_taller(request.user)
+
+        from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied, NotFound as DRFNotFound, ValidationError as DRFValidationError
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied, ObjectDoesNotExist, ValidationError as DjangoValidationError
+        from workshop_app.serializers import CambiarEstadoReparacionInputSerializer
+        from workshop_app.services import cambiar_estado_reparacion
+
+        serializer = CambiarEstadoReparacionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reparacion = cambiar_estado_reparacion(
+                usuario_tecnico=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: Permisos insuficientes para modificar esta reparación."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": f"Estado de la reparación actualizado a '{reparacion.etapa}' exitosamente.",
+                "reparacion": {
+                    "id_reparacion": reparacion.id_reparacion,
+                    "etapa": reparacion.etapa
+                }
+            },
+            status=status.HTTP_200_OK
+        )
+
 
