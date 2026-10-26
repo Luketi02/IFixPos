@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -16,6 +17,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
  * "Cargar Diagnóstico" y el botón "Actualizar Estado" (CU-10).
  */
 export default function ReparacionesEnCurso({ onAlerta }) {
+  const navigate = useNavigate();
   const { token } = useAuth();
 
   const [reparaciones, setReparaciones] = useState([]);
@@ -302,8 +304,12 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                   <div className="space-y-3">
                     {/* Header Tarjeta: Orden y Badge de Estado */}
                     <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <span className="font-mono text-xs font-bold text-cyan-400 block">
+                      <div
+                        onClick={() => navigate(`/tecnico/reparaciones/${rep.id_reparacion}`)}
+                        className="cursor-pointer group/title"
+                        title="Ver bitácora y radiografía técnica"
+                      >
+                        <span className="font-mono text-xs font-bold text-cyan-400 group-hover/title:underline block">
                           Orden #{rep.id_reparacion}
                         </span>
                         <span className="text-[10px] font-mono text-slate-400">
@@ -322,8 +328,11 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                     </div>
 
                     {/* Dispositivo y Cliente */}
-                    <div>
-                      <h3 className="text-white font-bold text-base group-hover:text-cyan-300 transition-colors">
+                    <div
+                      onClick={() => navigate(`/tecnico/reparaciones/${rep.id_reparacion}`)}
+                      className="cursor-pointer"
+                    >
+                      <h3 className="text-white font-bold text-base hover:text-cyan-300 transition-colors">
                         {equipoDisplay}
                       </h3>
                       <p className="text-xs text-slate-400 font-sans mt-0.5">
@@ -355,18 +364,28 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                   </div>
 
                   {/* 4. Botones de Acción de la Reparación */}
-                  {(esDiagnosticoPendiente || puedeActualizarEstado) ? (
-                    <div className="pt-3 border-t border-slate-700/60 flex flex-col sm:flex-row items-center gap-2">
-                      {esDiagnosticoPendiente && (
+                  <div className="pt-3 border-t border-slate-700/60 space-y-2">
+                    <div className="flex flex-col sm:flex-row items-center gap-2">
+                      {esDiagnosticoPendiente ? (
                         <button
                           type="button"
                           onClick={() => handleAbrirDiagnostico(rep)}
-                          className="w-full sm:flex-1 py-2.5 px-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-1.5"
+                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-1.5"
                         >
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                           </svg>
                           <span>Cargar Diagnóstico</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirDiagnostico(rep)}
+                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-semibold text-xs transition-all flex items-center justify-center gap-1.5"
+                          title="Realizar una nueva evaluación técnica del equipo"
+                        >
+                          <span>🔬</span>
+                          <span>Nuevo Diagnóstico</span>
                         </button>
                       )}
 
@@ -375,27 +394,28 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                         <button
                           type="button"
                           onClick={() => handleAbrirCambiarEstado(rep)}
-                          className={`w-full ${esDiagnosticoPendiente ? 'sm:flex-1' : ''} py-2.5 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-[#8B5CF6] hover:text-purple-300 border border-[#8B5CF6]/40 hover:border-[#8B5CF6]/80 font-bold text-xs transition-all shadow-sm hover:shadow-[0_0_15px_rgba(139,92,246,0.25)] flex items-center justify-center gap-1.5`}
+                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-[#8B5CF6] hover:text-purple-300 border border-[#8B5CF6]/40 hover:border-[#8B5CF6]/80 font-bold text-xs transition-all shadow-sm hover:shadow-[0_0_15px_rgba(139,92,246,0.25)] flex items-center justify-center gap-1.5"
                           title="Actualizar estado operativo del equipo"
                         >
                           <span className="text-sm leading-none">⚙️</span>
-                          <span>Actualizar Estado</span>
+                          <span>Estado</span>
                         </button>
                       )}
                     </div>
-                  ) : (
-                    <div className="pt-3 border-t border-slate-700/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                      <span className="flex items-center gap-1.5 text-amber-400/90">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                        {etapaNormalizada === 'ESPERANDO_DISPOSITIVO'
-                          ? 'Aguardando recepción en taller'
-                          : etapaNormalizada === 'ESPERANDO_CONFIRMACION'
-                          ? 'Aguardando confirmación del cliente'
-                          : 'Gestión no disponible en esta etapa'}
-                      </span>
-                      <span className="text-slate-500 font-mono">#{rep.id_reparacion}</span>
-                    </div>
-                  )}
+
+                    {/* Botón para ver bitácora y radiografía técnica */}
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/tecnico/reparaciones/${rep.id_reparacion}`)}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/60 font-medium text-xs transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      <span>Ver Bitácora y Diagnósticos</span>
+                    </button>
+                  </div>
                 </motion.div>
               );
             })}

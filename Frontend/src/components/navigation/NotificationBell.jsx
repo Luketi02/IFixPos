@@ -168,7 +168,7 @@ function humanizarMensaje(notif) {
  */
 export default function NotificationBell() {
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [notificaciones, setNotificaciones] = useState([]);
   const [noLeidasCount, setNoLeidasCount] = useState(0);
@@ -290,17 +290,24 @@ export default function NotificationBell() {
   const irADetalleReparacion = (notifParam) => {
     const obj = notifParam || notificacionSeleccionada;
     if (!obj) return;
-    const url =
-      obj.url_destino ||
-      (obj.id_reparacion
-        ? `/cliente/reparaciones/${obj.id_reparacion}`
-        : null) ||
-      (obj.id_dispositivo
-        ? `/cliente/dispositivos/${obj.id_dispositivo}`
-        : null) ||
-      (obj.datos_dispositivo?.id_dispositivo
-        ? `/cliente/dispositivos/${obj.datos_dispositivo.id_dispositivo}`
-        : null);
+
+    const rolCodigo = (user?.rol?.codigo || user?.id_rol?.codigo || '').toUpperCase();
+    const esTecnicoOAdmin = ['TECNICO', 'ADMIN'].includes(rolCodigo);
+
+    let url = obj.url_destino;
+    if (!url) {
+      if (obj.id_reparacion) {
+        url = esTecnicoOAdmin
+          ? `/tecnico/reparaciones/${obj.id_reparacion}`
+          : `/cliente/reparaciones/${obj.id_reparacion}`;
+      } else if (obj.id_dispositivo) {
+        url = `/cliente/dispositivos/${obj.id_dispositivo}`;
+      } else if (obj.datos_dispositivo?.id_dispositivo) {
+        url = `/cliente/dispositivos/${obj.datos_dispositivo.id_dispositivo}`;
+      }
+    } else if (esTecnicoOAdmin && obj.id_reparacion && url.startsWith('/cliente/reparaciones/')) {
+      url = `/tecnico/reparaciones/${obj.id_reparacion}`;
+    }
 
     if (obj.id_notificacion && !obj.leida) {
       handleMarcarLeida(obj.id_notificacion, false);

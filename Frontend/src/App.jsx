@@ -31,6 +31,7 @@ import RegisterDeviceScreen from './pages/client/RegisterDeviceScreen';
 import MisDispositivos from './pages/client/MisDispositivos';
 import DispositivoDetalle from './pages/client/DispositivoDetalle';
 import ReparacionDetalle from './pages/client/ReparacionDetalle';
+import TecnicoReparacionDetalle from './pages/technician/TecnicoReparacionDetalle';
 import SessionExpiredModal from './components/auth/SessionExpiredModal';
 import { instalarInterceptorSesion } from './utils/sesionExpirada';
 
@@ -83,6 +84,7 @@ function App() {
                 <Route path="/tecnico/caja/registrar-compra" element={<TechnicianModuleScreen forcedModule="registrar-compra" />} />
                 <Route path="/tecnico/caja/recepcionar-dispositivo" element={<TechnicianModuleScreen forcedModule="recepcionar-dispositivo" />} />
                 <Route path="/tecnico/insumos/recepcionar-compra" element={<TechnicianModuleScreen forcedModule="recepcionar-compra" />} />
+                <Route path="/tecnico/reparaciones/:id_reparacion" element={<TecnicoReparacionDetalle />} />
               </Route>
 
 

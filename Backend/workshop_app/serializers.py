@@ -510,7 +510,7 @@ class ReparacionHistorialOutputSerializer(serializers.Serializer):
         return usuario.email
 
     def get_resumen_diagnostico(self, obj):
-        diag = obj.diagnostico_set.first()
+        diag = obj.diagnostico_set.order_by('-id_diagnostico').first()
         return diag.descripcion_falla if diag else None
 
     def get_calificacion(self, obj):
@@ -532,13 +532,18 @@ class ReparacionActivaOutputSerializer(serializers.Serializer):
     codigo_sec = serializers.CharField(read_only=True, allow_null=True)
     desc_cliente = serializers.CharField(read_only=True, allow_null=True)
     diagnostico = serializers.SerializerMethodField()
+    diagnosticos = serializers.SerializerMethodField()
     bitacora = serializers.SerializerMethodField()
 
     def get_diagnostico(self, obj):
-        diag = obj.diagnostico_set.first()
+        diag = obj.diagnostico_set.order_by('-id_diagnostico').first()
         if not diag:
             return None
         return DiagnosticoOutputSerializer(diag).data
+
+    def get_diagnosticos(self, obj):
+        items = obj.diagnostico_set.all().order_by('-id_diagnostico')
+        return DiagnosticoOutputSerializer(items, many=True).data
 
     def get_bitacora(self, obj):
         items = obj.bitacorareparacion_set.all().order_by('id_bitacora')
@@ -598,6 +603,7 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
     dispositivo = DispositivoCabeceraOutputSerializer(source='id_dispositivo', read_only=True)
     cliente = serializers.SerializerMethodField()
     diagnostico = serializers.SerializerMethodField()
+    diagnosticos = serializers.SerializerMethodField()
     bitacora = serializers.SerializerMethodField()
     insumos = serializers.SerializerMethodField()
     calificacion = serializers.SerializerMethodField()
@@ -653,10 +659,14 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         return usuario.email
 
     def get_diagnostico(self, obj):
-        diag = obj.diagnostico_set.first()
+        diag = obj.diagnostico_set.order_by('-id_diagnostico').first()
         if not diag:
             return None
         return DiagnosticoOutputSerializer(diag).data
+
+    def get_diagnosticos(self, obj):
+        items = obj.diagnostico_set.all().order_by('-id_diagnostico')
+        return DiagnosticoOutputSerializer(items, many=True).data
 
     def get_bitacora(self, obj):
         items = obj.bitacorareparacion_set.all().order_by('id_bitacora')
@@ -679,7 +689,7 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         reps = disp.reparacion_set.exclude(id_reparacion=obj.id_reparacion).order_by('-fecha_inicio', '-id_reparacion')
         resultado = []
         for r in reps:
-            diag = r.diagnostico_set.first()
+            diag = r.diagnostico_set.order_by('-id_diagnostico').first()
             calif = r.calificacion_set.first()
             tecnico = r.id_usuario
             tec_nombre = tecnico.email if tecnico else 'N/A'

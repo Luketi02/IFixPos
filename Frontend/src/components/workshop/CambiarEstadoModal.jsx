@@ -54,17 +54,16 @@ export default function CambiarEstadoModal({
       .replace(/[\s\-]+/g, '_');
   }, [reparacion?.etapa]);
 
-  // Identificar si la orden se encuentra en una etapa donde la actualización manual NO está permitida
+  // Identificar si la orden se encuentra en un estado terminal irreversible donde la actualización no está permitida
   const esEstadoBloqueado = useMemo(() => {
     const estadosBloqueados = [
-      'ESPERANDO_DIAGNOSTICO',
       'ESPERANDO_DISPOSITIVO',
-      'ESPERANDO_CONFIRMACION'
+      'ENTREGADO',
+      'ENTREGADA',
+      'CANCELADO',
+      'CANCELADA'
     ];
-    return (
-      estadosBloqueados.includes(estadoActualNorm) ||
-      estadoActualNorm.includes('ESPERANDO_DIAG')
-    );
+    return estadosBloqueados.includes(estadoActualNorm);
   }, [estadoActualNorm]);
 
   // Transiciones inteligentes sugeridas según la Máquina de Estados del CU-10
@@ -74,37 +73,38 @@ export default function CambiarEstadoModal({
     if (estadoActualNorm === 'EN_REPARACION') {
       return [
         { value: 'FINALIZADO', label: 'Finalizado (Reparación completada y verificada)' },
-        { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos (Pausa por falta de insumos)' }
+        { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos (Pausa por falta de insumos)' },
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
       ];
     }
     if (estadoActualNorm === 'ESPERANDO_REPUESTOS') {
       return [
-        { value: 'EN_REPARACION', label: 'En Reparación (Reanudación de trabajo técnico)' }
+        { value: 'EN_REPARACION', label: 'En Reparación (Reanudación de trabajo técnico)' },
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
       ];
     }
     if (estadoActualNorm === 'FINALIZADO') {
       return [
-        { value: 'EN_REPARACION', label: 'En Reparación (Retrabajo por control de calidad)' }
+        { value: 'EN_REPARACION', label: 'En Reparación (Retrabajo por control de calidad)' },
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
       ];
     }
     // Estados iniciales o intermedios
     return [
       { value: 'EN_REPARACION', label: 'En Reparación (Iniciar labor en banco)' },
       { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos (Pausa por insumos)' },
-      { value: 'FINALIZADO', label: 'Finalizado (Completar orden)' }
+      { value: 'FINALIZADO', label: 'Finalizado (Completar orden)' },
+      { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
     ];
   }, [estadoActualNorm, esEstadoBloqueado]);
 
   // Lista exhaustiva para cuando el técnico activa el selector completo
   const todasLasOpciones = useMemo(() => [
-    { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico' },
+    { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' },
     { value: 'EN_DIAGNOSTICO', label: 'En Diagnóstico' },
-    { value: 'ESPERANDO_CONFIRMACION', label: 'Esperando Confirmación' },
     { value: 'EN_REPARACION', label: 'En Reparación' },
     { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos' },
-    { value: 'FINALIZADO', label: 'Finalizado' },
-    { value: 'ENTREGADO', label: 'Entregado' },
-    { value: 'CANCELADO', label: 'Cancelado' }
+    { value: 'FINALIZADO', label: 'Finalizado' }
   ], []);
 
   // Opciones activas a renderizar en el <select>

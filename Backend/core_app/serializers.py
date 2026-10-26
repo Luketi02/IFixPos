@@ -220,7 +220,14 @@ class NotificacionOutputSerializer(serializers.ModelSerializer):
 
     def get_url_destino(self, obj):
         reparacion = self._obtener_reparacion(obj)
+        usuario_dest = getattr(obj, 'id_usuario', None)
+        rol_dest = ''
+        if usuario_dest:
+            rol_dest = getattr(getattr(usuario_dest, 'id_rol', None) or getattr(usuario_dest, 'rol', None), 'codigo', '').upper()
+
         if reparacion:
+            if rol_dest in ('TECNICO', 'ADMIN'):
+                return f"/tecnico/reparaciones/{reparacion.id_reparacion}"
             return f"/cliente/reparaciones/{reparacion.id_reparacion}"
         if obj.id_dispositivo:
             return f"/cliente/dispositivos/{obj.id_dispositivo.id_dispositivo}"

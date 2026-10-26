@@ -928,6 +928,8 @@ def cargar_diagnostico_tecnico(
     )
 
     # Paso 3: Insumos requeridos para el presupuesto (congelando precio de venta actual)
+    # Si existían insumos previos, se reemplazan por los nuevos especificados en esta evaluación
+    DetalleInsumoReparacion.objects.filter(id_reparacion=reparacion).delete()
     insumos_data = datos_validados.get('insumos', [])
     for item in insumos_data:
         producto = Producto.objects.get(pk=item['id_producto'])
@@ -945,12 +947,14 @@ def cargar_diagnostico_tecnico(
 
     # Paso 5: Registro inmutable en BitacoraReparacion
     # Nota: estado_alcanzado se almacena numéricamente en BD (4: ESPERANDO_CONFIRMACION)
+    es_primer_diagnostico = (reparacion.diagnostico_set.count() <= 1)
+    comentario_bitacora = "Carga de diagnóstico" if es_primer_diagnostico else "Carga de nuevo diagnóstico"
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
         fecha_hora=django_timezone.now().time(),
         estado_alcanzado=4,  # 4: ESPERANDO_CONFIRMACION
-        comentario="Carga de diagnóstico"
+        comentario=comentario_bitacora
     )
 
     # Paso 6: Notificación automática por correo al cliente y persistencia en Notificacion
@@ -1504,6 +1508,14 @@ def cambiar_estado_reparacion(
         if etapa_actual not in ('ESPERANDO_REPUESTOS', 'FINALIZADO'):
             raise ValidationError(
                 f"Transición no permitida: No es posible pasar a 'En Reparación' desde '{reparacion.etapa}'. Esta acción solo es válida desde 'Esperando Repuestos' (reanudación) o desde 'Finalizado' (retrabajo)."
+            )
+
+    elif nuevo_estado in ('ESPERANDO_DIAGNOSTICO', 'EN_DIAGNOSTICO'):
+        # Permitido desde cualquier estado activo (no terminal) para reevaluación técnica o nuevo diagnóstico
+        estados_terminales = ('ENTREGADO', 'ENTREGADA', 'CANCELADO', 'CANCELADA')
+        if etapa_actual in estados_terminales:
+            raise ValidationError(
+                f"Transición no permitida: No es posible solicitar nuevo diagnóstico sobre una reparación en estado terminal '{reparacion.etapa}'."
             )
 
     else:

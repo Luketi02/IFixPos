@@ -3862,5 +3862,239 @@ class EntregarDispositivoCU46TestCase(TestCase):
         self.assertIn('Debe proporcionar el código de seguridad o el DNI del cliente', str(res.data))
 
 
+# ==============================================================================
+# PRUEBAS: NUEVO DIAGNÓSTICO, MULTIPLES DIAGNÓSTICOS Y RADIOGRAFÍA TÉCNICA
+# ==============================================================================
+
+class NuevoDiagnosticoYDetalleTecnicoTests(TestCase):
+    """
+    Pruebas unitarias e integrales para el flujo de reevaluación técnica:
+    - Transición desde cualquier estado activo hacia 'ESPERANDO_DIAGNOSTICO'.
+    - Registro de múltiples diagnósticos en el ciclo de vida de la reparación.
+    - Reemplazo y preservación limpia de DetalleInsumoReparacion con los del nuevo diagnóstico.
+    - Serialización de historial cronológico de diagnósticos y enlaces para técnicos en notificaciones.
+    """
+    def setUp(self):
+        from catalog_app.models import CategoriaProducto, Producto
+        from workshop_app.models import DetalleInsumoReparacion
+        self.hoy = timezone.now().date()
+        self.rol_tec = RolUsuario.objects.create(codigo='TECNICO', nombre_rol='Técnico')
+        self.rol_cli = RolUsuario.objects.create(codigo='CLIENTE', nombre_rol='Cliente')
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico_eval@ifixpos.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_tec,
+            is_active=True
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente_eval@ifixpos.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cli,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            nombre='Carlos',
+            apellido='Evaluado',
+            dni='33444555'
+        )
+
+        self.marca = Marca.objects.create(nombre='Motorola', estado_activo=True)
+        self.tipo_disp = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='Moto G84',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo_disp,
+            estado_activo=True
+        )
+        self.dispositivo = Dispositivo.objects.create(
+            numero_serie='MOTO-REEVAL-01',
+            id_usuario=self.cliente,
+            id_modelo=self.modelo,
+            fecha_registro=self.hoy
+        )
+
+        self.reparacion = Reparacion.objects.create(
+            etapa='EN_REPARACION',
+            fecha_inicio=self.hoy,
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico,
+            desc_cliente='No enciende tras golpe'
+        )
+
+        self.cat_prod = CategoriaProducto.objects.create(nombre='Pantallas', estado=True)
+        self.prod_pantalla = Producto.objects.create(
+            nombre='Módulo Pantalla Moto G84',
+            precio_venta=Decimal('35000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=True,
+            modulo_automatico=False,
+            id_categoria=self.cat_prod
+        )
+        self.prod_bateria = Producto.objects.create(
+            nombre='Batería Moto G84 Original',
+            precio_venta=Decimal('15000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=True,
+            modulo_automatico=False,
+            id_categoria=self.cat_prod
+        )
+
+        # Diagnóstico 1 inicial
+        self.diag1 = Diagnostico.objects.create(
+            id_reparacion=self.reparacion,
+            descripcion_falla='Falla de módulo display dañado.',
+            fecha_diagnostico=self.hoy,
+            costo_diagnostico=Decimal('10000.00')
+        )
+        DetalleInsumoReparacion.objects.create(
+            id_reparacion=self.reparacion,
+            id_producto=self.prod_pantalla,
+            cantidad=1,
+            precio_unitario=Decimal('35000.00')
+        )
+
+    def test_cambiar_estado_a_esperando_diagnostico_desde_en_reparacion(self):
+        """El técnico puede transicionar la reparación a ESPERANDO_DIAGNOSTICO para reevaluación."""
+        from workshop_app.services import cambiar_estado_reparacion
+
+        datos = {
+            'nuevo_estado': 'ESPERANDO_DIAGNOSTICO',
+            'comentario': 'Se detectó que el equipo además de pantalla tiene daño en placa de carga.'
+        }
+        rep = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion.id_reparacion,
+            datos_validados=datos
+        )
+        self.assertEqual(rep.etapa, 'ESPERANDO_DIAGNOSTICO')
+
+        # Verificar registro inmutable en BitacoraReparacion
+        bitacora = self.reparacion.bitacorareparacion_set.order_by('-id_bitacora').first()
+        self.assertIsNotNone(bitacora)
+        self.assertEqual(bitacora.estado_alcanzado, 2)  # 2: ESPERANDO_DIAGNOSTICO
+        self.assertIn('placa de carga', bitacora.comentario)
+
+    def test_cambiar_estado_a_esperando_diagnostico_bloqueado_en_estado_terminal(self):
+        """En estado terminal ENTREGADO no se permite solicitar nuevo diagnóstico."""
+        from workshop_app.services import cambiar_estado_reparacion
+        from django.core.exceptions import ValidationError
+
+        self.reparacion.etapa = 'ENTREGADO'
+        self.reparacion.save()
+
+        datos = {
+            'nuevo_estado': 'ESPERANDO_DIAGNOSTICO',
+            'comentario': 'Intento inválido'
+        }
+        with self.assertRaises(ValidationError):
+            cambiar_estado_reparacion(
+                usuario_tecnico=self.tecnico,
+                id_reparacion=self.reparacion.id_reparacion,
+                datos_validados=datos
+            )
+
+    def test_cargar_nuevo_diagnostico_multiples_diagnosticos_y_reemplazo_insumos(self):
+        """
+        Al emitir un nuevo diagnóstico:
+        - Se crea una nueva instancia de Diagnostico vinculada a la orden.
+        - Los insumos previos son reemplazados por los nuevos insumos presupuestados.
+        - La reparación transiciona a ESPERANDO_CONFIRMACION.
+        - Se registra en bitácora 'Carga de nuevo diagnóstico'.
+        """
+        from workshop_app.services import cargar_diagnostico_tecnico
+
+        # Colocar reparación en ESPERANDO_DIAGNOSTICO
+        self.reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+        self.reparacion.save()
+
+        datos_nuevo_diag = {
+            'descripcion_falla': 'Reevaluación técnica: Además del display, batería hinchada requiere recambio.',
+            'costo_mano_obra': Decimal('15000.00'),
+            'insumos': [
+                {'id_producto': self.prod_pantalla.id_producto, 'cantidad': 1},
+                {'id_producto': self.prod_bateria.id_producto, 'cantidad': 1}
+            ]
+        }
+
+        nuevo_diag = cargar_diagnostico_tecnico(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=self.reparacion.id_reparacion,
+            datos_validados=datos_nuevo_diag
+        )
+
+        self.reparacion.refresh_from_db()
+        self.assertEqual(self.reparacion.etapa, 'ESPERANDO_CONFIRMACION')
+
+        # Verificar que existan 2 diagnósticos en la reparación
+        diagnosticos = list(self.reparacion.diagnostico_set.order_by('-id_diagnostico'))
+        self.assertEqual(len(diagnosticos), 2)
+        self.assertEqual(diagnosticos[0].id_diagnostico, nuevo_diag.id_diagnostico)
+        self.assertEqual(diagnosticos[0].costo_diagnostico, Decimal('15000.00'))
+
+        # Verificar que los insumos actuales corresponden al nuevo diagnóstico (2 items)
+        insumos_actuales = self.reparacion.detalleinsumoreparacion_set.all()
+        self.assertEqual(insumos_actuales.count(), 2)
+
+        # Verificar bitácora
+        ultima_bitacora = self.reparacion.bitacorareparacion_set.order_by('-id_bitacora').first()
+        self.assertEqual(ultima_bitacora.estado_alcanzado, 4)  # 4: ESPERANDO_CONFIRMACION
+        self.assertEqual(ultima_bitacora.comentario, "Carga de nuevo diagnóstico")
+
+    def test_reparacion_detalle_serializer_expone_todos_los_diagnosticos_ordenados(self):
+        """ReparacionDetalleOutputSerializer expone diagnostico vigente y array completo de diagnosticos."""
+        from workshop_app.serializers import ReparacionDetalleOutputSerializer
+
+        # Diagnóstico 2
+        diag2 = Diagnostico.objects.create(
+            id_reparacion=self.reparacion,
+            descripcion_falla='Diagnóstico posterior corregido.',
+            fecha_diagnostico=self.hoy,
+            costo_diagnostico=Decimal('18000.00')
+        )
+
+        serializer = ReparacionDetalleOutputSerializer(
+            self.reparacion,
+            context={'usuario': self.tecnico}
+        )
+        data = serializer.data
+
+        # El diagnóstico vigente expuesto debe ser el último (diag2)
+        self.assertIsNotNone(data['diagnostico'])
+        self.assertEqual(data['diagnostico']['id_diagnostico'], diag2.id_diagnostico)
+
+        # El historial de diagnósticos debe contener los 2 diagnósticos ordenados desc
+        self.assertEqual(len(data['diagnosticos']), 2)
+        self.assertEqual(data['diagnosticos'][0]['id_diagnostico'], diag2.id_diagnostico)
+        self.assertEqual(data['diagnosticos'][1]['id_diagnostico'], self.diag1.id_diagnostico)
+
+    def test_notificacion_output_serializer_url_destino_para_tecnico(self):
+        """NotificacionOutputSerializer asigna enlace a /tecnico/reparaciones/:id cuando el destinatario es técnico."""
+        from core_app.models import Notificacion
+        from core_app.serializers import NotificacionOutputSerializer
+
+        notif_tecnico = Notificacion.objects.create(
+            id_usuario=self.tecnico,
+            mensaje=f"Actualización técnica sobre la Orden #{self.reparacion.id_reparacion}",
+            tipo="CAMBIO_ESTADO_REPARACION",
+            fecha_envio=self.hoy,
+            leida=False,
+            id_dispositivo=self.dispositivo
+        )
+
+        serializer = NotificacionOutputSerializer(notif_tecnico)
+        self.assertEqual(
+            serializer.data['url_destino'],
+            f"/tecnico/reparaciones/{self.reparacion.id_reparacion}"
+        )
+
+
 
 
