@@ -2,6 +2,7 @@ from django.test import TestCase
 
 # Create your tests here.
 import uuid
+import datetime
 from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError
@@ -15,7 +16,7 @@ from inventory_app.models import Stock, MovimientoStock
 from catalog_app.models import Producto, CategoriaProducto
 from geo_app.models import Pais, Provincia, Ciudad, Direccion
 from core_app.models import ConfiguracionSistema, LogSistema
-from users_app.models import Usuario, RolUsuario
+from users_app.models import Usuario, RolUsuario, PerfilUsuario
 
 
 class SalesAppCU18TestCase(TestCase):
@@ -973,5 +974,1297 @@ class SalesAppCU38TestCase(TestCase):
             {'estado_pago': 'PAGADO'}
         )
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class RegistrarMedioPagoTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-82: Registrar medio de pago.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin.mp@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.mp@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+    def test_registrar_nuevo_medio_pago_exitoso(self):
+        """Paso 1 a 6: Un administrador registra un nuevo canal de cobro con recargo."""
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "nombre": "Tarjeta de Crédito 3 Cuotas",
+            "recargo": "12.50"
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data.get('mensaje'), "Medio de pago registrado con éxito.")
+        self.assertEqual(response.data.get('medio_pago', {}).get('nombre_medio_pago'), "Tarjeta de Crédito 3 Cuotas")
+        self.assertEqual(Decimal(str(response.data['medio_pago']['recargo'])), Decimal('12.50'))
+        self.assertTrue(response.data['medio_pago']['estado'])
+
+        # Verificar persistencia en base de datos
+        medio = MedioPago.objects.filter(nombre_medio_pago="Tarjeta de Crédito 3 Cuotas").first()
+        self.assertIsNotNone(medio)
+        self.assertTrue(medio.estado)
+        self.assertEqual(medio.recargo, Decimal('12.50'))
+
+        # Verificar LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="CU-82"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn("Tarjeta de Crédito 3 Cuotas", log.detalle)
+
+    def test_registrar_medio_pago_recargo_negativo_falla(self):
+        """Valida que un recargo negativo sea rechazado por la aduana con error 400."""
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "nombre": "Transferencia con Descuento",
+            "recargo": "-5.00"
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("recargo", str(response.data))
+
+    def test_registrar_medio_pago_nombre_existente_activo_falla(self):
+        """Excepción Paso 4: Si el medio de pago ya existe y se encuentra activo, rechaza la operación."""
+        MedioPago.objects.create(
+            nombre_medio_pago="Efectivo en Caja",
+            recargo=Decimal('0.00'),
+            estado=True
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "nombre": "efectivo en caja",  # Case-insensitive
+            "recargo": "0.00"
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ya existe en el sistema y se encuentra activo", str(response.data))
+
+    def test_registrar_medio_pago_inactivo_solicita_reactivacion(self):
+        """Excepción Paso 4: Si existía pero estaba deshabilitado y no se confirma reactivación, avisa."""
+        MedioPago.objects.create(
+            nombre_medio_pago="Criptomoneda USDT",
+            recargo=Decimal('3.00'),
+            estado=False
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "nombre": "Criptomoneda USDT",
+            "recargo": "2.00",
+            "confirmar_reactivacion": False
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("se encontraba deshabilitado", str(response.data))
+
+    def test_reactivar_medio_pago_inactivo_exitoso(self):
+        """Reactivación: Al enviar confirmar_reactivacion=True, el medio se reactiva y actualiza su recargo."""
+        medio_previo = MedioPago.objects.create(
+            nombre_medio_pago="Cheque al Día",
+            recargo=Decimal('5.00'),
+            estado=False
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "nombre": "Cheque al Día",
+            "recargo": "7.50",
+            "confirmar_reactivacion": True
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data['medio_pago']['estado'])
+        self.assertEqual(Decimal(str(response.data['medio_pago']['recargo'])), Decimal('7.50'))
+
+        medio_previo.refresh_from_db()
+        self.assertTrue(medio_previo.estado)
+        self.assertEqual(medio_previo.recargo, Decimal('7.50'))
+
+        # Log de reactivación
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="Reactivar Medio de Pago"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+
+    def test_registrar_medio_pago_rol_no_admin_denegado(self):
+        """Precondición: Solo usuarios con rol de Administrador pueden registrar vías de cobro."""
+        self.client.force_authenticate(user=self.cliente)
+        payload = {
+            "nombre": "Medio Hacker",
+            "recargo": "0.00"
+        }
+
+        url = '/api/sales/medios-pago/registrar/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AlternarEstadoMedioPagoTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-83: Cambiar estado de medio de pago.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin.toggle@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.toggle@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.medio_activo = MedioPago.objects.create(
+            nombre_medio_pago="Tarjeta Débito Visa",
+            recargo=Decimal('0.00'),
+            estado=True
+        )
+
+        self.medio_inactivo = MedioPago.objects.create(
+            nombre_medio_pago="Criptomonedas BTC",
+            recargo=Decimal('5.00'),
+            estado=False
+        )
+
+    def test_desactivar_medio_pago_activo_exitoso(self):
+        """Paso 1 a 7: Administrador desactiva un medio de pago activo (baja lógica)."""
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/medios-pago/{self.medio_activo.id_mediopago}/toggle/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('mensaje'), "Medio de pago desactivado con éxito.")
+        self.assertFalse(response.data.get('medio_pago', {}).get('estado'))
+
+        self.medio_activo.refresh_from_db()
+        self.assertFalse(self.medio_activo.estado)
+
+        # Auditoría LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="Desactivar Medio de Pago (CU-83)"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn("desactivó", log.detalle)
+        self.assertIn(self.medio_activo.nombre_medio_pago, log.detalle)
+
+    def test_activar_medio_pago_inactivo_exitoso(self):
+        """Excepción Paso 3: Administrador reactiva un canal previamente desactivado."""
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/medios-pago/{self.medio_inactivo.id_mediopago}/toggle/'
+
+        response = self.client.patch(url, data={"confirmar": True}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('mensaje'), "Medio de pago activado con éxito.")
+        self.assertTrue(response.data.get('medio_pago', {}).get('estado'))
+
+        self.medio_inactivo.refresh_from_db()
+        self.assertTrue(self.medio_inactivo.estado)
+
+        # Auditoría LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="Activar Medio de Pago (CU-83)"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn("activó", log.detalle)
+
+    def test_toggle_medio_pago_inexistente_retorna_404(self):
+        """Si el medio de pago no existe en la BD, retorna 404 Not Found."""
+        self.client.force_authenticate(user=self.admin)
+        url = '/api/sales/medios-pago/999999/toggle/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("No se encontró el medio de pago", response.data.get('error', ''))
+
+    def test_toggle_medio_pago_usuario_no_admin_denegado(self):
+        """Precondición: Solo Administradores pueden cambiar el estado de un medio de pago."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f'/api/sales/medios-pago/{self.medio_activo.id_mediopago}/toggle/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.medio_activo.refresh_from_db()
+        self.assertTrue(self.medio_activo.estado)  # No debe haber cambiado
+
+    def test_toggle_medio_pago_sin_autenticar_retorna_401_o_403(self):
+        """Peticiones no autenticadas son rechazadas por la seguridad de la API."""
+        url = f'/api/sales/medios-pago/{self.medio_activo.id_mediopago}/toggle/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_toggle_ruta_alternativa_estado_patch_y_post(self):
+        """Verifica soporte para ruta /estado/ y método POST."""
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/medios-pago/{self.medio_activo.id_mediopago}/estado/'
+
+        response = self.client.post(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data.get('medio_pago', {}).get('estado'))
+
+
+class RealizarVentaPresencialTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-67: Realizar Venta Presencial.
+    """
+
+    def setUp(self):
+        from catalog_app.models import Producto, CategoriaProducto
+        from inventory_app.models import Stock, MovimientoStock
+
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin.pos@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.pos@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.pos@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.categoria = CategoriaProducto.objects.create(
+            nombre="Accesorios de Telefonía",
+            descripcion="Cables, cargadores y fundas",
+            estado=True
+        )
+
+        # Producto 1: Con stock amplio (10 unidades)
+        self.prod_cargador = Producto.objects.create(
+            nombre="Cargador Rápido 20W USB-C",
+            descripcion="Cargador de carga rápida",
+            precio_venta=Decimal('5000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+        self.stock_cargador = Stock.objects.create(
+            id_producto=self.prod_cargador,
+            stock_minimo=2
+        )
+        MovimientoStock.objects.create(
+            id_stock=self.stock_cargador,
+            tipo_movimiento='ingreso',
+            cantidad=10,
+            fecha=timezone.now().date(),
+            motivo="Stock inicial lote compras",
+            uso_taller=False
+        )
+
+        # Producto 2: Con stock justo (1 unidad)
+        self.prod_funda = Producto.objects.create(
+            nombre="Funda Silicona Transparente",
+            descripcion="Funda para celular",
+            precio_venta=Decimal('2500.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+        self.stock_funda = Stock.objects.create(
+            id_producto=self.prod_funda,
+            stock_minimo=1
+        )
+        MovimientoStock.objects.create(
+            id_stock=self.stock_funda,
+            tipo_movimiento='ingreso',
+            cantidad=1,
+            fecha=timezone.now().date(),
+            motivo="Stock inicial lote compras",
+            uso_taller=False
+        )
+
+        # Producto 3: No apto para la venta
+        self.prod_no_apto = Producto.objects.create(
+            nombre="Batería Dañada para Reciclaje",
+            descripcion="Descarte",
+            precio_venta=Decimal('100.00'),
+            estado=True,
+            apto_venta=False,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+
+    def test_venta_presencial_consumidor_final_exitosa(self):
+        """
+        Paso 1 a 8: Técnico registra venta presencial en mostrador asignando
+        automáticamente al cliente 'Consumidor Final' cuando no se envía id_cliente.
+        """
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            "productos": [
+                {
+                    "id_producto": self.prod_cargador.id_producto,
+                    "cantidad": 2
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data.get('mensaje'), "Venta presencial registrada pendiente de cobro")
+        self.assertEqual(Decimal(response.data.get('monto_total')), Decimal('10000.00'))
+        self.assertEqual(response.data.get('estado_venta'), 'PENDIENTE')
+        self.assertEqual(response.data.get('cliente'), 'consumidorfinal@ifixpos.com')
+        self.assertEqual(response.data.get('advertencias_stock'), [])
+
+        id_venta = response.data.get('id_venta')
+        venta_db = Venta.objects.get(id_venta=id_venta)
+        self.assertEqual(venta_db.estado_venta, 'PENDIENTE')
+        self.assertEqual(venta_db.metodo_entrega, 'MOSTRADOR')
+        self.assertEqual(venta_db.monto_subtotal, Decimal('10000.00'))
+
+        # Verificar DetalleVenta congelado
+        detalle = DetalleVenta.objects.filter(id_venta=venta_db).first()
+        self.assertIsNotNone(detalle)
+        self.assertEqual(detalle.id_producto, self.prod_cargador)
+        self.assertEqual(detalle.cantidad, 2)
+        self.assertEqual(detalle.precio_unitario, Decimal('5000.00'))
+        self.assertEqual(detalle.subtotal, Decimal('10000.00'))
+
+        # Verificar egreso en MovimientoStock
+        mov = MovimientoStock.objects.filter(id_venta=venta_db).first()
+        self.assertIsNotNone(mov)
+        self.assertEqual(mov.tipo_movimiento, 'venta')
+        self.assertEqual(mov.cantidad, 2)
+        self.assertEqual(mov.id_stock, self.stock_cargador)
+
+        # Auditoría LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.tecnico,
+            accion__icontains="CU-67"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn(str(id_venta), log.detalle)
+
+    def test_venta_presencial_con_cliente_especifico_y_advertencia_stock(self):
+        """
+        Excepción Paso 4: Si la cantidad vendida agota o sobrepasa el stock disponible,
+        el sistema registra la venta pero incluye advertencias informativas.
+        """
+        self.client.force_authenticate(user=self.admin)
+        payload = {
+            "id_cliente": self.cliente.id_usuario,
+            "productos": [
+                {
+                    "id_producto": self.prod_funda.id_producto,
+                    "cantidad": 2  # Tenía 1 unidad disponible
+                }
+            ]
+        }
+
+        url = '/api/sales/venta-presencial/'  # Usando ruta alias
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(response.data.get('monto_total')), Decimal('5000.00'))
+        self.assertEqual(response.data.get('cliente'), self.cliente.email)
+        self.assertEqual(len(response.data.get('advertencias_stock')), 1)
+        self.assertIn("Funda Silicona Transparente", response.data['advertencias_stock'][0])
+
+    def test_venta_presencial_producto_inexistente_retorna_400(self):
+        """Excepción Paso 3: Código de producto inexistente en catálogo retorna 400."""
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            "productos": [
+                {
+                    "id_producto": 999999,
+                    "cantidad": 1
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no existen en el catálogo", str(response.data))
+
+    def test_venta_presencial_producto_no_apto_venta_retorna_400(self):
+        """Precondición: Productos inhabilitados para venta son rechazados."""
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            "productos": [
+                {
+                    "id_producto": self.prod_no_apto.id_producto,
+                    "cantidad": 1
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no se encuentra habilitado para la venta", str(response.data))
+
+    def test_venta_presencial_cliente_inexistente_retorna_400(self):
+        """Si se especifica un id_cliente no registrado en la BD, se aborta la venta con 400."""
+        self.client.force_authenticate(user=self.tecnico)
+        payload = {
+            "id_cliente": 888888,
+            "productos": [
+                {
+                    "id_producto": self.prod_cargador.id_producto,
+                    "cantidad": 1
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no existe en el sistema", str(response.data))
+
+    def test_venta_presencial_rol_cliente_denegado_403(self):
+        """Precondición: Solo Administrador o Técnico pueden operar la caja en mostrador."""
+        self.client.force_authenticate(user=self.cliente)
+        payload = {
+            "productos": [
+                {
+                    "id_producto": self.prod_cargador.id_producto,
+                    "cantidad": 1
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_venta_presencial_sin_autenticacion_retorna_401_o_403(self):
+        """Peticiones anónimas son rechazadas."""
+        payload = {
+            "productos": [
+                {
+                    "id_producto": self.prod_cargador.id_producto,
+                    "cantidad": 1
+                }
+            ]
+        }
+
+        url = '/api/sales/ventas/presencial/'
+        response = self.client.post(url, data=payload, format='json')
+
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class AuditarHistorialBeneficiosTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-69: Auditar Historial de Beneficios y Promociones.
+    """
+
+    def setUp(self):
+        import datetime
+        from catalog_app.models import Producto, CategoriaProducto
+        from sales_app.models import Beneficio
+        from users_app.models import Usuario, RolUsuario, PerfilUsuario
+
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin.audit@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.cliente1 = Usuario.objects.create(
+            email='cliente.promos@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente1,
+            nombre='Lucas',
+            apellido='Martínez',
+            dni='33444555'
+        )
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.audit@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.categoria = CategoriaProducto.objects.create(
+            nombre="Smartphones",
+            descripcion="Teléfonos móviles",
+            estado=True
+        )
+
+        self.producto = Producto.objects.create(
+            nombre="Cable Carga Rápida Tipo C",
+            descripcion="Cable 1 metro",
+            precio_venta=Decimal('2000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+
+        self.hoy = timezone.now().date()
+        self.hace_diez_dias = self.hoy - datetime.timedelta(days=10)
+
+        # Beneficio 1: Vigente (emitido hoy, 48 horas)
+        self.beneficio_vigente = Beneficio.objects.create(
+            id_usuario=self.cliente1,
+            id_producto=self.producto,
+            motivo="Algoritmo de retención: Cliente con compras recurrentes",
+            fecha=self.hoy,
+            enviado_momento_compra=True,
+            enviado_durante_carrito=False,
+            por_desc=Decimal('15.00'),
+            tiempo_disp=Decimal('48.00')
+        )
+
+        # Beneficio 2: Caducado (emitido hace 10 días, 24 horas)
+        self.beneficio_caducado = Beneficio.objects.create(
+            id_usuario=self.cliente1,
+            id_producto=self.producto,
+            motivo="Reactivación cliente inactivo por abandono de carrito",
+            fecha=self.hace_diez_dias,
+            enviado_momento_compra=False,
+            enviado_durante_carrito=True,
+            por_desc=Decimal('10.00'),
+            tiempo_disp=Decimal('24.00')
+        )
+
+    def test_listar_historial_beneficios_admin_exitoso(self):
+        """Paso 1 a 4: El Administrador lista el historial consolidado con estado de vigencia."""
+        self.client.force_authenticate(user=self.admin)
+        url = '/api/sales/beneficios/historial/'
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+
+        # El primero por fecha desc es el vigente de hoy
+        item_vigente = response.data[0]
+        self.assertEqual(item_vigente['id_beneficio'], self.beneficio_vigente.id_beneficio)
+        self.assertEqual(item_vigente['cliente_email'], self.cliente1.email)
+        self.assertIn("Lucas", item_vigente['cliente_nombre'])
+        self.assertEqual(item_vigente['producto_nombre'], self.producto.nombre)
+        self.assertEqual(Decimal(item_vigente['por_desc']), Decimal('15.00'))
+        self.assertEqual(item_vigente['estado_vigencia'], 'VIGENTE')
+
+        # El segundo es el caducado
+        item_caducado = response.data[1]
+        self.assertEqual(item_caducado['id_beneficio'], self.beneficio_caducado.id_beneficio)
+        self.assertEqual(item_caducado['estado_vigencia'], 'CADUCADO')
+
+    def test_inspeccionar_beneficio_detalle_y_auditoria_log_sistema(self):
+        """
+        Paso 5 y 6: El Administrador inspecciona el expediente técnico completo
+        y el sistema asienta obligatoriamente la traza en LogSistema.
+        """
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_vigente.id_beneficio}/auditar/'
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id_beneficio'], self.beneficio_vigente.id_beneficio)
+        self.assertEqual(response.data['motivo'], self.beneficio_vigente.motivo)
+        self.assertTrue(response.data['enviado_momento_compra'])
+        self.assertFalse(response.data['enviado_durante_carrito'])
+        self.assertEqual(response.data['canal_emision'], 'MOMENTO_COMPRA')
+        self.assertIsNotNone(response.data['fecha_caducidad_estimada'])
+
+        # Verificar LogSistema generado en core_app
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="Auditar Beneficio (CU-69)"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn(str(self.beneficio_vigente.id_beneficio), log.detalle)
+        self.assertIn(self.cliente1.email, log.detalle)
+
+    def test_inspeccionar_beneficio_inexistente_retorna_404(self):
+        """Si el beneficio no existe en la BD, retorna 404 Not Found."""
+        self.client.force_authenticate(user=self.admin)
+        url = '/api/sales/beneficios/999999/auditar/'
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("No se encontró el beneficio", response.data.get('error', ''))
+
+    def test_listar_historial_bloquea_rol_no_admin_403(self):
+        """Precondición: Solo Administradores pueden auditar el motor de fidelización."""
+        self.client.force_authenticate(user=self.tecnico)
+        url = '/api/sales/beneficios/historial/'
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_inspeccionar_beneficio_bloquea_rol_no_admin_403(self):
+        """Precondición: Un usuario con rol Cliente o Técnico no puede acceder al expediente."""
+        self.client.force_authenticate(user=self.cliente1)
+        url = f'/api/sales/beneficios/{self.beneficio_vigente.id_beneficio}/auditar/'
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_beneficios_sin_autenticar_retorna_401_o_403(self):
+        """Peticiones no autenticadas son rechazadas."""
+        url = '/api/sales/beneficios/historial/'
+
+        response = self.client.get(url)
+
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class RevocarBeneficioTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-71: Revocar Beneficio Activo.
+    """
+
+    def setUp(self):
+        import datetime
+        from catalog_app.models import Producto, CategoriaProducto
+        from sales_app.models import Beneficio
+        from users_app.models import Usuario, RolUsuario, PerfilUsuario
+
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin.revoke@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.revoke@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.revoke@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            nombre='Carlos',
+            apellido='Benítez',
+            dni='28999888'
+        )
+
+        self.categoria = CategoriaProducto.objects.create(
+            nombre="Accesorios de Telefonía",
+            descripcion="Cargadores y protectores",
+            estado=True
+        )
+
+        self.producto = Producto.objects.create(
+            nombre="Cargador Turbo 30W",
+            descripcion="Cargador ultra rápido",
+            precio_venta=Decimal('7500.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+
+        self.hoy = timezone.now().date()
+        self.hace_quince_dias = self.hoy - datetime.timedelta(days=15)
+
+        # 1. Beneficio activo y vigente (emitido hoy, 72 horas)
+        self.beneficio_activo = Beneficio.objects.create(
+            id_usuario=self.cliente,
+            id_producto=self.producto,
+            motivo="Algoritmo de Fidelización: Descuento por aniversario",
+            fecha=self.hoy,
+            enviado_momento_compra=True,
+            enviado_durante_carrito=False,
+            por_desc=Decimal('20.00'),
+            tiempo_disp=Decimal('72.00')
+        )
+
+        # 2. Beneficio caducado naturalmente (emitido hace 15 días, 24 horas)
+        self.beneficio_caducado = Beneficio.objects.create(
+            id_usuario=self.cliente,
+            id_producto=self.producto,
+            motivo="Promoción flash fin de semana",
+            fecha=self.hace_quince_dias,
+            enviado_momento_compra=False,
+            enviado_durante_carrito=True,
+            por_desc=Decimal('10.00'),
+            tiempo_disp=Decimal('24.00')
+        )
+
+        # 3. Beneficio previamente revocado (tiempo_disp=0 y prefijo [REVOCADO])
+        self.beneficio_ya_revocado = Beneficio.objects.create(
+            id_usuario=self.cliente,
+            id_producto=self.producto,
+            motivo="[REVOCADO] Error en cálculo de cupón promocional",
+            fecha=self.hoy,
+            enviado_momento_compra=True,
+            enviado_durante_carrito=False,
+            por_desc=Decimal('50.00'),
+            tiempo_disp=Decimal('0.00')
+        )
+
+    def test_revocar_beneficio_activo_exitoso_con_motivo(self):
+        """
+        Paso 1 a 7: El Administrador revoca un beneficio activo ingresando justificación.
+        El sistema reduce el tiempo_disp a 0, asienta el prefijo [REVOCADO]
+        y registra la traza en LogSistema.
+        """
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_activo.id_beneficio}/revocar/'
+        payload = {
+            "motivo_anulacion": "Detección de uso indebido de promoción múltiple"
+        }
+
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('mensaje'), "Beneficio revocado exitosamente.")
+        self.assertEqual(response.data.get('id_beneficio'), self.beneficio_activo.id_beneficio)
+        self.assertEqual(response.data.get('estado'), "REVOCADO")
+        self.assertEqual(response.data.get('motivo_anulacion'), "Detección de uso indebido de promoción múltiple")
+
+        # Verificar actualización en Base de Datos
+        self.beneficio_activo.refresh_from_db()
+        self.assertEqual(self.beneficio_activo.tiempo_disp, Decimal('0.00'))
+        self.assertTrue(self.beneficio_activo.motivo.startswith('[REVOCADO]'))
+        self.assertEqual(self.beneficio_activo.estado, 'REVOCADO')
+
+        # Verificar LogSistema generado en core_app
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin,
+            accion__icontains="Revocar Beneficio (CU-71)"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn(str(self.beneficio_activo.id_beneficio), log.detalle)
+        self.assertIn(self.cliente.email, log.detalle)
+        self.assertIn("Detección de uso indebido", log.detalle)
+
+    def test_revocar_beneficio_activo_sin_motivo_usa_defecto(self):
+        """
+        Paso 5 opcional: El Administrador revoca el beneficio sin enviar justificación,
+        el sistema asienta el texto por defecto en la auditoría.
+        """
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_activo.id_beneficio}/revocar/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('motivo_anulacion'), "Sin justificación ingresada")
+
+        self.beneficio_activo.refresh_from_db()
+        self.assertEqual(self.beneficio_activo.tiempo_disp, Decimal('0.00'))
+        self.assertEqual(self.beneficio_activo.estado, 'REVOCADO')
+
+    def test_revocar_beneficio_caducado_retorna_400(self):
+        """
+        Excepción Paso 4: Si el tiempo natural del beneficio ya caducó,
+        el sistema deniega la operación con 400 Bad Request.
+        """
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_caducado.id_beneficio}/revocar/'
+
+        response = self.client.patch(url, data={"motivo_anulacion": "Intento tardío"}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ya fue utilizado por el cliente o su tiempo de validez expiró", str(response.data))
+
+    def test_revocar_beneficio_ya_revocado_retorna_400(self):
+        """
+        Excepción Paso 4: Un beneficio ya revocado (tiempo_disp=0 o prefijo [REVOCADO])
+        no puede volver a ser revocado.
+        """
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_ya_revocado.id_beneficio}/revocar/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ya fue utilizado por el cliente o su tiempo de validez expiró", str(response.data))
+
+    def test_revocar_beneficio_inexistente_retorna_404(self):
+        """Si el beneficio no existe en la base de datos, retorna 404 Not Found."""
+        self.client.force_authenticate(user=self.admin)
+        url = '/api/sales/beneficios/999999/revocar/'
+
+        response = self.client.patch(url, data={}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("No se encontró el beneficio", response.data.get('error', ''))
+
+    def test_revocar_beneficio_usuario_no_admin_denegado_403(self):
+        """
+        Precondición: Solo Administradores pueden revocar beneficios.
+        Un Técnico o Cliente debe ser rechazado con 403 Forbidden.
+        """
+        self.client.force_authenticate(user=self.tecnico)
+        url = f'/api/sales/beneficios/{self.beneficio_activo.id_beneficio}/revocar/'
+
+        response = self.client.patch(url, data={}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Probar también con cliente
+        self.client.force_authenticate(user=self.cliente)
+        response_cli = self.client.patch(url, data={}, format='json')
+        self.assertEqual(response_cli.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Asegurar que no se modificó
+        self.beneficio_activo.refresh_from_db()
+        self.assertEqual(self.beneficio_activo.tiempo_disp, Decimal('72.00'))
+
+    def test_revocar_beneficio_sin_autenticar_retorna_401_o_403(self):
+        """Peticiones anónimas son rechazadas inmediatamente."""
+        url = f'/api/sales/beneficios/{self.beneficio_activo.id_beneficio}/revocar/'
+
+        response = self.client.patch(url, data={}, format='json')
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_revocar_beneficio_soporta_metodo_post(self):
+        """El endpoint acepta tanto PATCH como POST para flexibilidad de clientes HTTP."""
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/sales/beneficios/{self.beneficio_activo.id_beneficio}/revocar/'
+
+        response = self.client.post(url, data={"motivo_anulacion": "Revocación vía POST"}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get('mensaje'), "Beneficio revocado exitosamente.")
+        self.beneficio_activo.refresh_from_db()
+        self.assertEqual(self.beneficio_activo.estado, 'REVOCADO')
+
+
+class ReporteLogisticaTestCase(TestCase):
+    """
+    Suite de pruebas exhaustivas para CU-75: Generar Reporte de Distribución Geográfica y Logística.
+    Verifica:
+    - Cruce de ventas bajo modalidad 'Envío a domicilio' con dirección congelada en la transacción.
+    - Descarte de compras presenciales / mostrador / retiro.
+    - Agrupación por territorio (Provincia, Ciudad) y cálculo de volumen, fletes, facturación y ticket promedio.
+    - Excepción de zona o periodo sin ventas de envío (error 400).
+    - Validación cronológica de fechas de consulta.
+    - Filtros segmentados por provincia, ciudad y estado_venta.
+    - Asiento de auditoría inmutable en LogSistema.
+    - Seguridad de roles y permisos (estrictamente ADMIN).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url_logistica = '/api/sales/reportes/logistica/'
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(codigo='ADMIN', defaults={'nombre_rol': 'Administrador'})
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(codigo='TECNICO', defaults={'nombre_rol': 'Técnico'})
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(codigo='CLIENTE', defaults={'nombre_rol': 'Cliente'})
+
+        self.hoy = timezone.now().date()
+        self.f_inicio = self.hoy - datetime.timedelta(days=30)
+        self.f_fin = self.hoy
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin.cu75@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_admin
+        )
+        PerfilUsuario.objects.create(id_usuario=self.admin, nombre='Admin', apellido='Logístico')
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.cu75@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.cu75@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_cliente
+        )
+        PerfilUsuario.objects.create(id_usuario=self.cliente, nombre='Santiago', apellido='Comprador')
+
+        # Geografía
+        from geo_app.models import Pais, Provincia, Ciudad, Direccion
+
+        self.pais = Pais.objects.create(nombre_pais='Argentina', cobertura_habilitada=True)
+
+        self.prov_cba = Provincia.objects.create(
+            nombre_provincia='Córdoba',
+            cobertura_habilitada=True,
+            id_pais=self.pais
+        )
+        self.ciudad_cba = Ciudad.objects.create(
+            nombre_ciudad='Córdoba Capital',
+            cobertura_habilitada=True,
+            id_provincia=self.prov_cba
+        )
+        self.dir_cba = Direccion.objects.create(
+            nro_calle='Av. Colón 1500',
+            id_ciudad=self.ciudad_cba,
+            id_usuario=self.cliente,
+            is_active=True
+        )
+
+        self.prov_ba = Provincia.objects.create(
+            nombre_provincia='Buenos Aires',
+            cobertura_habilitada=True,
+            id_pais=self.pais
+        )
+        self.ciudad_lp = Ciudad.objects.create(
+            nombre_ciudad='La Plata',
+            cobertura_habilitada=True,
+            id_provincia=self.prov_ba
+        )
+        self.dir_lp = Direccion.objects.create(
+            nro_calle='Calle 7 Nro 850',
+            id_ciudad=self.ciudad_lp,
+            id_usuario=self.cliente,
+            is_active=True
+        )
+
+    def test_reporte_logistica_consolidado_exitoso(self):
+        """Verifica la agrupación territorial, recaudación de fletes y ticket promedio."""
+        from sales_app.models import Venta
+
+        # Venta 1: ENVIO a Córdoba Capital (Flete: 3000, Subtotal: 20000 -> Total: 23000)
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=5),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('20000.00'),
+            costo_envio=Decimal('3000.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_cba
+        )
+
+        # Venta 2: ENVIO a Córdoba Capital (Flete: 3000, Subtotal: 15000 -> Total: 18000)
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=10),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('3000.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_cba
+        )
+
+        # Venta 3: ENVIO a La Plata (Flete: 4500, Subtotal: 10000 -> Total: 14500)
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=12),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('10000.00'),
+            costo_envio=Decimal('4500.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_lp
+        )
+
+        # Venta 4: RETIRO en mostrador (debe ser ignorada por el motor de envíos)
+        Venta.objects.create(
+            metodo_entrega='RETIRO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=15),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('50000.00'),
+            costo_envio=Decimal('0.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=None
+        )
+
+        # Venta 5: Fuera del rango temporal (hace 45 días)
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio - datetime.timedelta(days=15),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('30000.00'),
+            costo_envio=Decimal('3000.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_cba
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_logistica, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        self.assertEqual(len(data), 2)
+
+        # Córdoba Capital (2 envíos)
+        cba = next((t for t in data if t['id_ciudad'] == self.ciudad_cba.id_ciudad), None)
+        self.assertIsNotNone(cba)
+        self.assertEqual(cba['nombre_provincia'], 'Córdoba')
+        self.assertEqual(cba['nombre_ciudad'], 'Córdoba Capital')
+        self.assertEqual(cba['volumen_envios'], 2)
+        self.assertEqual(Decimal(str(cba['recaudacion_logistica'])), Decimal('6000.00'))
+        self.assertEqual(Decimal(str(cba['facturacion_bruta'])), Decimal('41000.00'))
+        self.assertEqual(Decimal(str(cba['ticket_promedio'])), Decimal('20500.00'))
+
+        # La Plata (1 envío)
+        lp = next((t for t in data if t['id_ciudad'] == self.ciudad_lp.id_ciudad), None)
+        self.assertIsNotNone(lp)
+        self.assertEqual(lp['nombre_provincia'], 'Buenos Aires')
+        self.assertEqual(lp['nombre_ciudad'], 'La Plata')
+        self.assertEqual(lp['volumen_envios'], 1)
+        self.assertEqual(Decimal(str(lp['recaudacion_logistica'])), Decimal('4500.00'))
+        self.assertEqual(Decimal(str(lp['facturacion_bruta'])), Decimal('14500.00'))
+        self.assertEqual(Decimal(str(lp['ticket_promedio'])), Decimal('14500.00'))
+
+        # Auditoría en LogSistema
+        log = LogSistema.objects.filter(accion="Generar Reporte de Distribución Geográfica (CU-75)").first()
+        self.assertIsNotNone(log)
+        self.assertIn("Reporte de Distribución Geográfica", log.detalle)
+
+    def test_filtro_segmentado_por_provincia_y_ciudad(self):
+        """Verifica que los filtros opcionales de provincia y ciudad aíslen el territorio correcto."""
+        from sales_app.models import Venta
+
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=2),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('10000.00'),
+            costo_envio=Decimal('2000.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_cba
+        )
+        Venta.objects.create(
+            metodo_entrega='ENVIO',
+            fecha_venta=self.f_inicio + datetime.timedelta(days=3),
+            estado_venta='COMPLETADA',
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('3500.00'),
+            id_usuario=self.cliente,
+            id_direccion_envio=self.dir_lp
+        )
+
+        self.client.force_authenticate(user=self.admin)
+
+        # Filtro por provincia de Córdoba
+        params_prov = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_provincia': self.prov_cba.id_provincia
+        }
+        res_prov = self.client.get(self.url_logistica, data=params_prov)
+        self.assertEqual(res_prov.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_prov.data), 1)
+        self.assertEqual(res_prov.data[0]['id_provincia'], self.prov_cba.id_provincia)
+
+        # Filtro por ciudad de La Plata
+        params_ciu = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_ciudad': self.ciudad_lp.id_ciudad
+        }
+        res_ciu = self.client.get(self.url_logistica, data=params_ciu)
+        self.assertEqual(res_ciu.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_ciu.data), 1)
+        self.assertEqual(res_ciu.data[0]['id_ciudad'], self.ciudad_lp.id_ciudad)
+
+    def test_sin_ventas_de_envio_en_periodo_retorna_400(self):
+        """Excepción Paso 5: Si no existen ventas bajo modalidad de envío en la zona/periodo, arroja 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': '2021-01-01',
+            'fecha_fin': '2021-01-31'
+        }
+        response = self.client.get(self.url_logistica, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no existen ventas bajo modalidad de envío", str(response.data))
+
+    def test_rango_fechas_incongruente_retorna_400(self):
+        """Excepción Paso 4: Si fecha_inicio supera fecha_fin, arroja error 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.hoy),
+            'fecha_fin': str(self.hoy - datetime.timedelta(days=1))
+        }
+        response = self.client.get(self.url_logistica, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no puede ser posterior", str(response.data))
+
+    def test_seguridad_no_admin_denegado_403(self):
+        """Solo administradores pueden consultar el reporte de logística."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        self.client.force_authenticate(user=self.tecnico)
+        res_tec = self.client.get(self.url_logistica, data=params)
+        self.assertEqual(res_tec.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.cliente)
+        res_cli = self.client.get(self.url_logistica, data=params)
+        self.assertEqual(res_cli.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_no_autenticado_denegado_401(self):
+        """Peticiones sin autenticar deben recibir 401."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_logistica, data=params)
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
 
 

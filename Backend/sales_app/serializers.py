@@ -387,6 +387,347 @@ class TransaccionCobroPagoOutputSerializer(serializers.Serializer):
     medio_pago = serializers.CharField(allow_null=True, allow_blank=True)
     numero_operacion = serializers.CharField(allow_null=True, allow_blank=True)
     detalle = serializers.CharField(allow_null=True, allow_blank=True)
-    ruta_comprobante = serializers.CharField(allow_null=True, allow_blank=True)
     cliente = ClienteTransaccionOutputSerializer()
+
+
+# ==============================================================================
+# CU-70: FILTRAR BENEFICIOS OTORGADOS (SERIALIZERS)
+# ==============================================================================
+
+class FiltrarBeneficiosInputSerializer(serializers.Serializer):
+    """La Aduana (CU-70): Valida parámetros de consulta para beneficios otorgados."""
+    buscar = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    cliente_query = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    id_usuario = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    fecha_desde = serializers.DateField(required=False, allow_null=True)
+    fecha_hasta = serializers.DateField(required=False, allow_null=True)
+    enviado_momento_compra = serializers.BooleanField(required=False, allow_null=True)
+    enviado_durante_carrito = serializers.BooleanField(required=False, allow_null=True)
+    por_desc_min = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    por_desc_max = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    id_producto = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+    def validate(self, attrs):
+        f_desde = attrs.get('fecha_desde')
+        f_hasta = attrs.get('fecha_hasta')
+        if f_desde and f_hasta and f_desde > f_hasta:
+            raise serializers.ValidationError("La fecha inicial (fecha_desde) no puede ser posterior a la fecha final (fecha_hasta).")
+        return attrs
+
+
+class BeneficioOtorgadoOutputSerializer(serializers.Serializer):
+    """Formato estructurado de salida para beneficios y descuentos otorgados."""
+    id_beneficio = serializers.IntegerField(read_only=True)
+    motivo = serializers.CharField(read_only=True)
+    fecha = serializers.DateField(read_only=True)
+    enviado_momento_compra = serializers.BooleanField(read_only=True)
+    enviado_durante_carrito = serializers.BooleanField(read_only=True)
+    por_desc = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    tiempo_disp = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    id_usuario = serializers.IntegerField(source='id_usuario_id', read_only=True)
+    email_cliente = serializers.SerializerMethodField()
+    nombre_cliente = serializers.SerializerMethodField()
+    id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
+    nombre_producto = serializers.SerializerMethodField()
+
+    def get_email_cliente(self, obj):
+        return obj.id_usuario.email if obj.id_usuario else ""
+
+    def get_nombre_cliente(self, obj):
+        if obj.id_usuario and hasattr(obj.id_usuario, 'perfilusuario'):
+            perfil = obj.id_usuario.perfilusuario
+            return f"{perfil.nombre or ''} {perfil.apellido or ''}".strip() or obj.id_usuario.email
+        return obj.id_usuario.email if obj.id_usuario else ""
+
+    def get_nombre_producto(self, obj):
+        return obj.id_producto.nombre if obj.id_producto else ""
+
+
+# ==============================================================================
+# CU-82: REGISTRAR MEDIO DE PAGO
+# ==============================================================================
+
+class RegistrarMedioPagoInputSerializer(serializers.Serializer):
+    """
+    CU-82: Aduana Comercial para registrar o reactivar un canal de cobro en el sistema.
+    """
+    nombre = serializers.CharField(
+        max_length=100, 
+        required=True,
+        error_messages={
+            'required': 'El nombre del medio de pago es obligatorio.',
+            'blank': 'El nombre del medio de pago no puede estar vacío.'
+        }
+    )
+    recargo = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        required=False, 
+        default=Decimal('0.00'),
+        error_messages={
+            'invalid': 'El recargo debe ser un valor decimal válido.'
+        }
+    )
+    confirmar_reactivacion = serializers.BooleanField(
+        required=False, 
+        default=False
+    )
+
+    def validate_nombre(self, value):
+        limpio = value.strip()
+        if not limpio:
+            raise serializers.ValidationError("El nombre del medio de pago no puede estar vacío.")
+        return limpio
+
+    def validate_recargo(self, value):
+        if value is not None and value < Decimal('0.00'):
+            raise serializers.ValidationError("El recargo no puede ser un valor negativo.")
+        return value
+
+
+class MedioPagoOutputSerializer(serializers.Serializer):
+    """Formato de salida estructurado para medios de pago."""
+    id_mediopago = serializers.IntegerField(read_only=True)
+    nombre = serializers.CharField(source='nombre_medio_pago', read_only=True)
+    nombre_medio_pago = serializers.CharField(read_only=True)
+    recargo = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    estado = serializers.BooleanField(read_only=True)
+
+
+# ==============================================================================
+# CU-83: CAMBIAR ESTADO DE MEDIO DE PAGO
+# ==============================================================================
+
+class AlternarEstadoMedioPagoInputSerializer(serializers.Serializer):
+    """
+    CU-83: Aduana Comercial para validar la alternancia de estado (Activo/Inactivo).
+    No requiere campos obligatorios, soporta cuerpo vacío {} o confirmación explícita.
+    """
+    confirmar = serializers.BooleanField(required=False, default=True)
+
+
+# ==============================================================================
+# CU-67: REALIZAR VENTA PRESENCIAL
+# ==============================================================================
+
+class ItemVentaPresencialSerializer(serializers.Serializer):
+    """Renglón de producto y cantidad para el carrito de venta presencial en mostrador."""
+    id_producto = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'El identificador del producto es obligatorio.',
+            'invalid': 'El identificador del producto debe ser un número entero válido.',
+            'min_value': 'El identificador del producto debe ser mayor a 0.'
+        }
+    )
+    cantidad = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'La cantidad del producto es obligatoria.',
+            'invalid': 'La cantidad debe ser un número entero válido.',
+            'min_value': 'La cantidad debe ser de al menos 1 unidad.'
+        }
+    )
+
+
+class RealizarVentaPresencialInputSerializer(serializers.Serializer):
+    """
+    CU-67: Aduana Comercial para registrar una venta física en mostrador.
+    Permite asociar un cliente registrado o delegar al perfil genérico Consumidor Final.
+    """
+    id_cliente = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        help_text='ID del cliente registrado (opcional). Si se omite, se asigna Consumidor Final.'
+    )
+    productos = ItemVentaPresencialSerializer(
+        many=True,
+        required=True,
+        allow_empty=False,
+        error_messages={
+            'required': 'Debe enviar la lista de productos a comprar.',
+            'empty': 'La lista de productos no puede estar vacía.'
+        }
+    )
+
+
+# ==============================================================================
+# CU-69: AUDITAR HISTORIAL DE BENEFICIOS Y PROMOCIONES (SERIALIZERS)
+# ==============================================================================
+
+class BeneficioListOutputSerializer(serializers.Serializer):
+    """
+    CU-69: Formato resumido para la vista consolidada de auditoría de beneficios (Paso 4).
+    Muestra cliente, producto sugerido, porcentaje de descuento y estado de vigencia.
+    """
+    id_beneficio = serializers.IntegerField(read_only=True)
+    id_cliente = serializers.IntegerField(source='id_usuario_id', read_only=True)
+    cliente_email = serializers.SerializerMethodField()
+    cliente_nombre = serializers.SerializerMethodField()
+    id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
+    producto_nombre = serializers.SerializerMethodField()
+    por_desc = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    fecha = serializers.DateField(read_only=True)
+    estado_vigencia = serializers.SerializerMethodField()
+
+    def get_cliente_email(self, obj) -> str:
+        return obj.id_usuario.email if obj.id_usuario else ""
+
+    def get_cliente_nombre(self, obj) -> str:
+        if obj.id_usuario and hasattr(obj.id_usuario, 'perfilusuario'):
+            perfil = obj.id_usuario.perfilusuario
+            return f"{perfil.nombre or ''} {perfil.apellido or ''}".strip() or obj.id_usuario.email
+        return obj.id_usuario.email if obj.id_usuario else ""
+
+    def get_producto_nombre(self, obj) -> str:
+        return obj.id_producto.nombre if obj.id_producto else ""
+
+    def get_estado_vigencia(self, obj) -> str:
+        if not obj.fecha or obj.tiempo_disp is None:
+            return "VIGENTE"
+        import datetime
+        from django.utils import timezone
+        import math
+        horas = float(obj.tiempo_disp)
+        dias = math.ceil(horas / 24.0)
+        fecha_expiracion = obj.fecha + datetime.timedelta(days=dias)
+        return "VIGENTE" if timezone.now().date() <= fecha_expiracion else "CADUCADO"
+
+
+class BeneficioDetailOutputSerializer(BeneficioListOutputSerializer):
+    """
+    CU-69: Expediente técnico y algorítmico completo para la inspección detallada (Paso 6).
+    Detalla motivo del disparo, canal de emisión, tiempo disponible y fecha calculada de caducidad.
+    """
+    motivo = serializers.CharField(read_only=True)
+    enviado_momento_compra = serializers.BooleanField(read_only=True)
+    enviado_durante_carrito = serializers.BooleanField(read_only=True)
+    tiempo_disp = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    fecha_caducidad_estimada = serializers.SerializerMethodField()
+    canal_emision = serializers.SerializerMethodField()
+
+    def get_fecha_caducidad_estimada(self, obj) -> Optional[str]:
+        if not obj.fecha or obj.tiempo_disp is None:
+            return None
+        import datetime
+        import math
+        horas = float(obj.tiempo_disp)
+        dias = math.ceil(horas / 24.0)
+        fecha_expiracion = obj.fecha + datetime.timedelta(days=dias)
+        return str(fecha_expiracion)
+
+    def get_canal_emision(self, obj) -> str:
+        canales = []
+        if obj.enviado_momento_compra:
+            canales.append("MOMENTO_COMPRA")
+        if obj.enviado_durante_carrito:
+            canales.append("DURANTE_CARRITO")
+        return " / ".join(canales) if canales else "NOTIFICACION_SISTEMA"
+
+
+# ==============================================================================
+# CU-71: REVOCAR BENEFICIO ACTIVO (SERIALIZERS)
+# ==============================================================================
+
+class RevocarBeneficioInputSerializer(serializers.Serializer):
+    """
+    CU-71: Aduana Administrativa para capturar la justificación opcional
+    de anulación o revocación manual de un beneficio.
+    """
+    motivo_anulacion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+        default='Sin justificación ingresada',
+        help_text='Motivo o justificación de la anulación gerencial.'
+    )
+
+
+# ==============================================================================
+# CU-75: GENERAR REPORTE DE DISTRIBUCIÓN GEOGRÁFICA Y LOGÍSTICA
+# ==============================================================================
+
+class FiltroLogisticaInputSerializer(serializers.Serializer):
+    """
+    CU-75: Aduana de parámetros para el reporte de distribución geográfica y logística.
+    Captura el horizonte temporal obligatorio y filtros opcionales de zona y estado.
+    """
+    fecha_inicio = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de inicio es requerida.'}
+    )
+    fecha_fin = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de fin es requerida.'}
+    )
+    id_provincia = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    id_ciudad = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    estado_venta = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=50
+    )
+    id_medio_pago = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        help_text='Filtro opcional por medio de pago registrado en la venta.'
+    )
+
+    def validate(self, attrs):
+        fecha_inicio = attrs.get('fecha_inicio')
+        fecha_fin = attrs.get('fecha_fin')
+
+        if fecha_inicio and fecha_fin and fecha_inicio > fecha_fin:
+            raise serializers.ValidationError(
+                "El rango cronológico es inválido: la fecha de inicio no puede ser posterior a la fecha de fin"
+            )
+        return attrs
+
+
+class ReporteLogisticaItemOutputSerializer(serializers.Serializer):
+    """
+    CU-75: Indicadores consolidados de densidad logística, fletes,
+    facturación bruta y ticket promedio por territorio (Provincia / Ciudad).
+    """
+    id_provincia = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_provincia = serializers.CharField(read_only=True)
+    id_ciudad = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_ciudad = serializers.CharField(read_only=True)
+    volumen_envios = serializers.IntegerField(read_only=True)
+    recaudacion_logistica = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    facturacion_bruta = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    ticket_promedio = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+
+
+
+
+class FiltrarHistorialBeneficiosInputSerializer(serializers.Serializer):
+    """CU-69: Valida los filtros del historial de beneficios (reemplaza request.query_params.dict())."""
+    id_cliente = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    id_usuario = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    fecha_desde = serializers.DateField(required=False, allow_null=True)
+    fecha_hasta = serializers.DateField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        desde, hasta = attrs.get('fecha_desde'), attrs.get('fecha_hasta')
+        if desde and hasta and desde > hasta:
+            raise serializers.ValidationError("La fecha 'desde' no puede ser posterior a la fecha 'hasta'.")
+        return attrs
+
+
+class BuscarOperacionCobroInputSerializer(serializers.Serializer):
+    """Aduana para búsqueda de operación pendiente de cobro (CU-21)."""
+    identificador = serializers.CharField(required=False, allow_blank=True)
 

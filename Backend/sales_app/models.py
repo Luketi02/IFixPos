@@ -277,5 +277,22 @@ class Beneficio(models.Model):
         help_text='Identificador único del producto.'
     )
 
+    @property
+    def estado(self) -> str:
+        """Determina dinámicamente el estado del beneficio (ACTIVO, REVOCADO o CADUCADO)."""
+        if self.motivo and '[REVOCADO]' in self.motivo:
+            return 'REVOCADO'
+        if self.tiempo_disp is not None and self.tiempo_disp <= 0:
+            return 'REVOCADO'
+        if not self.fecha or self.tiempo_disp is None:
+            return 'CADUCADO'
+        import math
+        import datetime
+        from django.utils import timezone
+        dias = math.ceil(float(self.tiempo_disp) / 24.0)
+        if timezone.now().date() > self.fecha + datetime.timedelta(days=dias):
+            return 'CADUCADO'
+        return 'ACTIVO'
+
     class Meta:
         db_table = 'beneficio'

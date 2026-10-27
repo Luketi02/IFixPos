@@ -67,7 +67,7 @@ from core_app.selectors import obtener_configuracion_bool, obtener_configuracion
 def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
     """Busca y retorna el perfil de un usuario, o levanta ValidationError si no existe."""
     try:
-        return PerfilUsuario.objects.get(id_usuario=id_usuario)
+        return PerfilUsuario.objects.select_related('id_usuario', 'id_ciudad').get(id_usuario=id_usuario)
     except PerfilUsuario.DoesNotExist:
         raise ValidationError("El perfil de usuario no existe.")
 
@@ -120,4 +120,26 @@ def filtrar_usuarios(
         qs = qs.filter(direccion__id_ciudad__id_provincia__id_pais=id_pais)
         
     return qs.distinct()
+
+
+def obtener_usuario_completo(id_usuario: int) -> Usuario:
+    """
+    CU-44: Recupera el usuario objetivo con su perfil y rol asociado.
+    Optimiza la consulta con select_related y lanza ValidationError si no existe.
+    """
+    try:
+        return Usuario.objects.select_related('perfilusuario', 'id_rol').get(id_usuario=id_usuario)
+    except Usuario.DoesNotExist:
+        raise ValidationError(f"El usuario con ID {id_usuario} no existe en el sistema.")
+
+
+def obtener_rol_para_edicion(id_rol: int) -> RolUsuario:
+    """
+    CU-84: Recupera la instancia de RolUsuario para su edición administrativa.
+    Lanza ValidationError si el rol no existe.
+    """
+    try:
+        return RolUsuario.objects.get(id_rol=id_rol)
+    except RolUsuario.DoesNotExist:
+        raise ValidationError(f"El rol con ID {id_rol} no existe en el sistema.")
 

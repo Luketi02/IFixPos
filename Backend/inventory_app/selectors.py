@@ -7,7 +7,7 @@ from catalog_app.models import Producto
 from inventory_app.models import Stock, MovimientoStock
 from users_app.models import Usuario
 
-TIPOS_INGRESO = ['ingreso', 'compra', 'devolucion', 'alta', 'entrada']
+TIPOS_INGRESO = ['ingreso', 'compra', 'devolucion', 'alta', 'entrada', 'ingreso_compra', 'INGRESO_COMPRA']
 TIPOS_EGRESO = ['egreso', 'venta', 'taller', 'baja', 'salida', 'consumo']
 
 

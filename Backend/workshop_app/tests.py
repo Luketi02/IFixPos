@@ -4096,5 +4096,1532 @@ class NuevoDiagnosticoYDetalleTecnicoTests(TestCase):
         )
 
 
+# ==============================================================================
+# CU-19: CALIFICAR SERVICIO TÉCNICO (TESTS)
+# ==============================================================================
+
+class CalificarServicioTecnicoCU19Tests(TestCase):
+    """
+    Pruebas integrales y unitarias para el CU-19: Calificar Servicio Técnico.
+    Verifica:
+    - Flujo feliz: cliente califica su reparación entregada con puntuación y comentario (201 Created).
+    - Flujo feliz: calificación exitosa sin comentario opcional.
+    - Persistencia correcta e inmutable en Calificacion y generación de LogSistema de auditoría.
+    - Seguridad de Autenticación: usuario anónimo recibe 401 Unauthorized.
+    - Control de Acceso por Roles: usuarios sin rol CLIENTE reciben 403 Forbidden.
+    - Seguridad Horizontal (Propiedad): cliente no puede calificar la reparación de otro cliente (403 PermissionDenied).
+    - Precondición Operativa: no se puede calificar una reparación que no esté en estado terminal 'ENTREGADO' (400 ValidationError).
+    - Unicidad: no se puede emitir una segunda calificación sobre una misma reparación (400 ValidationError).
+    - Validación de Entrada: puntuación obligatoria y en rango 1-5 (400 ValidationError si es 0, 6 o no numérica).
+    - Manejo de recursos inexistentes: reparación inexistente retorna 404 Not Found.
+    - Pruebas directas de selectors y services para verificar el desacoplamiento estricto HackSoftware.
+    """
+
+    def setUp(self):
+        from workshop_app.models import Calificacion
+        self.client = APIClient()
+        self.hoy = timezone.now().date()
+
+        # Roles
+        self.rol_cliente = RolUsuario.objects.create(codigo='CLIENTE', nombre_rol='Cliente', descripcion='Cliente del taller')
+        self.rol_tecnico = RolUsuario.objects.create(codigo='TECNICO', nombre_rol='Técnico', descripcion='Técnico del taller')
+        self.rol_admin = RolUsuario.objects.create(codigo='ADMIN', nombre_rol='Administrador', descripcion='Administrador total')
+
+        # Usuarios
+        self.cliente = Usuario.objects.create(
+            email='cliente_cu19@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        self.cliente_ajeno = Usuario.objects.create(
+            email='cliente_ajeno_cu19@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico_cu19@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+
+        # Catálogo
+        self.tipo = TipoDispositivo.objects.create(nombre='Smartphone CU19', estado_activo=True)
+        self.marca = Marca.objects.create(nombre='Motorola CU19', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='Moto G100 CU19',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo,
+            estado_activo=True
+        )
+
+        # Dispositivos
+        self.dispositivo_cliente = Dispositivo.objects.create(
+            numero_serie='SN-CU19-01',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+        self.dispositivo_ajeno = Dispositivo.objects.create(
+            numero_serie='SN-CU19-02',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente_ajeno
+        )
+
+        # Reparaciones
+        self.reparacion_entregada = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ENTREGADO',
+            desc_cliente='Pantalla rota reparada',
+            id_dispositivo=self.dispositivo_cliente,
+            id_usuario=self.cliente
+        )
+        self.reparacion_en_curso = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='EN_REPARACION',
+            desc_cliente='Batería agotada',
+            id_dispositivo=self.dispositivo_cliente,
+            id_usuario=self.cliente
+        )
+        self.reparacion_ajena = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ENTREGADO',
+            desc_cliente='Módulo dañado',
+            id_dispositivo=self.dispositivo_ajeno,
+            id_usuario=self.cliente_ajeno
+        )
+
+    def test_calificar_reparacion_exitoso_con_comentario(self):
+        """Flujo normal: cliente emite valoración de 5 estrellas con comentario."""
+        from workshop_app.models import Calificacion
+        self.client.force_authenticate(user=self.cliente)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+        payload = {
+            "puntuacion": 5,
+            "comentario": "Excelente servicio, el equipo quedó impecable."
+        }
+
+        response = self.client.post(url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["mensaje"], "Gracias por su retroalimentación.")
+        self.assertEqual(response.data["calificacion"]["puntuacion"], 5)
+        self.assertEqual(response.data["calificacion"]["comentario"], "Excelente servicio, el equipo quedó impecable.")
+
+        # Verificar persistencia inmutable en la base de datos
+        calificacion_bd = Calificacion.objects.filter(id_reparacion=self.reparacion_entregada).first()
+        self.assertIsNotNone(calificacion_bd)
+        self.assertEqual(calificacion_bd.puntuacion, 5)
+        self.assertEqual(calificacion_bd.comentario, "Excelente servicio, el equipo quedó impecable.")
+        self.assertEqual(calificacion_bd.fecha, self.hoy)
+
+        # Verificar auditoría en LogSistema
+        log = LogSistema.objects.filter(
+            accion="Calificar Servicio Técnico (CU-19)",
+            id_registro_afectado=str(calificacion_bd.id_calificacion)
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertIn("5/5", log.detalle)
+        self.assertEqual(log.id_usuario, self.cliente)
+
+    def test_calificar_reparacion_exitoso_sin_comentario(self):
+        """Flujo normal: la puntuación es obligatoria pero el comentario es opcional."""
+        from workshop_app.models import Calificacion
+        self.client.force_authenticate(user=self.cliente)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+        payload = {
+            "puntuacion": 4
+        }
+
+        response = self.client.post(url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["mensaje"], "Gracias por su retroalimentación.")
+        self.assertEqual(response.data["calificacion"]["puntuacion"], 4)
+        self.assertEqual(response.data["calificacion"]["comentario"], "Sin comentario")
+
+        calificacion_bd = Calificacion.objects.filter(id_reparacion=self.reparacion_entregada).first()
+        self.assertIsNotNone(calificacion_bd)
+        self.assertEqual(calificacion_bd.puntuacion, 4)
+        self.assertIsNone(calificacion_bd.comentario)
+
+    def test_calificar_reparacion_sin_autenticacion_falla(self):
+        """Paso de precondición: usuario anónimo es rechazado (401 o 403)."""
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+        payload = {"puntuacion": 5}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_calificar_reparacion_rol_no_cliente_falla(self):
+        """Precondición de rol: un técnico no puede emitir calificaciones de cliente."""
+        self.client.force_authenticate(user=self.tecnico)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+        payload = {"puntuacion": 5}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_calificar_reparacion_ajena_falla_seguridad_horizontal(self):
+        """Seguridad Horizontal: un cliente no puede calificar la orden de otro cliente."""
+        self.client.force_authenticate(user=self.cliente)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_ajena.id_reparacion}/calificar/"
+        payload = {"puntuacion": 5}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("no pertenece a su cuenta", str(response.data))
+
+    def test_calificar_reparacion_no_entregada_falla(self):
+        """Precondición de estado: la reparación debe estar estrictamente 'ENTREGADO'."""
+        self.client.force_authenticate(user=self.cliente)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_en_curso.id_reparacion}/calificar/"
+        payload = {"puntuacion": 5}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Solo puede calificar equipos que ya han sido entregados", str(response.data))
+
+    def test_calificar_reparacion_duplicada_falla_unicidad(self):
+        """Unicidad: no se permite calificar más de una vez una misma reparación."""
+        from workshop_app.models import Calificacion
+        # Pre-crear calificación
+        Calificacion.objects.create(
+            puntuacion=5,
+            comentario="Primera calificación",
+            fecha=self.hoy,
+            id_reparacion=self.reparacion_entregada
+        )
+
+        self.client.force_authenticate(user=self.cliente)
+
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+        payload = {"puntuacion": 3, "comentario": "Intento de segunda calificación"}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Esta reparación ya fue calificada previamente", str(response.data))
+
+    def test_calificar_reparacion_puntuacion_invalida_falla(self):
+        """Aduana (Serializer): puntuación fuera del rango 1 a 5 debe ser rechazada."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f"/api/workshop/reparaciones/{self.reparacion_entregada.id_reparacion}/calificar/"
+
+        # Caso menor a 1 (0)
+        res_0 = self.client.post(url, {"puntuacion": 0}, format='json')
+        self.assertEqual(res_0.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Caso mayor a 5 (6)
+        res_6 = self.client.post(url, {"puntuacion": 6}, format='json')
+        self.assertEqual(res_6.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Caso negativo
+        res_neg = self.client.post(url, {"puntuacion": -1}, format='json')
+        self.assertEqual(res_neg.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Caso sin puntuación (vacía)
+        res_vacio = self.client.post(url, {"comentario": "Sin puntos"}, format='json')
+        self.assertEqual(res_vacio.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_calificar_reparacion_inexistente_falla(self):
+        """Recurso no encontrado: ID inexistente retorna 404."""
+        self.client.force_authenticate(user=self.cliente)
+        url = "/api/workshop/reparaciones/999999/calificar/"
+        payload = {"puntuacion": 5}
+
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_selector_y_servicio_directos(self):
+        """Prueba unitaria directa del Selector y Servicio (Arquitectura HackSoftware pura)."""
+        from workshop_app.selectors import obtener_reparacion_para_calificar
+        from workshop_app.services import calificar_reparacion
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+
+        # 1. Selector directo
+        rep = obtener_reparacion_para_calificar(
+            usuario_cliente=self.cliente,
+            id_reparacion=self.reparacion_entregada.id_reparacion
+        )
+        self.assertEqual(rep.id_reparacion, self.reparacion_entregada.id_reparacion)
+
+        # 2. Selector seguridad horizontal
+        with self.assertRaises(PermissionDenied):
+            obtener_reparacion_para_calificar(
+                usuario_cliente=self.cliente_ajeno,
+                id_reparacion=self.reparacion_entregada.id_reparacion
+            )
+
+        # 3. Servicio directo
+        calif = calificar_reparacion(
+            usuario_cliente=self.cliente,
+            id_reparacion=self.reparacion_entregada.id_reparacion,
+            datos_validados={"puntuacion": 5, "comentario": "Servicio directo"}
+        )
+        self.assertEqual(calif.puntuacion, 5)
+        self.assertEqual(calif.comentario, "Servicio directo")
+
+        # 4. Segundo intento debe fallar en el selector por unicidad
+        with self.assertRaises(ValidationError):
+            calificar_reparacion(
+                usuario_cliente=self.cliente,
+                id_reparacion=self.reparacion_entregada.id_reparacion,
+                datos_validados={"puntuacion": 4}
+            )
+
+
+# ==============================================================================
+# CU-51: CONSULTAR CALIFICACIÓN DE SERVICIO (TESTS)
+# ==============================================================================
+
+class ConsultarCalificacionServicioCU51Tests(TestCase):
+    """
+    Pruebas integrales y unitarias para el CU-51: Consultar Calificación de Servicio.
+    Verifica:
+    - Cliente propietario consulta calificación existente (200 OK con datos completos y anidados).
+    - Técnico asignado consulta la calificación de su reparación (200 OK).
+    - Administrador consulta cualquier calificación (200 OK - acceso irrestricto).
+    - Cliente ajeno intenta consultar la calificación de otra cuenta (403 PermissionDenied).
+    - Técnico ajeno intenta consultar la calificación de una orden no asignada (403 PermissionDenied).
+    - Reparación entregada pero pendiente de calificación por parte del cliente (404 Not Found con mensaje informativo).
+    - Formateo de comentario vacío/nulo como "Sin comentario".
+    - Usuario anónimo rechazado (401 o 403).
+    - Reparación inexistente (404 Not Found).
+    - Prueba unitaria del selector obtener_calificacion_reparacion.
+    """
+
+    def setUp(self):
+        from workshop_app.models import Calificacion
+        self.client = APIClient()
+        self.hoy = timezone.now().date()
+
+        # Roles
+        self.rol_cliente = RolUsuario.objects.create(codigo='CLIENTE', nombre_rol='Cliente', descripcion='Cliente')
+        self.rol_tecnico = RolUsuario.objects.create(codigo='TECNICO', nombre_rol='Técnico', descripcion='Técnico')
+        self.rol_admin = RolUsuario.objects.create(codigo='ADMIN', nombre_rol='Administrador', descripcion='Administrador')
+
+        # Usuarios
+        self.cliente = Usuario.objects.create(
+            email='cliente_cu51@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        self.cliente_ajeno = Usuario.objects.create(
+            email='cliente_ajeno_cu51@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        self.tecnico_asignado = Usuario.objects.create(
+            email='tecnico_asignado_cu51@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        self.tecnico_ajeno = Usuario.objects.create(
+            email='tecnico_ajeno_cu51@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        self.admin = Usuario.objects.create(
+            email='admin_cu51@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+
+        # Catálogo
+        self.tipo = TipoDispositivo.objects.create(nombre='Tablet CU51', estado_activo=True)
+        self.marca = Marca.objects.create(nombre='Samsung CU51', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='Galaxy Tab S9 CU51',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo,
+            estado_activo=True
+        )
+
+        # Dispositivos
+        self.dispositivo_cliente = Dispositivo.objects.create(
+            numero_serie='SN-TAB-CU51-01',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+        self.dispositivo_ajeno = Dispositivo.objects.create(
+            numero_serie='SN-TAB-CU51-02',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente_ajeno
+        )
+
+        # Reparaciones
+        self.reparacion_calificada = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ENTREGADO',
+            desc_cliente='Pin de carga dañado',
+            id_dispositivo=self.dispositivo_cliente,
+            id_usuario=self.tecnico_asignado
+        )
+        self.reparacion_sin_calificar = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ENTREGADO',
+            desc_cliente='Cambio de batería',
+            id_dispositivo=self.dispositivo_cliente,
+            id_usuario=self.tecnico_asignado
+        )
+        self.reparacion_calificada_sin_comentario = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ENTREGADO',
+            desc_cliente='Limpieza interna',
+            id_dispositivo=self.dispositivo_cliente,
+            id_usuario=self.tecnico_asignado
+        )
+
+        # Calificaciones
+        self.calificacion_con_texto = Calificacion.objects.create(
+            puntuacion=5,
+            comentario="Excelente servicio, repararon el pin en el día.",
+            fecha=self.hoy,
+            id_reparacion=self.reparacion_calificada
+        )
+        self.calificacion_vacia = Calificacion.objects.create(
+            puntuacion=4,
+            comentario=None,
+            fecha=self.hoy,
+            id_reparacion=self.reparacion_calificada_sin_comentario
+        )
+
+    def test_cliente_propietario_consulta_calificacion_exitosa(self):
+        """Paso 1 y 4: Cliente consulta su propia calificación y recibe datos anidados del equipo."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id_calificacion"], self.calificacion_con_texto.id_calificacion)
+        self.assertEqual(response.data["puntuacion"], 5)
+        self.assertEqual(response.data["comentario"], "Excelente servicio, repararon el pin en el día.")
+        self.assertEqual(response.data["fecha"], str(self.hoy))
+
+        # Verificar datos anidados de reparación y dispositivo
+        reparacion_data = response.data["reparacion"]
+        self.assertIsNotNone(reparacion_data)
+        self.assertEqual(reparacion_data["id_reparacion"], self.reparacion_calificada.id_reparacion)
+        self.assertEqual(reparacion_data["marca"], "Samsung CU51")
+        self.assertEqual(reparacion_data["modelo"], "Galaxy Tab S9 CU51")
+        self.assertEqual(reparacion_data["numero_serie"], "SN-TAB-CU51-01")
+
+    def test_tecnico_asignado_consulta_calificacion_exitosa(self):
+        """Paso 2: El técnico asignado a la orden puede consultar el feedback del cliente."""
+        self.client.force_authenticate(user=self.tecnico_asignado)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["puntuacion"], 5)
+
+    def test_administrador_consulta_calificacion_exitosa(self):
+        """Paso 2: Administrador posee acceso irrestricto a cualquier calificación."""
+        self.client.force_authenticate(user=self.admin)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["puntuacion"], 5)
+
+    def test_cliente_ajeno_recibe_permission_denied(self):
+        """Excepción Paso 2: Cliente intenta ver una calificación de un equipo ajeno."""
+        self.client.force_authenticate(user=self.cliente_ajeno)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("No posee permisos", str(response.data))
+
+    def test_tecnico_ajeno_recibe_permission_denied(self):
+        """Excepción Paso 2: Técnico intenta ver una calificación de una orden ajena."""
+        self.client.force_authenticate(user=self.tecnico_ajeno)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("no asignadas", str(response.data))
+
+    def test_reparacion_pendiente_calificacion_retorna_404(self):
+        """Excepción Paso 3: Reparación finalizada pero pendiente de calificación por el cliente."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f"/api/workshop/reparaciones/{self.reparacion_sin_calificar.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Reparación pendiente de calificación por parte del cliente", str(response.data))
+
+    def test_calificacion_sin_comentario_muestra_sin_comentario(self):
+        """Formato: Si el cliente no dejó texto, el serializador expone 'Sin comentario'."""
+        self.client.force_authenticate(user=self.cliente)
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada_sin_comentario.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["puntuacion"], 4)
+        self.assertEqual(response.data["comentario"], "Sin comentario")
+
+    def test_consulta_anonima_rechazada(self):
+        """Precondición de sesión: Petición anónima es rechazada (401 o 403)."""
+        url = f"/api/workshop/reparaciones/{self.reparacion_calificada.id_reparacion}/calificacion/"
+
+        response = self.client.get(url)
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_consulta_reparacion_inexistente_retorna_404(self):
+        """Recurso no encontrado: ID inexistente responde 404."""
+        self.client.force_authenticate(user=self.admin)
+        url = "/api/workshop/reparaciones/999999/calificacion/"
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_selector_obtener_calificacion_reparacion_directo(self):
+        """Prueba unitaria pura del selector aplicando control de acceso."""
+        from workshop_app.selectors import obtener_calificacion_reparacion
+        from rest_framework.exceptions import PermissionDenied, NotFound
+
+        # 1. Acceso exitoso del cliente propietario
+        calif = obtener_calificacion_reparacion(
+            usuario_ejecutor=self.cliente,
+            id_reparacion=self.reparacion_calificada.id_reparacion
+        )
+        self.assertEqual(calif.id_calificacion, self.calificacion_con_texto.id_calificacion)
+
+        # 2. Bloqueo de cliente ajeno
+        with self.assertRaises(PermissionDenied):
+            obtener_calificacion_reparacion(
+                usuario_ejecutor=self.cliente_ajeno,
+                id_reparacion=self.reparacion_calificada.id_reparacion
+            )
+
+        # 3. Bloqueo de técnico ajeno
+        with self.assertRaises(PermissionDenied):
+            obtener_calificacion_reparacion(
+                usuario_ejecutor=self.tecnico_ajeno,
+                id_reparacion=self.reparacion_calificada.id_reparacion
+            )
+
+        # 4. Pendiente de calificación
+        with self.assertRaises(NotFound):
+            obtener_calificacion_reparacion(
+                usuario_ejecutor=self.cliente,
+                id_reparacion=self.reparacion_sin_calificar.id_reparacion
+            )
+
+
+class ReportesBITestCase(TestCase):
+    """
+    Pruebas unitarias e integración para:
+    - CU-72: Generar Reporte de Conversión de Presupuestos.
+    - CU-73: Generar Reporte de Demanda y Eficiencia por Categoría.
+    """
+
+    def setUp(self):
+        from workshop_app.models import (
+            Reparacion, Diagnostico, DetalleInsumoReparacion,
+            CategoriaReparacion, Dispositivo, BitacoraReparacion
+        )
+        from catalog_app.models import TipoDispositivo, Marca, ModeloDispositivo, Producto, CategoriaProducto
+        from users_app.models import Usuario, RolUsuario
+        from core_app.models import LogSistema
+
+        self.client = APIClient()
+        self.hoy = timezone.now().date()
+        self.f_inicio = self.hoy - timezone.timedelta(days=30)
+        self.f_fin = self.hoy + timezone.timedelta(days=1)
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Admin'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin_bi@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico_bi@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente_bi@test.com',
+            contrasena='hash_pwd',
+            fecha_registro=self.hoy,
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+        # Categorías de reparación
+        self.cat_pantalla = CategoriaReparacion.objects.create(
+            nombre='Módulo y Pantalla',
+            estado_activo=True
+        )
+        self.cat_bateria = CategoriaReparacion.objects.create(
+            nombre='Batería y Carga',
+            estado_activo=True
+        )
+
+        # Hardware catálogo
+        self.tipo_smartphone = TipoDispositivo.objects.create(
+            nombre='Smartphone BI',
+            estado_activo=True
+        )
+        self.tipo_laptop = TipoDispositivo.objects.create(
+            nombre='Notebook BI',
+            estado_activo=True
+        )
+        self.marca = Marca.objects.create(nombre='Samsung BI', estado_activo=True)
+        self.modelo_phone = ModeloDispositivo.objects.create(
+            nombre='Galaxy S21 BI',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo_smartphone,
+            estado_activo=True
+        )
+        self.modelo_laptop = ModeloDispositivo.objects.create(
+            nombre='Galaxy Book BI',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo_laptop,
+            estado_activo=True
+        )
+
+        # Insumos
+        cat_prod = CategoriaProducto.objects.create(nombre='Repuestos BI', estado=True)
+        self.prod_pantalla = Producto.objects.create(
+            nombre='Display OLED S21',
+            precio_venta=Decimal('40000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=True,
+            modulo_automatico=False,
+            id_categoria=cat_prod
+        )
+
+        # Dispositivos
+        self.disp1 = Dispositivo.objects.create(
+            numero_serie='IMEI-BI-01',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo_phone,
+            id_usuario=self.cliente
+        )
+        self.disp2 = Dispositivo.objects.create(
+            numero_serie='IMEI-BI-02',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo_phone,
+            id_usuario=self.cliente
+        )
+        self.disp3 = Dispositivo.objects.create(
+            numero_serie='SN-LAPTOP-01',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo_laptop,
+            id_usuario=self.cliente
+        )
+
+        # URLs
+        self.url_conversion = '/api/workshop/reportes/conversion/'
+        self.url_eficiencia = '/api/workshop/reportes/eficiencia/'
+
+    def test_reporte_conversion_exitoso(self):
+        """
+        CU-72: Generación exitosa de Reporte de Conversión.
+        Verifica cálculos de Nivel Macro (totales, tasas, lucro cesante) y Nivel Micro (categorías).
+        """
+        from workshop_app.models import Reparacion, Diagnostico, DetalleInsumoReparacion, BitacoraReparacion
+        from core_app.models import LogSistema
+
+        # 1. Presupuesto Aceptado (Mano de obra $20.000 + Display $40.000 = $60.000)
+        rep_aceptada = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=10),
+            etapa='EN_REPARACION',
+            id_dispositivo=self.disp1,
+            id_usuario=self.tecnico
+        )
+        rep_aceptada.categorias.add(self.cat_pantalla)
+        Diagnostico.objects.create(
+            id_reparacion=rep_aceptada,
+            descripcion_falla='Pantalla rota',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=8),
+            costo_diagnostico=Decimal('20000.00')
+        )
+        DetalleInsumoReparacion.objects.create(
+            id_reparacion=rep_aceptada,
+            id_producto=self.prod_pantalla,
+            cantidad=1,
+            precio_unitario=Decimal('40000.00')
+        )
+        BitacoraReparacion.objects.create(
+            id_reparacion=rep_aceptada,
+            id_usuario=self.cliente,
+            fecha_hora=timezone.now().time(),
+            estado_alcanzado=5,
+            comentario='Aprobado por el cliente'
+        )
+
+        # 2. Presupuesto Rechazado (Mano de obra $15.000 = $15.000)
+        rep_rechazada = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=5),
+            etapa='CANCELADO',
+            id_dispositivo=self.disp2,
+            id_usuario=self.tecnico
+        )
+        rep_rechazada.categorias.add(self.cat_pantalla)
+        Diagnostico.objects.create(
+            id_reparacion=rep_rechazada,
+            descripcion_falla='Batería hinchada',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=4),
+            costo_diagnostico=Decimal('15000.00')
+        )
+        BitacoraReparacion.objects.create(
+            id_reparacion=rep_rechazada,
+            id_usuario=self.cliente,
+            fecha_hora=timezone.now().time(),
+            estado_alcanzado=8,
+            comentario='Rechazado por presupuesto excesivo'
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_conversion, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+
+        # Macro
+        macro = data['macro']
+        self.assertEqual(macro['total_presupuestos'], 2)
+        self.assertEqual(Decimal(str(macro['total_presupuestado'])), Decimal('35000.00'))
+        self.assertEqual(macro['total_aceptados'], 1)
+        self.assertEqual(Decimal(str(macro['monto_aceptado'])), Decimal('20000.00'))
+        self.assertEqual(Decimal(str(macro['tasa_conversion'])), Decimal('50.00'))
+        self.assertEqual(macro['total_rechazados'], 1)
+        self.assertEqual(Decimal(str(macro['lucro_cesante'])), Decimal('15000.00'))
+        self.assertEqual(Decimal(str(macro['tasa_fuga'])), Decimal('50.00'))
+
+        # Micro
+        micro = data['micro']
+        self.assertTrue(len(micro) >= 1)
+        cat_p = next((c for c in micro if c['id_categoria'] == self.cat_pantalla.id_categoria), None)
+        self.assertIsNotNone(cat_p)
+        self.assertEqual(cat_p['total_presupuestos'], 2)
+        self.assertEqual(cat_p['total_aceptados'], 1)
+        self.assertEqual(cat_p['total_rechazados'], 1)
+        self.assertEqual(Decimal(str(cat_p['tasa_rechazo'])), Decimal('50.00'))
+
+        # Auditoría en LogSistema
+        log = LogSistema.objects.filter(accion="Generar Reporte de Conversión (CU-72)").first()
+        self.assertIsNotNone(log)
+        self.assertIn("Reporte de Conversión", log.detalle)
+
+    def test_reporte_conversion_rango_fechas_invalido_400(self):
+        """Excepción: fecha_inicio posterior a fecha_fin debe arrojar error 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.hoy),
+            'fecha_fin': str(self.hoy - timezone.timedelta(days=5))
+        }
+        response = self.client.get(self.url_conversion, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        error_msg = str(response.data)
+        self.assertIn("no puede ser posterior a la fecha de fin", error_msg)
+
+    def test_reporte_conversion_sin_presupuestos_error_400(self):
+        """Excepción Paso 5: Si no hay presupuestos en el periodo, levanta ValidationError."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': '2019-01-01',
+            'fecha_fin': '2019-01-31'
+        }
+        response = self.client.get(self.url_conversion, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        error_msg = str(response.data)
+        self.assertIn("No se ha emitido ningún presupuesto en el periodo temporal solicitado", error_msg)
+
+    def test_reporte_eficiencia_exitoso(self):
+        """
+        CU-73: Generación exitosa de Reporte de Demanda y Eficiencia.
+        Verifica agrupación por categoría, volumen, facturación y tiempo promedio en días.
+        """
+        from workshop_app.models import Reparacion, Diagnostico
+        from core_app.models import LogSistema
+
+        # Reparación 1 Finalizada: Delta = 4 días, Mano de Obra = $30.000
+        rep1 = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=10),
+            fecha_entrega=self.hoy - timezone.timedelta(days=6),
+            etapa='FINALIZADO',
+            id_dispositivo=self.disp1,
+            id_usuario=self.tecnico
+        )
+        rep1.categorias.add(self.cat_pantalla)
+        Diagnostico.objects.create(
+            id_reparacion=rep1,
+            descripcion_falla='Cambio de módulo',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=10),
+            costo_diagnostico=Decimal('30000.00')
+        )
+
+        # Reparación 2 Entregada: Delta = 2 días, Mano de Obra = $20.000
+        rep2 = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=8),
+            fecha_entrega=self.hoy - timezone.timedelta(days=6),
+            etapa='ENTREGADO',
+            id_dispositivo=self.disp2,
+            id_usuario=self.tecnico
+        )
+        rep2.categorias.add(self.cat_pantalla)
+        Diagnostico.objects.create(
+            id_reparacion=rep2,
+            descripcion_falla='Ajuste de pantalla',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=8),
+            costo_diagnostico=Decimal('20000.00')
+        )
+
+        # Reparación 3 Entregada: Categoría Batería, Delta = 1 día, Mano de obra = $10.000
+        rep3 = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=5),
+            fecha_entrega=self.hoy - timezone.timedelta(days=4),
+            etapa='ENTREGADO',
+            id_dispositivo=self.disp3,
+            id_usuario=self.tecnico
+        )
+        rep3.categorias.add(self.cat_bateria)
+        Diagnostico.objects.create(
+            id_reparacion=rep3,
+            descripcion_falla='Batería nueva',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=5),
+            costo_diagnostico=Decimal('10000.00')
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_eficiencia, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 2)
+
+        # Categoría Pantalla: 2 reparaciones, Facturación $50.000, Tiempo medio = (4 + 2)/2 = 3.0 días
+        cat_pant = next(c for c in data if c['id_categoria'] == self.cat_pantalla.id_categoria)
+        self.assertEqual(cat_pant['volumen_reparaciones'], 2)
+        self.assertEqual(Decimal(str(cat_pant['facturacion_bruta'])), Decimal('50000.00'))
+        self.assertEqual(cat_pant['tiempo_promedio_dias'], 3.0)
+
+        # Categoría Batería: 1 reparación, Facturación $10.000, Tiempo medio = 1.0 día
+        cat_bat = next(c for c in data if c['id_categoria'] == self.cat_bateria.id_categoria)
+        self.assertEqual(cat_bat['volumen_reparaciones'], 1)
+        self.assertEqual(Decimal(str(cat_bat['facturacion_bruta'])), Decimal('10000.00'))
+        self.assertEqual(cat_bat['tiempo_promedio_dias'], 1.0)
+
+        # Auditoría LogSistema
+        log = LogSistema.objects.filter(accion="Generar Reporte de Demanda y Eficiencia (CU-73)").first()
+        self.assertIsNotNone(log)
+        self.assertIn("Demanda y Eficiencia", log.detalle)
+
+    def test_reporte_eficiencia_ignora_reparaciones_en_curso(self):
+        """Comentarios CU-73: El motor debe ignorar estrictamente reparaciones activas o en curso."""
+        from workshop_app.models import Reparacion, Diagnostico
+
+        # Reparación activa (no finalizada)
+        rep_activa = Reparacion.objects.create(
+            fecha_inicio=self.hoy - timezone.timedelta(days=5),
+            etapa='EN_REPARACION',
+            id_dispositivo=self.disp1,
+            id_usuario=self.tecnico
+        )
+        rep_activa.categorias.add(self.cat_pantalla)
+        Diagnostico.objects.create(
+            id_reparacion=rep_activa,
+            descripcion_falla='En proceso',
+            fecha_diagnostico=self.hoy - timezone.timedelta(days=5),
+            costo_diagnostico=Decimal('25000.00')
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_eficiencia, data=params)
+
+        # Como solo existe una reparación en curso y ninguna terminal, debe levantar la excepción del Paso 5
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("No existen reparaciones finalizadas en el periodo temporal o filtros indicados", str(response.data))
+
+    def test_reporte_eficiencia_sin_reparaciones_finalizadas_error_400(self):
+        """Excepción Paso 5: Sin operaciones culminadas en el rango, levanta ValidationError."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': '2020-01-01',
+            'fecha_fin': '2020-01-31'
+        }
+        response = self.client.get(self.url_eficiencia, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("No existen reparaciones finalizadas en el periodo temporal o filtros indicados", str(response.data))
+
+    def test_reportes_no_admin_denegado_403(self):
+        """Precondición: Solo Administrador puede consultar los reportes analíticos."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+
+        # Técnico
+        self.client.force_authenticate(user=self.tecnico)
+        r_conv_tec = self.client.get(self.url_conversion, data=params)
+        self.assertEqual(r_conv_tec.status_code, status.HTTP_403_FORBIDDEN)
+        r_efic_tec = self.client.get(self.url_eficiencia, data=params)
+        self.assertEqual(r_efic_tec.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Cliente
+        self.client.force_authenticate(user=self.cliente)
+        r_conv_cli = self.client.get(self.url_conversion, data=params)
+        self.assertEqual(r_conv_cli.status_code, status.HTTP_403_FORBIDDEN)
+        r_efic_cli = self.client.get(self.url_eficiencia, data=params)
+        self.assertEqual(r_efic_cli.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_reportes_no_autenticado_401(self):
+        """Peticiones anónimas deben ser rechazadas con 401."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        r_conv = self.client.get(self.url_conversion, data=params)
+        self.assertIn(r_conv.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+        r_efic = self.client.get(self.url_eficiencia, data=params)
+        self.assertIn(r_efic.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class ReporteProductividadTestCase(TestCase):
+    """
+    Suite de pruebas exhaustivas para CU-74: Generar Reporte de Productividad y Carga de Trabajo Técnica.
+    Verifica:
+    - Análisis bifásico: Carga en tiempo real inmune a fechas + Análisis histórico en periodo.
+    - Excepción de técnico sin reparaciones finalizadas en el periodo (valores a cero).
+    - Conteo de interacciones en Bitácora de Reparación.
+    - Filtro segmentado opcional por id_tecnico.
+    - Validación cronológica de fechas.
+    - Trazabilidad y auditoría en LogSistema.
+    - Seguridad de roles y autenticación (ADMIN strictly).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url_productividad = '/api/workshop/reportes/productividad/'
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(codigo='ADMIN', defaults={'nombre_rol': 'Administrador'})
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(codigo='TECNICO', defaults={'nombre_rol': 'Técnico'})
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(codigo='CLIENTE', defaults={'nombre_rol': 'Cliente'})
+
+        self.hoy = timezone.now().date()
+        self.f_inicio = self.hoy - timezone.timedelta(days=30)
+        self.f_fin = self.hoy
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin.cu74@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_admin
+        )
+        PerfilUsuario.objects.create(id_usuario=self.admin, nombre='Admin', apellido='Gerencial')
+
+        self.tecnico_1 = Usuario.objects.create(
+            email='tec1.cu74@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_1, nombre='Carlos', apellido='Gómez')
+
+        self.tecnico_2 = Usuario.objects.create(
+            email='tec2.cu74@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_2, nombre='Laura', apellido='Méndez')
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.cu74@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_cliente
+        )
+        PerfilUsuario.objects.create(id_usuario=self.cliente, nombre='Pedro', apellido='Cliente')
+
+        # Dispositivos y Catálogo
+        self.tipo_disp = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        self.marca = Marca.objects.create(nombre='Apple', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='iPhone 13',
+            id_tipo_dispositivo=self.tipo_disp,
+            id_marca=self.marca,
+            estado_activo=True
+        )
+        self.dispositivo = Dispositivo.objects.create(
+            numero_serie='123456789012345',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+
+
+    def test_reporte_productividad_analisis_bifasico_exitoso(self):
+        """Verifica el cálculo de carga en tiempo real, análisis histórico y disciplina operativa."""
+        from workshop_app.models import Reparacion, Diagnostico, BitacoraReparacion
+
+        # Técnico 1: 2 reparaciones activas (Carga en tiempo real)
+        Reparacion.objects.create(
+            fecha_inicio=self.f_inicio - timezone.timedelta(days=10),
+            etapa='EN_REPARACION',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=5),
+            etapa='ESPERANDO_DIAGNOSTICO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+
+        # Técnico 1: 1 reparación finalizada en el periodo con 2 días de duración y $25.000 de MO
+        rep_fin = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=2),
+            fecha_entrega=self.f_inicio + timezone.timedelta(days=4),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        Diagnostico.objects.create(
+            descripcion_falla='Cambio de módulo',
+            fecha_diagnostico=self.f_inicio + timezone.timedelta(days=2),
+            costo_diagnostico=Decimal('25000.00'),
+            id_reparacion=rep_fin
+        )
+
+        # Técnico 1: 2 bitácoras registradas en reparaciones del periodo
+        BitacoraReparacion.objects.create(
+            fecha_hora=timezone.now().time(),
+            estado_alcanzado=3,
+            comentario='Desarme y diagnóstico preliminar',
+            id_reparacion=rep_fin,
+            id_usuario=self.tecnico_1
+        )
+        BitacoraReparacion.objects.create(
+            fecha_hora=timezone.now().time(),
+            estado_alcanzado=6,
+            comentario='Reparación completada y verificada',
+            id_reparacion=rep_fin,
+            id_usuario=self.tecnico_1
+        )
+
+        # Técnico 2: 1 reparación activa, 0 reparaciones finalizadas en el periodo (Excepción Paso 6)
+        Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=1),
+            etapa='ESPERANDO_REPUESTO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_2
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_productividad, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        self.assertEqual(len(data), 2)
+
+        # Técnico 1
+        t1 = next((t for t in data if t['id_tecnico'] == self.tecnico_1.id_usuario), None)
+        self.assertIsNotNone(t1)
+        self.assertEqual(t1['nombre_completo'], 'Carlos Gómez')
+        self.assertEqual(t1['carga_tiempo_real'], 2)
+        self.assertEqual(t1['volumen_finalizadas'], 1)
+        self.assertEqual(Decimal(str(t1['facturacion_mano_obra'])), Decimal('25000.00'))
+        self.assertEqual(t1['velocidad_media_dias'], 2.0)
+        self.assertEqual(t1['velocidad_media_horas'], 48.0)
+        self.assertEqual(t1['registros_bitacora'], 2)
+
+        # Técnico 2 (Excepción Paso 6: Sin finalizadas en el periodo)
+        t2 = next((t for t in data if t['id_tecnico'] == self.tecnico_2.id_usuario), None)
+        self.assertIsNotNone(t2)
+        self.assertEqual(t2['nombre_completo'], 'Laura Méndez')
+        self.assertEqual(t2['carga_tiempo_real'], 1)
+        self.assertEqual(t2['volumen_finalizadas'], 0)
+        self.assertEqual(Decimal(str(t2['facturacion_mano_obra'])), Decimal('0.00'))
+        self.assertEqual(t2['velocidad_media_dias'], 0.0)
+        self.assertEqual(t2['velocidad_media_horas'], 0.0)
+        self.assertEqual(t2['registros_bitacora'], 0)
+
+        # Auditoría en LogSistema
+        log = LogSistema.objects.filter(accion="Generar Reporte de Productividad (CU-74)").first()
+        self.assertIsNotNone(log)
+        self.assertIn("Reporte de Productividad", log.detalle)
+
+    def test_filtro_segmentado_por_id_tecnico(self):
+        """Verifica que al filtrar por id_tecnico solo retorne dicho técnico."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_tecnico': self.tecnico_1.id_usuario
+        }
+        response = self.client.get(self.url_productividad, data=params)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['id_tecnico'], self.tecnico_1.id_usuario)
+
+    def test_filtro_tecnico_inexistente_retorna_400(self):
+        """Si se especifica un id_tecnico que no existe, debe arrojar 400 Bad Request."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_tecnico': 999999
+        }
+        response = self.client.get(self.url_productividad, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no existe", str(response.data))
+
+    def test_rango_fechas_invalido_retorna_400(self):
+        """Si fecha_inicio es posterior a fecha_fin, debe arrojar error 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.hoy),
+            'fecha_fin': str(self.hoy - timezone.timedelta(days=2))
+        }
+        response = self.client.get(self.url_productividad, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no puede ser posterior", str(response.data))
+
+    def test_seguridad_no_admin_denegado_403(self):
+        """Solo administradores pueden consultar el reporte de productividad."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        # Técnico
+        self.client.force_authenticate(user=self.tecnico_1)
+        res_tec = self.client.get(self.url_productividad, data=params)
+        self.assertEqual(res_tec.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Cliente
+        self.client.force_authenticate(user=self.cliente)
+        res_cli = self.client.get(self.url_productividad, data=params)
+        self.assertEqual(res_cli.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_no_autenticado_denegado_401(self):
+        """Peticiones sin autenticar deben recibir 401."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_productividad, data=params)
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class ReporteSatisfaccionTestCase(TestCase):
+    """
+    Suite de pruebas exhaustivas para CU-76: Generar Reporte de Satisfacción y Calidad.
+    Verifica:
+    - Agregación global del CSAT y porcentaje de calificaciones críticas (<= 3 estrellas).
+    - Agrupamiento de promedios de estrellas por Técnico y por Categoría.
+    - Regla de afectación simultánea: calificaciones en órdenes con múltiples categorías impactan en todas ellas.
+    - Tira de feedback cualitativo con datos de cliente, técnico y rubros intervenidos.
+    - Filtros por técnico, categoría y rangos de estrellas.
+    - Excepciones de rango de fechas incongruente y sin datos en el período.
+    - Trazabilidad y auditoría inmutable en LogSistema.
+    - Seguridad de roles y permisos (ADMIN strictly).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url_satisfaccion = '/api/workshop/reportes/satisfaccion/'
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(codigo='ADMIN', defaults={'nombre_rol': 'Administrador'})
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(codigo='TECNICO', defaults={'nombre_rol': 'Técnico'})
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(codigo='CLIENTE', defaults={'nombre_rol': 'Cliente'})
+
+        self.hoy = timezone.now().date()
+        self.f_inicio = self.hoy - timezone.timedelta(days=30)
+        self.f_fin = self.hoy
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin.cu76@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_admin
+        )
+        PerfilUsuario.objects.create(id_usuario=self.admin, nombre='Admin', apellido='Calidad')
+
+        self.tecnico_1 = Usuario.objects.create(
+            email='tec1.cu76@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_1, nombre='Martín', apellido='Ríos')
+
+        self.tecnico_2 = Usuario.objects.create(
+            email='tec2.cu76@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_2, nombre='Lucía', apellido='Navarro')
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.cu76@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_cliente
+        )
+        PerfilUsuario.objects.create(id_usuario=self.cliente, nombre='Gabriel', apellido='Bustos')
+
+        # Catálogo y Dispositivos
+        self.tipo_disp = TipoDispositivo.objects.create(nombre='Smartphone', estado_activo=True)
+        self.marca = Marca.objects.create(nombre='Apple', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='iPhone 14',
+            id_tipo_dispositivo=self.tipo_disp,
+            id_marca=self.marca,
+            estado_activo=True
+        )
+        self.dispositivo = Dispositivo.objects.create(
+            numero_serie='IMEI-CU76-999',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+
+        # Categorías de Reparación
+        self.cat_pantalla = CategoriaReparacion.objects.create(nombre='Módulo y Pantalla', estado_activo=True)
+        self.cat_bateria = CategoriaReparacion.objects.create(nombre='Batería y Carga', estado_activo=True)
+
+    def test_reporte_satisfaccion_consolidado_exitoso(self):
+        """Verifica el cálculo del CSAT global, agrupamientos por técnico y por categoría, y comentarios."""
+        from workshop_app.models import Reparacion, Calificacion
+
+        # Reparación 1: Técnico 1, Cat Pantalla
+        rep1 = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=2),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        rep1.categorias.add(self.cat_pantalla)
+        Calificacion.objects.create(
+            puntuacion=5,
+            comentario='Excelente atención y rapidez',
+            fecha=self.f_inicio + timezone.timedelta(days=3),
+            id_reparacion=rep1
+        )
+
+        # Reparación 2: Técnico 1, Múltiples Categorías (Pantalla y Batería)
+        rep2 = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=5),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        rep2.categorias.add(self.cat_pantalla, self.cat_bateria)
+        Calificacion.objects.create(
+            puntuacion=4,
+            comentario='Muy buen trabajo en el cambio de pantalla y batería',
+            fecha=self.f_inicio + timezone.timedelta(days=7),
+            id_reparacion=rep2
+        )
+
+        # Reparación 3: Técnico 2, Cat Batería (Calificación crítica: 2 estrellas)
+        rep3 = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=10),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_2
+        )
+        rep3.categorias.add(self.cat_bateria)
+        Calificacion.objects.create(
+            puntuacion=2,
+            comentario='Demoró demasiado la reparación',
+            fecha=self.f_inicio + timezone.timedelta(days=12),
+            id_reparacion=rep3
+        )
+
+        # Calificación 4: Fuera de rango temporal (hace 45 días)
+        rep_antigua = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio - timezone.timedelta(days=45),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        Calificacion.objects.create(
+            puntuacion=5,
+            comentario='Antigua',
+            fecha=self.f_inicio - timezone.timedelta(days=40),
+            id_reparacion=rep_antigua
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+
+        # 1. Indicadores Globales
+        self.assertEqual(data['total_resenas'], 3)
+        self.assertEqual(data['csat_global'], 3.67)  # (5 + 4 + 2) / 3 = 3.666... -> 3.67
+        self.assertEqual(data['resenas_criticas_total'], 1)  # La de 2 estrellas
+        self.assertEqual(data['porcentaje_criticas'], 33.33)  # 1/3 * 100 = 33.33
+
+        # 2. Promedio por Técnico
+        tecnicos = data['promedio_por_tecnico']
+        self.assertEqual(len(tecnicos), 2)
+        t1 = next((t for t in tecnicos if t['id_tecnico'] == self.tecnico_1.id_usuario), None)
+        self.assertIsNotNone(t1)
+        self.assertEqual(t1['total_resenas'], 2)
+        self.assertEqual(t1['promedio_estrellas'], 4.5)  # (5 + 4) / 2 = 4.5
+
+        t2 = next((t for t in tecnicos if t['id_tecnico'] == self.tecnico_2.id_usuario), None)
+        self.assertIsNotNone(t2)
+        self.assertEqual(t2['total_resenas'], 1)
+        self.assertEqual(t2['promedio_estrellas'], 2.0)
+
+        # 3. Promedio por Categoría (Regla de afectación simultánea)
+        categorias = data['promedio_por_categoria']
+        self.assertEqual(len(categorias), 2)
+        cat_p = next((c for c in categorias if c['id_categoria'] == self.cat_pantalla.id_categoria), None)
+        self.assertIsNotNone(cat_p)
+        self.assertEqual(cat_p['total_resenas'], 2)  # rep1 (5) y rep2 (4)
+        self.assertEqual(cat_p['promedio_estrellas'], 4.5)
+
+        cat_b = next((c for c in categorias if c['id_categoria'] == self.cat_bateria.id_categoria), None)
+        self.assertIsNotNone(cat_b)
+        self.assertEqual(cat_b['total_resenas'], 2)  # rep2 (4) y rep3 (2)
+        self.assertEqual(cat_b['promedio_estrellas'], 3.0)  # (4 + 2) / 2 = 3.0
+
+        # 4. Tira de Comentarios
+        comentarios = data['comentarios']
+        self.assertEqual(len(comentarios), 3)
+        self.assertEqual(comentarios[0]['cliente_nombre'], 'Gabriel Bustos')
+
+        # 5. Auditoría en LogSistema
+        log = LogSistema.objects.filter(accion="Generar Reporte de Satisfacción y Calidad (CU-76)").first()
+        self.assertIsNotNone(log)
+        self.assertIn("Reporte de Satisfacción y Calidad", log.detalle)
+
+    def test_filtro_rango_estrellas_aislar_criticas(self):
+        """Verifica que el filtro de rango de estrellas aísle únicamente las calificaciones críticas (<= 3 estrellas)."""
+        from workshop_app.models import Reparacion, Calificacion
+
+        rep = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=2),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        Calificacion.objects.create(
+            puntuacion=5,
+            comentario='Excelente',
+            fecha=self.f_inicio + timezone.timedelta(days=3),
+            id_reparacion=rep
+        )
+        Calificacion.objects.create(
+            puntuacion=2,
+            comentario='Malo',
+            fecha=self.f_inicio + timezone.timedelta(days=4),
+            id_reparacion=rep
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'rango_estrellas_max': 3
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        self.assertEqual(data['total_resenas'], 1)
+        self.assertEqual(data['csat_global'], 2.0)
+        self.assertEqual(data['comentarios'][0]['puntuacion'], 2)
+
+    def test_filtro_por_tecnico_y_por_categoria(self):
+        """Verifica que los filtros opcionales de técnico y categoría aíslen correctamente las calificaciones."""
+        from workshop_app.models import Reparacion, Calificacion
+
+        rep1 = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=2),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_1
+        )
+        rep1.categorias.add(self.cat_pantalla)
+        Calificacion.objects.create(
+            puntuacion=5,
+            comentario='T1 Pantalla',
+            fecha=self.f_inicio + timezone.timedelta(days=3),
+            id_reparacion=rep1
+        )
+
+        rep2 = Reparacion.objects.create(
+            fecha_inicio=self.f_inicio + timezone.timedelta(days=5),
+            etapa='FINALIZADO',
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico_2
+        )
+        rep2.categorias.add(self.cat_bateria)
+        Calificacion.objects.create(
+            puntuacion=3,
+            comentario='T2 Batería',
+            fecha=self.f_inicio + timezone.timedelta(days=6),
+            id_reparacion=rep2
+        )
+
+        self.client.force_authenticate(user=self.admin)
+
+        # Filtro por Técnico 1
+        res_t1 = self.client.get(self.url_satisfaccion, data={
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_tecnico': self.tecnico_1.id_usuario
+        })
+        self.assertEqual(res_t1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_t1.data['total_resenas'], 1)
+        self.assertEqual(res_t1.data['promedio_por_tecnico'][0]['id_tecnico'], self.tecnico_1.id_usuario)
+
+        # Filtro por Categoría Batería
+        res_cat = self.client.get(self.url_satisfaccion, data={
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'id_categoria': self.cat_bateria.id_categoria
+        })
+        self.assertEqual(res_cat.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_cat.data['total_resenas'], 1)
+        self.assertEqual(res_cat.data['promedio_por_categoria'][0]['id_categoria'], self.cat_bateria.id_categoria)
+
+    def test_sin_calificaciones_en_periodo_retorna_400(self):
+        """Excepción Paso 5: Si bajo los parámetros no existen calificaciones, levanta 400 Bad Request."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': '2021-01-01',
+            'fecha_fin': '2021-01-31'
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no existen calificaciones válidas para analizar", str(response.data))
+
+    def test_rango_fechas_invalido_retorna_400(self):
+        """Excepción Paso 4: Si fecha_inicio supera fecha_fin, arroja error 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.hoy),
+            'fecha_fin': str(self.hoy - timezone.timedelta(days=2))
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no puede ser superior", str(response.data))
+
+    def test_rango_estrellas_invalido_retorna_400(self):
+        """Si rango_estrellas_min > rango_estrellas_max, arroja error 400."""
+        self.client.force_authenticate(user=self.admin)
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin),
+            'rango_estrellas_min': 5,
+            'rango_estrellas_max': 2
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("rango de estrellas es inválido", str(response.data))
+
+    def test_seguridad_no_admin_denegado_403(self):
+        """Solo administradores pueden consultar el reporte de satisfacción."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        self.client.force_authenticate(user=self.tecnico_1)
+        res_tec = self.client.get(self.url_satisfaccion, data=params)
+        self.assertEqual(res_tec.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.cliente)
+        res_cli = self.client.get(self.url_satisfaccion, data=params)
+        self.assertEqual(res_cli.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_no_autenticado_denegado_401(self):
+        """Peticiones sin autenticar deben recibir 401."""
+        params = {
+            'fecha_inicio': str(self.f_inicio),
+            'fecha_fin': str(self.f_fin)
+        }
+        response = self.client.get(self.url_satisfaccion, data=params)
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+
+
+
+
+
 
 

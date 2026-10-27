@@ -198,6 +198,7 @@ def autenticar_con_google(google_token: str) -> Dict[str, Any]:
     except ValueError as e:
         raise ValueError("Token de Google inválido o expirado.") from e
 
+@transaction.atomic
 def completar_perfil_onboarding(
     *, 
     id_usuario: int, 
@@ -208,58 +209,57 @@ def completar_perfil_onboarding(
     telefono_alt: Optional[str] = None
 ) -> Dict[str, Any]:
     """Completa el perfil del usuario luego de un inicio de sesión con Google (Onboarding)."""
-    with transaction.atomic():
-        if PerfilUsuario.objects.filter(dni=dni).exclude(id_usuario=id_usuario).exists():
-            raise ValidationError("El DNI ingresado ya pertenece a otra cuenta.")
-            
-        usuario = Usuario.objects.select_related('id_rol').get(id_usuario=id_usuario)
+    if PerfilUsuario.objects.filter(dni=dni).exclude(id_usuario=id_usuario).exists():
+        raise ValidationError("El DNI ingresado ya pertenece a otra cuenta.")
         
-        perfil, created = PerfilUsuario.objects.get_or_create(
-            id_usuario=usuario,
-            defaults={
-                'dni': dni, 
-                'telefono': telefono, 
-                'nombre': nombre or '', 
-                'apellido': apellido or '',
-                'telefono_alt': telefono_alt or ''
-            }
-        )
-        if not created:
-            perfil.dni = dni
-            perfil.telefono = telefono
-            if nombre is not None:
-                perfil.nombre = nombre
-            if apellido is not None:
-                perfil.apellido = apellido
-            if telefono_alt is not None:
-                perfil.telefono_alt = telefono_alt
-            perfil.save()
-            
-        registrar_log_condicional(
-            clave_switch="log_seguridad_accesos",
-            accion="Completado de perfil por Onboarding de Google",
-            tipo="INFO",
-            modulo_origen="Usuarios",
-            tabla_afectada="perfil_usuario",
-            id_registro_afectado=usuario.id_usuario,
-            id_usuario=usuario.id_usuario
-        )
-
-        return {
-            "mensaje": "Perfil completado exitosamente.",
-            "usuario": {
-                "id_usuario": usuario.id_usuario,
-                "email": usuario.email,
-                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
-                "nombre": perfil.nombre or "",
-                "apellido": perfil.apellido or "",
-                "dni": perfil.dni,
-                "telefono": perfil.telefono,
-                "telefono_alt": perfil.telefono_alt or "",
-                "foto_perfil": perfil.foto_perfil or "",
-                "perfil_completo": True
-            }
+    usuario = Usuario.objects.select_related('id_rol').get(id_usuario=id_usuario)
+    
+    perfil, created = PerfilUsuario.objects.get_or_create(
+        id_usuario=usuario,
+        defaults={
+            'dni': dni, 
+            'telefono': telefono, 
+            'nombre': nombre or '', 
+            'apellido': apellido or '',
+            'telefono_alt': telefono_alt or ''
         }
+    )
+    if not created:
+        perfil.dni = dni
+        perfil.telefono = telefono
+        if nombre is not None:
+            perfil.nombre = nombre
+        if apellido is not None:
+            perfil.apellido = apellido
+        if telefono_alt is not None:
+            perfil.telefono_alt = telefono_alt
+        perfil.save()
+        
+    registrar_log_condicional(
+        clave_switch="log_seguridad_accesos",
+        accion="Completado de perfil por Onboarding de Google",
+        tipo="INFO",
+        modulo_origen="Usuarios",
+        tabla_afectada="perfil_usuario",
+        id_registro_afectado=usuario.id_usuario,
+        id_usuario=usuario.id_usuario
+    )
+
+    return {
+        "mensaje": "Perfil completado exitosamente.",
+        "usuario": {
+            "id_usuario": usuario.id_usuario,
+            "email": usuario.email,
+            "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+            "nombre": perfil.nombre or "",
+            "apellido": perfil.apellido or "",
+            "dni": perfil.dni,
+            "telefono": perfil.telefono,
+            "telefono_alt": perfil.telefono_alt or "",
+            "foto_perfil": perfil.foto_perfil or "",
+            "perfil_completo": True
+        }
+    }
 
 def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[str] = None) -> TokenSeguridad:
     """
@@ -386,6 +386,7 @@ def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[s
     
     return token_obj
 
+@transaction.atomic
 def registrar_cuenta_publica(
     *, 
     nombre: str, 
@@ -400,76 +401,75 @@ def registrar_cuenta_publica(
     if not captcha_token:
         raise ValueError("El captcha_token es inválido o nulo.")
         
-    with transaction.atomic():
-        usuario_existente = Usuario.objects.filter(email=email).first()
-        if usuario_existente:
-            if usuario_existente.is_active:
-                raise ValidationError("El correo electrónico ya se encuentra registrado")
-            
-            # Cuenta previa aún no verificada (is_active=False): Actualizar datos para permitir corrección
-            usuario = usuario_existente
-            usuario.contrasena = make_password(contrasena)
-            usuario.fecha_registro = datetime.now(timezone.utc).date()
-            usuario.save(update_fields=['contrasena', 'fecha_registro'])
-            
-            PerfilUsuario.objects.update_or_create(
-                id_usuario=usuario,
-                defaults={
-                    'nombre': nombre,
-                    'apellido': apellido,
-                    'dni': dni,
-                    'telefono': telefono,
-                    'telefono_alt': telefono_alt
-                }
-            )
-            
-            # Generar y enviar nuevo código numérico de 6 dígitos (15 min)
-            generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
-            
-            registrar_log_condicional(
-                clave_switch="log_seguridad_accesos",
-                accion="Actualización de datos y reenvío de OTP para cuenta no verificada",
-                tipo="INFO",
-                modulo_origen="Usuarios",
-                tabla_afectada="usuario",
-                id_registro_afectado=usuario.id_usuario,
-                id_usuario=usuario.id_usuario
-            )
-        else:
-            rol_cliente_id = get_rol_cliente()
-            
-            # El usuario se crea inactivo (is_active=False) hasta validar su correo
-            usuario = Usuario.objects.create(
-                email=email,
-                contrasena=make_password(contrasena),
-                fecha_registro=datetime.now(timezone.utc).date(),
-                id_rol_id=rol_cliente_id,
-                is_active=False
-            )
-            
-            PerfilUsuario.objects.create(
-                id_usuario=usuario,
-                nombre=nombre,
-                apellido=apellido,
-                dni=dni,
-                telefono=telefono,
-                telefono_alt=telefono_alt
-            )
-            
-            # Generar y enviar código numérico de 6 dígitos (15 min)
-            generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
-            
-            registrar_log_condicional(
-                clave_switch="log_seguridad_accesos",
-                accion="Registro de cuenta pública y envío de código OTP",
-                tipo="INFO",
-                modulo_origen="Usuarios",
-                tabla_afectada="usuario",
-                id_registro_afectado=usuario.id_usuario,
-                id_usuario=usuario.id_usuario
-            )
-            
-        return usuario
+    usuario_existente = Usuario.objects.filter(email=email).first()
+    if usuario_existente:
+        if usuario_existente.is_active:
+            raise ValidationError("El correo electrónico ya se encuentra registrado")
+        
+        # Cuenta previa aún no verificada (is_active=False): Actualizar datos para permitir corrección
+        usuario = usuario_existente
+        usuario.contrasena = make_password(contrasena)
+        usuario.fecha_registro = datetime.now(timezone.utc).date()
+        usuario.save(update_fields=['contrasena', 'fecha_registro'])
+        
+        PerfilUsuario.objects.update_or_create(
+            id_usuario=usuario,
+            defaults={
+                'nombre': nombre,
+                'apellido': apellido,
+                'dni': dni,
+                'telefono': telefono,
+                'telefono_alt': telefono_alt
+            }
+        )
+        
+        # Generar y enviar nuevo código numérico de 6 dígitos (15 min)
+        generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
+        
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
+            accion="Actualización de datos y reenvío de OTP para cuenta no verificada",
+            tipo="INFO",
+            modulo_origen="Usuarios",
+            tabla_afectada="usuario",
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
+        )
+    else:
+        rol_cliente_id = get_rol_cliente()
+        
+        # El usuario se crea inactivo (is_active=False) hasta validar su correo
+        usuario = Usuario.objects.create(
+            email=email,
+            contrasena=make_password(contrasena),
+            fecha_registro=datetime.now(timezone.utc).date(),
+            id_rol_id=rol_cliente_id,
+            is_active=False
+        )
+        
+        PerfilUsuario.objects.create(
+            id_usuario=usuario,
+            nombre=nombre,
+            apellido=apellido,
+            dni=dni,
+            telefono=telefono,
+            telefono_alt=telefono_alt
+        )
+        
+        # Generar y enviar código numérico de 6 dígitos (15 min)
+        generar_y_enviar_codigo_verificacion(usuario=usuario, nombre=nombre)
+        
+        registrar_log_condicional(
+            clave_switch="log_seguridad_accesos",
+            accion="Registro de cuenta pública y envío de código OTP",
+            tipo="INFO",
+            modulo_origen="Usuarios",
+            tabla_afectada="usuario",
+            id_registro_afectado=usuario.id_usuario,
+            id_usuario=usuario.id_usuario
+        )
+        
+    return usuario
 
 def registrar_cuenta_interna(
     *, 
@@ -737,6 +737,7 @@ def solicitar_recuperacion_contrasena(*, email: str, captcha_token: str) -> None
             id_usuario=usuario.id_usuario
         )
 
+@transaction.atomic
 def editar_perfil_usuario(
     *, 
     id_usuario: int, 
@@ -749,111 +750,110 @@ def editar_perfil_usuario(
     foto_perfil: Optional[str] = None
 ) -> Dict[str, Any]:
     """Actualiza el email (Usuario) y demás datos (PerfilUsuario) de manera atómica."""
-    with transaction.atomic():
-        if email_existe_excluyendo_usuario(email, id_usuario):
-            raise ValidationError("El correo electrónico ingresado ya está siendo utilizado por otra cuenta.")
-            
-        usuario = Usuario.objects.get(id_usuario=id_usuario)
-        usuario.email = email
-        usuario.save()
+    if email_existe_excluyendo_usuario(email, id_usuario):
+        raise ValidationError("El correo electrónico ingresado ya está siendo utilizado por otra cuenta.")
         
-        perfil = obtener_perfil_usuario(id_usuario)
-        perfil.nombre = nombre
-        perfil.apellido = apellido
-        perfil.telefono = telefono
-        perfil.dni = dni
-        perfil.telefono_alt = telefono_alt
-        perfil.foto_perfil = foto_perfil
-        perfil.save()
-        
-        registrar_log_condicional(
-            clave_switch="log_seguridad_accesos",
-            accion="Edición de perfil de usuario",
-            tipo="INFO",
-            modulo_origen="Usuarios",
-            tabla_afectada="perfil_usuario",
-            id_registro_afectado=id_usuario,
-            id_usuario=id_usuario
-        )
-        
-        return {
-            "id_usuario": usuario.id_usuario,
-            "email": usuario.email,
-            "nombre": perfil.nombre,
-            "apellido": perfil.apellido,
-            "telefono": perfil.telefono,
-            "dni": perfil.dni,
-            "telefono_alt": perfil.telefono_alt,
-            "foto_perfil": perfil.foto_perfil
-        }
+    usuario = Usuario.objects.get(id_usuario=id_usuario)
+    usuario.email = email
+    usuario.save()
+    
+    perfil = obtener_perfil_usuario(id_usuario)
+    perfil.nombre = nombre
+    perfil.apellido = apellido
+    perfil.telefono = telefono
+    perfil.dni = dni
+    perfil.telefono_alt = telefono_alt
+    perfil.foto_perfil = foto_perfil
+    perfil.save()
+    
+    registrar_log_condicional(
+        clave_switch="log_seguridad_accesos",
+        accion="Edición de perfil de usuario",
+        tipo="INFO",
+        modulo_origen="Usuarios",
+        tabla_afectada="perfil_usuario",
+        id_registro_afectado=id_usuario,
+        id_usuario=id_usuario
+    )
+    
+    return {
+        "id_usuario": usuario.id_usuario,
+        "email": usuario.email,
+        "nombre": perfil.nombre,
+        "apellido": perfil.apellido,
+        "telefono": perfil.telefono,
+        "dni": perfil.dni,
+        "telefono_alt": perfil.telefono_alt,
+        "foto_perfil": perfil.foto_perfil
+    }
 
+@transaction.atomic
 def verificar_y_activar_usuario(email: str, codigo: str) -> Dict[str, Any]:
     """
     Valida el código de 6 dígitos OTP de verificación. Si es válido y no expiró,
     activa la cuenta del usuario (is_active = True), invalida el código y retorna los tokens JWT.
     """
-    with transaction.atomic():
-        try:
-            usuario = obtener_usuario_por_email(email)
-        except ValidationError:
-            raise ValidationError("No existe ningún usuario registrado con el correo electrónico proporcionado.")
-            
-        if usuario.is_active:
-            raise ValidationError("La cuenta ya se encuentra activa y verificada.")
-            
-        token_obj = TokenSeguridad.objects.filter(
-            id_usuario=usuario,
-            codigo=codigo,
-            tipo='ACTIVACION',
-            utilizado=False
-        ).order_by('-creado_en').first()
+    try:
+        usuario = obtener_usuario_por_email(email)
+    except ValidationError:
+        raise ValidationError("No existe ningún usuario registrado con el correo electrónico proporcionado.")
         
-        if not token_obj:
-            raise ValidationError("El código de verificación es inválido o incorrecto.")
-            
-        if token_obj.fecha_expiracion < django_timezone.now():
-            raise ValidationError("El código de verificación ha expirado. Por favor, solicita uno nuevo.")
-            
-        # Activar la cuenta
-        usuario.is_active = True
-        usuario.save(update_fields=['is_active'])
+    if usuario.is_active:
+        raise ValidationError("La cuenta ya se encuentra activa y verificada.")
         
-        # Invalidar el token utilizado
-        token_obj.utilizado = True
-        token_obj.save(update_fields=['utilizado'])
+    token_obj = TokenSeguridad.objects.filter(
+        id_usuario=usuario,
+        codigo=codigo,
+        tipo='ACTIVACION',
+        utilizado=False
+    ).order_by('-creado_en').first()
+    
+    if not token_obj:
+        raise ValidationError("El código de verificación es inválido o incorrecto.")
         
-        # Marcar como leída la última notificación de activación de cuenta
-        marcar_ultima_notificacion_como_leida(usuario=usuario, tipo='ACTIVACION')
+    if token_obj.fecha_expiracion < django_timezone.now():
+        raise ValidationError("El código de verificación ha expirado. Por favor, solicita uno nuevo.")
         
-        registrar_log_condicional(
-            clave_switch="log_seguridad_accesos",
-            accion="Verificación de correo y activación de cuenta",
-            tipo="SEGURIDAD",
-            modulo_origen="Autenticación",
-            tabla_afectada="usuario",
-            id_registro_afectado=usuario.id_usuario,
-            id_usuario=usuario.id_usuario
-        )
-        
-        tokens = generar_tokens_jwt(usuario)
-        perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
-        
-        return {
-            "mensaje": "Cuenta verificada y activada exitosamente.",
-            "tokens": tokens,
-            "usuario": {
-                "id_usuario": usuario.id_usuario,
-                "email": usuario.email,
-                "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
-                "nombre": perfil.nombre if perfil and perfil.nombre else "",
-                "apellido": perfil.apellido if perfil and perfil.apellido else "",
-                "dni": perfil.dni if perfil and perfil.dni else "",
-                "telefono": perfil.telefono if perfil and perfil.telefono else "",
-                "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
-                "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else "",
-                "perfil_completo": perfil_esta_completo(usuario.id_usuario)
-            }
+    # Activar la cuenta
+    usuario.is_active = True
+    usuario.save(update_fields=['is_active'])
+    
+    # Invalidar el token utilizado
+    token_obj.utilizado = True
+    token_obj.save(update_fields=['utilizado'])
+    
+    # Marcar como leída la última notificación de activación de cuenta
+    marcar_ultima_notificacion_como_leida(usuario=usuario, tipo='ACTIVACION')
+    
+    registrar_log_condicional(
+        clave_switch="log_seguridad_accesos",
+        accion="Verificación de correo y activación de cuenta",
+        tipo="SEGURIDAD",
+        modulo_origen="Autenticación",
+        tabla_afectada="usuario",
+        id_registro_afectado=usuario.id_usuario,
+        id_usuario=usuario.id_usuario
+    )
+    
+    tokens = generar_tokens_jwt(usuario)
+    perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
+    
+    return {
+        "mensaje": "Cuenta verificada y activada exitosamente.",
+        "tokens": tokens,
+        "usuario": {
+            "id_usuario": usuario.id_usuario,
+            "email": usuario.email,
+            "rol": usuario.id_rol.nombre_rol if usuario.id_rol else None,
+            "nombre": perfil.nombre if perfil and perfil.nombre else "",
+            "apellido": perfil.apellido if perfil and perfil.apellido else "",
+            "dni": perfil.dni if perfil and perfil.dni else "",
+            "telefono": perfil.telefono if perfil and perfil.telefono else "",
+            "telefono_alt": perfil.telefono_alt if perfil and perfil.telefono_alt else "",
+            "foto_perfil": perfil.foto_perfil if perfil and perfil.foto_perfil else "",
+            "perfil_completo": perfil_esta_completo(usuario.id_usuario)
         }
+    }
 
 def guardar_archivo_foto_perfil(*, id_usuario: int, archivo) -> str:
     """
@@ -887,10 +887,127 @@ def guardar_archivo_foto_perfil(*, id_usuario: int, archivo) -> str:
     # Actualizar la foto en PerfilUsuario
     perfil = PerfilUsuario.objects.filter(id_usuario__id_usuario=id_usuario).first()
     url_relativa = f"/media/perfiles/{nombre_archivo}"
-    if perfil:
-        perfil.foto_perfil = url_relativa
-        perfil.save(update_fields=['foto_perfil'])
-
     return url_relativa
+
+
+@transaction.atomic
+def modificar_usuario_por_admin(
+    *,
+    usuario_admin: Usuario,
+    id_usuario_destino: int,
+    datos_validados: Dict[str, Any]
+) -> Usuario:
+    """
+    CU-44: Modificar Usuario por Administrador.
+    Permite modificar los datos personales, de contacto y credenciales de cualquier usuario,
+    reasignar su rol de sistema y forzar una nueva contraseña encriptada sin token de verificación.
+    Registra auditoría en LogSistema.
+    """
+    from users_app.selectors import obtener_usuario_completo
+
+    # 1. Recuperar usuario objetivo con sus relaciones
+    usuario_destino = obtener_usuario_completo(id_usuario_destino)
+
+    # 2. Actualizar datos base de Usuario
+    nuevo_email = datos_validados.get('email')
+    if nuevo_email and nuevo_email != usuario_destino.email:
+        usuario_destino.email = nuevo_email
+
+    # Actualizar Rol
+    rol_instancia = datos_validados.get('rol_instancia')
+    if rol_instancia:
+        usuario_destino.id_rol = rol_instancia
+
+    # Forzar contraseña si se especificó
+    forzar_pass = datos_validados.get('forzar_contrasena')
+    se_forzo_contrasena = False
+    if forzar_pass and forzar_pass.strip():
+        usuario_destino.contrasena = make_password(forzar_pass.strip())
+        se_forzo_contrasena = True
+
+    usuario_destino.save()
+
+    # 3. Actualizar PerfilUsuario
+    perfil, _ = PerfilUsuario.objects.get_or_create(id_usuario=usuario_destino)
+    if 'nombre' in datos_validados:
+        perfil.nombre = datos_validados['nombre']
+    if 'apellido' in datos_validados:
+        perfil.apellido = datos_validados['apellido']
+    if 'telefono' in datos_validados:
+        perfil.telefono = datos_validados['telefono'] or ""
+    if 'telefono_alt' in datos_validados:
+        perfil.telefono_alt = datos_validados['telefono_alt'] or ""
+    perfil.save()
+
+    # 4. Auditoría de Seguridad (LogSistema)
+    admin_identificador = f"{usuario_admin.id_usuario} ({usuario_admin.email})"
+    texto_forzado = "Sí" if se_forzo_contrasena else "No"
+    detalle_log = (
+        f"El administrador {admin_identificador} modificó el perfil del usuario {usuario_destino.id_usuario}. "
+        f"Se forzó contraseña: {texto_forzado}."
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    LogSistema.objects.create(
+        fecha_hora=now_utc.time(),
+        accion="Modificación administrativa de usuario (CU-44)",
+        detalle=detalle_log,
+        tipo="SEGURIDAD",
+        modulo_origen="Usuarios",
+        tabla_afectada="usuario",
+        id_registro_afectado=usuario_destino.id_usuario,
+        id_usuario=usuario_admin
+    )
+
+    return usuario_destino
+
+
+@transaction.atomic
+def modificar_rol_sistema(
+    *,
+    usuario_admin: Usuario,
+    id_rol: int,
+    datos_validados: Dict[str, Any]
+) -> RolUsuario:
+    """
+    CU-84: Modificar Rol de Sistema por Administrador.
+    Permite modificar el nombre y/o la descripción de un rol activo.
+    Registra auditoría en LogSistema.
+    """
+    from users_app.selectors import obtener_rol_para_edicion
+
+    rol = obtener_rol_para_edicion(id_rol)
+
+    nombre_previo = rol.nombre_rol
+    descripcion_previa = rol.descripcion or ""
+
+    if 'nombre' in datos_validados and datos_validados['nombre']:
+        rol.nombre_rol = datos_validados['nombre']
+
+    if 'descripcion' in datos_validados:
+        rol.descripcion = datos_validados['descripcion']
+
+    rol.save()
+
+    # Auditoría (LogSistema)
+    admin_identificador = f"{usuario_admin.id_usuario} ({usuario_admin.email})"
+    detalle_log = (
+        f"El administrador {admin_identificador} modificó el rol {rol.id_rol} ({rol.codigo}). "
+        f"Nuevos datos: Nombre: '{rol.nombre_rol}', Descripción: '{rol.descripcion or ''}'."
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    LogSistema.objects.create(
+        fecha_hora=now_utc.time(),
+        accion="Modificación de rol de sistema (CU-84)",
+        detalle=detalle_log,
+        tipo="SEGURIDAD",
+        modulo_origen="Usuarios",
+        tabla_afectada="rol_usuario",
+        id_registro_afectado=rol.id_rol,
+        id_usuario=usuario_admin
+    )
+
+    return rol
 
 

@@ -221,3 +221,150 @@ class EliminarTodasNotificacionesApi(APIView):
             "eliminadas": total
         }, status=status.HTTP_200_OK)
 
+
+# ==============================================================================
+# CU-40: FILTRAR LOGS DE AUDITORÍA
+# ==============================================================================
+
+class FiltrarLogsAuditoriaApi(APIView):
+    """
+    CU-40: Filtrar Logs de Auditoría.
+    Endpoint exclusivo para Administradores.
+    Permite auditar la trazabilidad de eventos del sistema cruzando filtros de usuario,
+    módulo, acción, tabla afectada y términos de búsqueda.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core_app.selectors import filtrar_logs_auditoria
+        from core_app.serializers import FiltrarLogsAuditoriaInputSerializer, LogSistemaOutputSerializer
+
+        serializer = FiltrarLogsAuditoriaInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        logs = filtrar_logs_auditoria(
+            usuario_ejecutor=request.user,
+            filtros=serializer.validated_data
+        )
+
+        output = LogSistemaOutputSerializer(logs, many=True)
+        return Response(output.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-22 & CU-23: COPIAS DE SEGURIDAD Y RESTAURACIÓN (APIS)
+# ==============================================================================
+
+class BaseBackupAdminApiView(APIView):
+    """Clase base de seguridad que garantiza el rol ADMIN para endpoints de backups."""
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'rol', None) or getattr(user, 'id_rol', None)
+        codigo_rol = getattr(rol, 'codigo', '')
+        if (codigo_rol or '').upper() != 'ADMIN':
+            raise PermissionDenied("Acceso denegado. Se requieren permisos de Administrador para gestionar copias de seguridad.")
+
+
+class ListarCopiasSeguridadApi(BaseBackupAdminApiView):
+    """
+    CU-22 / CU-23: Consulta y despliega el listado completo de copias de seguridad
+    almacenadas en el servidor, con metadatos de peso, versión y fecha.
+    """
+    def get(self, request):
+        self._verificar_admin(request.user)
+        from core_app.selectors import listar_copias_seguridad
+        from core_app.serializers import CopiaSeguridadOutputSerializer
+
+        copias = listar_copias_seguridad()
+        serializer = CopiaSeguridadOutputSerializer(copias, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class GenerarCopiaSeguridadApi(BaseBackupAdminApiView):
+    """
+    CU-22: Genera de forma manual e inmediata un respaldo completo de la base de datos.
+    Verifica almacenamiento, bloquea escrituras y almacena el volcado SQL en directorio seguro.
+    """
+    def post(self, request):
+        self._verificar_admin(request.user)
+        from core_app.services import generar_copia_seguridad_manual
+        from core_app.serializers import CopiaSeguridadOutputSerializer
+
+        version = request.data.get('version', '1.0.0')
+        copia = generar_copia_seguridad_manual(
+            usuario_admin=request.user,
+            version=version
+        )
+        serializer = CopiaSeguridadOutputSerializer(copia)
+        return Response({
+            "mensaje": "Copia de seguridad generada exitosamente.",
+            "backup": serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class DescargarCopiaSeguridadApi(BaseBackupAdminApiView):
+    """
+    CU-22: Permite al Administrador descargar localmente el archivo físico del respaldo.
+    """
+    def get(self, request, id_backup: int):
+        import os
+        from django.http import FileResponse
+        from rest_framework.exceptions import NotFound
+        from core_app.selectors import obtener_copia_seguridad
+
+        self._verificar_admin(request.user)
+        copia = obtener_copia_seguridad(id_backup)
+
+        if not os.path.exists(copia.ubicacion_archivo):
+            raise NotFound("El archivo físico de respaldo no existe en el servidor.")
+
+        nombre_archivo = os.path.basename(copia.ubicacion_archivo)
+        return FileResponse(
+            open(copia.ubicacion_archivo, 'rb'),
+            as_attachment=True,
+            filename=nombre_archivo
+        )
+
+
+class SolicitarTokenRestauracionApi(BaseBackupAdminApiView):
+    """
+    CU-23: Genera y envía por correo electrónico un código OTP de un solo uso
+    para autorizar la restauración destructiva de la base de datos.
+    """
+    def post(self, request, id_backup: int):
+        self._verificar_admin(request.user)
+        from core_app.services import solicitar_token_restauracion
+
+        solicitar_token_restauracion(
+            usuario_admin=request.user,
+            id_backup=id_backup
+        )
+        return Response({
+            "mensaje": "Token de seguridad enviado al correo electrónico del administrador."
+        }, status=status.HTTP_200_OK)
+
+
+class RestaurarSistemaApi(BaseBackupAdminApiView):
+    """
+    CU-23: Ejecuta la reversión completa de la base de datos al estado del respaldo seleccionado.
+    Exige contraseña de administrador y validación de OTP en caché.
+    Activa modo mantenimiento durante el proceso y requiere reinicio de sesión al culminar.
+    """
+    def post(self, request, id_backup: int):
+        self._verificar_admin(request.user)
+        from core_app.serializers import RestaurarBackupInputSerializer
+        from core_app.services import ejecutar_restauracion_sistema
+
+        serializer = RestaurarBackupInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        resultado = ejecutar_restauracion_sistema(
+            usuario_admin=request.user,
+            id_backup=id_backup,
+            datos_validados=serializer.validated_data
+        )
+
+        return Response(resultado, status=status.HTTP_200_OK)
+
+

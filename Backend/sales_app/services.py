@@ -1,7 +1,7 @@
 import os
 import uuid
 from decimal import Decimal
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 from django.conf import settings
 from django.db import transaction
@@ -384,6 +384,7 @@ def _calcular_total_operacion(operacion) -> Decimal:
         raise ValidationError("Tipo de operación no soportado para cobro.")
 
 
+@transaction.atomic
 def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
     """
     CU-20: Generar Factura / Comprobante Fiscal.
@@ -947,5 +948,401 @@ def registrar_auditoria_filtro_cobros(
         id_registro_afectado=None,
         id_usuario=usuario_ejecutor
     )
+
+
+@transaction.atomic
+def registrar_o_reactivar_medio_pago(
+    *,
+    usuario_admin: Usuario,
+    datos_validados: Dict[str, Any]
+) -> MedioPago:
+    """
+    CU-82: Registrar medio de pago.
+    Permite al administrador registrar un nuevo canal de cobro en el sistema o reactivar
+    uno previamente deshabilitado.
+    """
+    from sales_app.selectors import obtener_medio_pago_por_nombre
+
+    nombre = datos_validados['nombre']
+    recargo = datos_validados.get('recargo', Decimal('0.00'))
+    confirmar_reactivacion = datos_validados.get('confirmar_reactivacion', False)
+
+    medio_existente = obtener_medio_pago_por_nombre(nombre)
+
+    if medio_existente:
+        if medio_existente.estado:
+            raise ValidationError("El medio de pago ingresado ya existe en el sistema y se encuentra activo.")
+        
+        if not confirmar_reactivacion:
+            raise ValidationError({
+                "confirmar_reactivacion": "Este medio de pago se encontraba deshabilitado. ¿Desea reactivarlo?"
+            })
+
+        # Reactivación y actualización de parámetros
+        medio_existente.estado = True
+        medio_existente.recargo = recargo
+        medio_existente.save(update_fields=['estado', 'recargo'])
+
+        LogSistema.objects.create(
+            fecha_hora=timezone.now().time(),
+            accion="Reactivar Medio de Pago (CU-82)",
+            detalle=(
+                f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) reactivó el medio de pago: "
+                f"'{medio_existente.nombre_medio_pago}' con recargo de {medio_existente.recargo}%."
+            )[:1000],
+            tipo="ADMINISTRACION",
+            modulo_origen="sales_app",
+            tabla_afectada="medio_pago",
+            id_registro_afectado=medio_existente.id_mediopago,
+            id_usuario=usuario_admin
+        )
+        return medio_existente
+
+    # Creación de nuevo registro
+    nuevo_medio = MedioPago.objects.create(
+        nombre_medio_pago=nombre,
+        recargo=recargo,
+        estado=True
+    )
+
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Registrar Medio de Pago (CU-82)",
+        detalle=(
+            f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) registró el nuevo medio de pago: "
+            f"'{nuevo_medio.nombre_medio_pago}' con recargo de {nuevo_medio.recargo}%."
+        )[:1000],
+        tipo="ADMINISTRACION",
+        modulo_origen="sales_app",
+        tabla_afectada="medio_pago",
+        id_registro_afectado=nuevo_medio.id_mediopago,
+        id_usuario=usuario_admin
+    )
+
+    return nuevo_medio
+
+
+# ==============================================================================
+# CU-83: CAMBIAR ESTADO DE MEDIO DE PAGO
+# ==============================================================================
+
+@transaction.atomic
+def alternar_estado_medio_pago(
+    *,
+    usuario_admin: Usuario,
+    id_medio_pago: int
+) -> MedioPago:
+    """
+    CU-83: Cambiar estado de medio de pago.
+    Permite al administrador alternar el estado operativo de un medio de pago (Activo/Inactivo).
+    Al desactivarlo se aplica una baja lógica para que no aparezca en cobros de caja sin
+    comprometer la integridad referencial de facturas y cobros históricos.
+    """
+    from sales_app.selectors import obtener_medio_pago_para_toggle
+
+    medio_pago = obtener_medio_pago_para_toggle(id_medio_pago)
+
+    # Invertir el estado operativo
+    medio_pago.estado = not medio_pago.estado
+    medio_pago.save(update_fields=['estado'])
+
+    accion_str = "activó" if medio_pago.estado else "desactivó"
+    accion_audit = "Activar Medio de Pago (CU-83)" if medio_pago.estado else "Desactivar Medio de Pago (CU-83)"
+
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion=accion_audit,
+        detalle=(
+            f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) {accion_str} "
+            f"el medio de pago: '{medio_pago.nombre_medio_pago}' (ID: {medio_pago.id_mediopago}). "
+            f"Nuevo estado: {medio_pago.estado}."
+        )[:1000],
+        tipo="ADMINISTRACION",
+        modulo_origen="sales_app",
+        tabla_afectada="medio_pago",
+        id_registro_afectado=medio_pago.id_mediopago,
+        id_usuario=usuario_admin
+    )
+
+    return medio_pago
+
+
+# ==============================================================================
+# CU-67: REALIZAR VENTA PRESENCIAL (SERVICES)
+# ==============================================================================
+
+def _obtener_o_crear_consumidor_final() -> Usuario:
+    """Recupera o inicializa la cuenta genérica de Consumidor Final."""
+    from users_app.models import Usuario, RolUsuario, PerfilUsuario
+    rol_cliente, _ = RolUsuario.objects.get_or_create(
+        codigo='CLIENTE',
+        defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente estándar'}
+    )
+    usuario, creado = Usuario.objects.get_or_create(
+        email='consumidorfinal@ifixpos.com',
+        defaults={
+            'contrasena': 'hash_invalido_consumidor_final',
+            'fecha_registro': timezone.now().date(),
+            'id_rol': rol_cliente,
+            'is_active': True
+        }
+    )
+    if creado or not PerfilUsuario.objects.filter(id_usuario=usuario).exists():
+        PerfilUsuario.objects.get_or_create(
+            id_usuario=usuario,
+            defaults={
+                'nombre': 'Consumidor',
+                'apellido': 'Final',
+                'dni': '00000000'
+            }
+        )
+    return usuario
+
+
+@transaction.atomic
+def crear_venta_presencial(
+    *,
+    usuario_cajero: Usuario,
+    datos_validados: Dict[str, Any]
+) -> Tuple[Venta, List[str]]:
+    """
+    CU-67: Realizar Venta Presencial.
+    Permite registrar la entrega física de mercadería a un cliente en mostrador,
+    congelando precios vigentes en DetalleVenta, descontando inventario en MovimientoStock
+    y dejando la operación en estado 'PENDIENTE' para su liquidación en caja.
+    """
+    from sales_app.selectors import validar_productos_para_venta
+
+    items_input = datos_validados['productos']
+    productos_validos, warnings = validar_productos_para_venta(items_input)
+    dict_productos = {p.id_producto: p for p in productos_validos}
+
+    # Resolver comprador (Cliente registrado o Consumidor Final por defecto)
+    id_cliente = datos_validados.get('id_cliente')
+    if id_cliente:
+        try:
+            usuario_cliente = Usuario.objects.get(id_usuario=id_cliente)
+        except Usuario.DoesNotExist:
+            raise ValidationError(f"El cliente con ID {id_cliente} no existe en el sistema.")
+    else:
+        usuario_cliente = _obtener_o_crear_consumidor_final()
+
+    codigo_seguridad = uuid.uuid4().hex[:10].upper()
+
+    # Paso 8: Instanciar cabecera de Venta en estado PENDIENTE
+    venta = Venta.objects.create(
+        id_usuario=usuario_cliente,
+        metodo_entrega='MOSTRADOR',
+        fecha_venta=timezone.now().date(),
+        estado_venta='PENDIENTE',
+        codigo_sec=codigo_seguridad,
+        monto_subtotal=Decimal('0.00'),
+        costo_envio=Decimal('0.00'),
+        id_direccion_envio=None
+    )
+
+    monto_total = Decimal('0.00')
+
+    # Ciclo de renglones, congelamiento de precios y egreso de inventario
+    for item in items_input:
+        prod = dict_productos[item['id_producto']]
+        cant = int(item['cantidad'])
+        precio_unitario = Decimal(str(prod.precio_venta))
+        subtotal_linea = precio_unitario * Decimal(str(cant))
+        monto_total += subtotal_linea
+
+        # Congelar línea en DetalleVenta
+        DetalleVenta.objects.create(
+            id_venta=venta,
+            id_producto=prod,
+            cantidad=cant,
+            precio_unitario=precio_unitario,
+            subtotal=subtotal_linea
+        )
+
+        # Asentar movimiento de egreso en Stock
+        stock, _ = Stock.objects.get_or_create(
+            id_producto=prod,
+            defaults={'stock_minimo': 0}
+        )
+
+        MovimientoStock.objects.create(
+            id_stock=stock,
+            tipo_movimiento='venta',
+            cantidad=cant,
+            fecha=timezone.now().date(),
+            motivo=f"Egreso por Venta Presencial #{venta.id_venta}",
+            uso_taller=False,
+            id_venta=venta
+        )
+
+    # Actualizar monto total definitivo
+    venta.monto_subtotal = monto_total
+    venta.save(update_fields=['monto_subtotal'])
+
+    # Auditoría del evento en LogSistema
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Realizar Venta Presencial (CU-67)",
+        detalle=(
+            f"El operador {usuario_cajero.id_usuario} ({usuario_cajero.email}) registró una venta presencial "
+            f"#{venta.id_venta} para el cliente '{usuario_cliente.email}' por un total de ${monto_total}. "
+            f"Líneas: {len(items_input)}. Código sec: {codigo_seguridad}."
+        )[:1000],
+        tipo="AUDITORIA_VENTA",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario_cajero
+    )
+
+    return venta, warnings
+
+
+# ==============================================================================
+# CU-69: AUDITAR HISTORIAL DE BENEFICIOS Y PROMOCIONES (SERVICES)
+# ==============================================================================
+
+@transaction.atomic
+def auditar_inspeccion_beneficio(
+    *,
+    usuario_admin: Usuario,
+    id_beneficio: int
+) -> Any:
+    """
+    CU-69: Auditar Historial de Beneficios y Promociones.
+    Permite al Administrador inspeccionar el expediente técnico de una sugerencia algorítmica,
+    registrando la traza de auditoría en LogSistema sobre la revisión efectuada.
+    """
+    from sales_app.selectors import obtener_beneficio_para_auditoria
+
+    beneficio = obtener_beneficio_para_auditoria(id_beneficio)
+
+    cliente_email = beneficio.id_usuario.email if beneficio.id_usuario else "Desconocido"
+    prod_nom = beneficio.id_producto.nombre if beneficio.id_producto else "Desconocido"
+
+    # Asentar la traza de auditoría de la revisión gerencial
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Auditar Beneficio (CU-69)",
+        detalle=(
+            f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) realizó una inspección "
+            f"de auditoría sobre el beneficio #{beneficio.id_beneficio} otorgado al cliente '{cliente_email}' "
+            f"(Producto: '{prod_nom}', Descuento: {beneficio.por_desc}%)."
+        )[:1000],
+        tipo="CONSULTA_AUDITORIA",
+        modulo_origen="sales_app",
+        tabla_afectada="beneficio",
+        id_registro_afectado=str(beneficio.id_beneficio),
+        id_usuario=usuario_admin
+    )
+
+    return beneficio
+
+
+# ==============================================================================
+# CU-71: REVOCAR BENEFICIO ACTIVO (SERVICES)
+# ==============================================================================
+
+@transaction.atomic
+def revocar_beneficio_activo(
+    *,
+    usuario_admin: Usuario,
+    id_beneficio: int,
+    datos_validados: Optional[Dict[str, Any]] = None
+) -> Any:
+    """
+    CU-71: Revocar Beneficio Activo.
+    Permite al Administrador invalidar manualmente un beneficio o promoción antes
+    de su vencimiento natural, interrumpiendo su disponibilidad temporal e inhabilitando
+    su canje en operaciones comerciales activas.
+    """
+    from sales_app.selectors import obtener_beneficio_para_revocacion, beneficio_esta_activo
+
+    datos_validados = datos_validados or {}
+    beneficio = obtener_beneficio_para_revocacion(id_beneficio)
+
+    # Excepción Paso 4: Validar que el beneficio se encuentre activo y vigente
+    if not beneficio_esta_activo(beneficio):
+        raise ValidationError(
+            "Operación denegada: El beneficio ya fue utilizado por el cliente o su tiempo de validez expiró."
+        )
+
+    motivo_anulacion = (datos_validados.get('motivo_anulacion') or '').strip() or 'Sin justificación ingresada'
+
+    # Paso 6: Interrumpir temporizador de validez y marcar como revocado
+    beneficio.tiempo_disp = Decimal('0.00')
+    if not beneficio.motivo.startswith('[REVOCADO]'):
+        beneficio.motivo = f"[REVOCADO] {beneficio.motivo}"
+    beneficio.save(update_fields=['tiempo_disp', 'motivo'])
+
+    cliente_email = beneficio.id_usuario.email if beneficio.id_usuario else "Desconocido"
+
+    # Paso 7: Asentar la traza de auditoría en LogSistema
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Revocar Beneficio (CU-71)",
+        detalle=(
+            f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) revocó manualmente "
+            f"el beneficio #{beneficio.id_beneficio} del cliente '{cliente_email}'. "
+            f"Motivo: {motivo_anulacion}."
+        )[:1000],
+        tipo="ADMINISTRACION",
+        modulo_origen="sales_app",
+        tabla_afectada="beneficio",
+        id_registro_afectado=str(beneficio.id_beneficio),
+        id_usuario=usuario_admin
+    )
+
+    return beneficio
+
+
+# ==============================================================================
+# CU-75: GENERAR REPORTE DE DISTRIBUCIÓN GEOGRÁFICA Y LOGÍSTICA
+# ==============================================================================
+
+@transaction.atomic
+def generar_auditoria_logistica(
+    *,
+    usuario_admin: Usuario,
+    filtros_validados: dict
+) -> list[dict]:
+    """
+    CU-75: Generar Reporte de Distribución Geográfica y Logística (Capa Transaccional / Auditoría).
+    Invoca el selector de análisis territorial y logístico y asienta la traza inmutable en LogSistema.
+    """
+    from sales_app.selectors import calcular_reporte_logistico
+    from core_app.models import LogSistema
+
+    resultado = calcular_reporte_logistico(
+        fecha_inicio=filtros_validados['fecha_inicio'],
+        fecha_fin=filtros_validados['fecha_fin'],
+        id_provincia=filtros_validados.get('id_provincia'),
+        id_ciudad=filtros_validados.get('id_ciudad'),
+        estado_venta=filtros_validados.get('estado_venta'),
+        id_medio_pago=filtros_validados.get('id_medio_pago')
+    )
+
+    f_ini = filtros_validados['fecha_inicio']
+    f_fin = filtros_validados['fecha_fin']
+    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
+    email_admin = getattr(usuario_admin, 'email', '')
+
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Generar Reporte de Distribución Geográfica (CU-75)",
+        detalle=(
+            f"El administrador {id_admin} ({email_admin}) generó el Reporte de Distribución "
+            f"Geográfica y Logística para el periodo {f_ini} al {f_fin}."
+        )[:1000],
+        tipo="REPORTE_BI",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado="0",
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return resultado
+
 
 

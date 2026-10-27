@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 
 
@@ -26,19 +27,27 @@ class Proveedor(models.Model):
         blank=True,
         help_text='Teléfono de contacto del proveedor.'
     )
+    estado = models.BooleanField(
+        default=True,
+        help_text='Indica si el proveedor se encuentra activo en el sistema.'
+    )
     ofrece_envio = models.BooleanField(
+        default=True,
         help_text='Indica si el proveedor realiza envíos.'
     )
     indice_confiabilidad = models.DecimalField(
         max_digits=10,
         decimal_places=2,
+        default=Decimal('10.00'),
         help_text='Indicador numérico de confiabilidad operacional del proveedor.'
     )
     tiempo_promedio_entrega = models.IntegerField(
+        default=3,
         help_text='Tiempo promedio de entrega en días.'
     )
     nivel = models.CharField(
         max_length=50,
+        default='Estándar',
         help_text='Clasificación del proveedor según su tipo comercial.'
     )
     id_direccion = models.ForeignKey(
@@ -50,6 +59,30 @@ class Proveedor(models.Model):
         help_text='Identificador único de la dirección.'
     )
 
+    @property
+    def id_proveedor(self) -> str:
+        return self.cuit_prov
+
+    @property
+    def cuit(self) -> str:
+        return self.cuit_prov
+
+    @property
+    def nombre(self) -> str:
+        return self.nombre_proveedor
+
+    @nombre.setter
+    def nombre(self, value: str):
+        self.nombre_proveedor = value
+
+    @property
+    def direccion(self):
+        return self.id_direccion
+
+    @direccion.setter
+    def direccion(self, value):
+        self.id_direccion = value
+
     class Meta:
         db_table = 'proveedor'
 
@@ -58,6 +91,20 @@ class SolicitudCotizacion(models.Model):
     """
     Pedidos maestros de cotización a proveedores.
     """
+    ESTADO_BORRADOR = 0
+    ESTADO_ENVIADA = 1
+    ESTADO_COTIZADA = 2
+    ESTADO_RECHAZADA = 3
+    ESTADO_CERRADA = 4
+
+    ESTADOS_DICT = {
+        ESTADO_BORRADOR: 'Borrador',
+        ESTADO_ENVIADA: 'Enviada a Proveedores',
+        ESTADO_COTIZADA: 'Cotizada',
+        ESTADO_RECHAZADA: 'Rechazada',
+        ESTADO_CERRADA: 'Cerrada/Evaluada',
+    }
+
     id_solicitud = models.AutoField(
         primary_key=True,
         help_text='Identificador único de la solicitud de cotización.'
@@ -68,11 +115,19 @@ class SolicitudCotizacion(models.Model):
     estado_solicitud = models.IntegerField(
         help_text='Estado actual de la solicitud según su ciclo.'
     )
+    sol_tec = models.BooleanField(
+        default=False,
+        help_text='Indica si la solicitud fue originada como requerimiento técnico de una reparación.'
+    )
     productos = models.ManyToManyField(
         'catalog_app.Producto',
         through='SolicitudCotizacionProducto',
         help_text='Relación M:N entre solicitud de cotización y productos requeridos.'
     )
+
+    @property
+    def estado_nombre(self) -> str:
+        return self.ESTADOS_DICT.get(self.estado_solicitud, 'Borrador')
 
     class Meta:
         db_table = 'solicitud_cotizacion'
@@ -98,6 +153,18 @@ class SolicitudCotizacionProducto(models.Model):
         db_column='id_producto',
         help_text='Identificador del producto solicitado.'
     )
+    cantidad = models.IntegerField(
+        default=1,
+        help_text='Cantidad requerida del producto solicitado.'
+    )
+
+    @property
+    def cantidad_requerida(self) -> int:
+        return self.cantidad
+
+    @cantidad_requerida.setter
+    def cantidad_requerida(self, value: int):
+        self.cantidad = value
 
     class Meta:
         db_table = 'solicitud_cotizacion_producto'
@@ -107,6 +174,16 @@ class InvitacionCotizar(models.Model):
     """
     Invitaciones a proveedores para cotizar.
     """
+    ESTADO_PENDIENTE = 0
+    ESTADO_COTIZADA = 1
+    ESTADO_RECHAZADA = 2
+
+    ESTADOS_DICT = {
+        ESTADO_PENDIENTE: 'Pendiente de Evaluación',
+        ESTADO_COTIZADA: 'Cotizada',
+        ESTADO_RECHAZADA: 'Rechazada',
+    }
+
     id_invitacion = models.AutoField(
         primary_key=True,
         help_text='Identificador único de la invitación a cotizar.'
@@ -133,6 +210,10 @@ class InvitacionCotizar(models.Model):
         help_text='Identificador fiscal único del proveedor.'
     )
 
+    @property
+    def estado_nombre(self) -> str:
+        return self.ESTADOS_DICT.get(self.estado_invitacion, 'Pendiente de Evaluación')
+
     class Meta:
         db_table = 'invitacion_cotizar'
 
@@ -141,6 +222,18 @@ class Cotizacion(models.Model):
     """
     Cotizaciones recibidas por invitación.
     """
+    ESTADO_PENDIENTE = 0
+    ESTADO_ACEPTADA = 1
+    ESTADO_DESCARTADA = 2
+    ESTADO_RECHAZADA = 3
+
+    ESTADOS_DICT = {
+        ESTADO_PENDIENTE: 'Pendiente de Evaluación',
+        ESTADO_ACEPTADA: 'Aceptada',
+        ESTADO_DESCARTADA: 'Descartada',
+        ESTADO_RECHAZADA: 'Rechazada',
+    }
+
     id_cotizacion = models.AutoField(
         primary_key=True,
         help_text='Identificador único de la cotización.'
@@ -172,6 +265,10 @@ class Cotizacion(models.Model):
         db_column='id_invitacion',
         help_text='Identificador único de la invitación a cotizar.'
     )
+
+    @property
+    def estado_nombre(self) -> str:
+        return self.ESTADOS_DICT.get(self.estado_cotizacion, 'Pendiente de Evaluación')
 
     class Meta:
         db_table = 'cotizacion'
@@ -211,6 +308,26 @@ class OrdenCompra(models.Model):
     """
     Órdenes de compra adjudicadas a proveedores.
     """
+    ESTADO_ESPERANDO_ENTREGA = 1
+    ESTADO_ENTREGADA = 2
+    ESTADO_CANCELADA = 3
+    ESTADO_ENTREGADA_PARCIALMENTE = 4
+
+    ESTADOS_DICT = {
+        ESTADO_ESPERANDO_ENTREGA: 'Esperando Entrega',
+        ESTADO_ENTREGADA: 'Entregada',
+        ESTADO_CANCELADA: 'Cancelada',
+        ESTADO_ENTREGADA_PARCIALMENTE: 'Entregada Parcialmente',
+    }
+
+    TIPO_ENTREGA_RETIRO = 1
+    TIPO_ENTREGA_ENVIO = 2
+
+    TIPOS_ENTREGA_DICT = {
+        TIPO_ENTREGA_RETIRO: 'Retiro en Sucursal',
+        TIPO_ENTREGA_ENVIO: 'Envío a Domicilio',
+    }
+
     id_orden = models.AutoField(
         primary_key=True,
         help_text='Identificador único de la orden de compra.'
@@ -245,6 +362,19 @@ class OrdenCompra(models.Model):
         help_text='Identificador fiscal único del proveedor.'
     )
 
+    @property
+    def estado_nombre(self) -> str:
+        return self.ESTADOS_DICT.get(self.estado_orden, 'Desconocido')
+
+    @property
+    def tipo_entrega_nombre(self) -> str:
+        return self.TIPOS_ENTREGA_DICT.get(self.tipo_entrega, 'Retiro en Sucursal')
+
+    @property
+    def detalleordencompra_set(self):
+        """Compatibilidad con el reverse accessor por defecto de Django."""
+        return self.detalles
+
     class Meta:
         db_table = 'orden_compra'
 
@@ -260,6 +390,11 @@ class DetalleOrdenCompra(models.Model):
     cantidad = models.IntegerField(
         help_text='Unidades del producto solicitadas al proveedor.'
     )
+    cantidad_recibida = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='Unidades efectivamente recibidas en la entrega.'
+    )
     precio_unitario = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -268,6 +403,7 @@ class DetalleOrdenCompra(models.Model):
     id_orden = models.ForeignKey(
         OrdenCompra,
         on_delete=models.CASCADE,
+        related_name='detalles',
         db_column='id_orden',
         help_text='Identificador único de la orden de compra.'
     )

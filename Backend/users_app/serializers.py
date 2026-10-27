@@ -192,3 +192,118 @@ class UsuarioFiltradoOutputSerializer(serializers.Serializer):
     fecha_registro = serializers.DateField()
     rol = RolUsuarioAnidadoSerializer(source='id_rol', read_only=True)
     perfil = PerfilUsuarioAnidadoSerializer(source='perfilusuario', read_only=True)
+
+
+class FiltrarUsuariosInputSerializer(serializers.Serializer):
+    """
+    CU-32: Aduana de validación para parámetros de filtrado y búsqueda de usuarios.
+    """
+    dni = serializers.CharField(required=False, allow_blank=True, validators=[dni_validator])
+    email = serializers.CharField(required=False, allow_blank=True)
+    id_rol = serializers.IntegerField(required=False, min_value=1)
+    activo = serializers.BooleanField(required=False)
+    id_pais = serializers.IntegerField(required=False, min_value=1)
+    id_provincia = serializers.IntegerField(required=False, min_value=1)
+    id_ciudad = serializers.IntegerField(required=False, min_value=1)
+
+
+class ModificarUsuarioAdminInputSerializer(serializers.Serializer):
+    """
+    CU-44: Aduana Administrativa para modificar datos de cualquier usuario por el Administrador.
+    Permite editar nombre, apellido, email, teléfono, teléfono alternativo, rol y forzar nueva contraseña.
+    """
+    nombre = serializers.CharField(max_length=100, required=True, validators=[nombre_apellido_validator])
+    apellido = serializers.CharField(max_length=100, required=True, validators=[nombre_apellido_validator])
+    email = serializers.EmailField(required=True)
+    rol_codigo = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    rol_id = serializers.IntegerField(required=False, min_value=1)
+    telefono = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
+    telefono_alt = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
+    forzar_contrasena = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
+
+    def validate_telefono(self, value):
+        if value and value.strip():
+            clean_value = value.strip().replace(" ", "")
+            telefono_validator(clean_value)
+            return clean_value
+        return ""
+
+    def validate_telefono_alt(self, value):
+        if value and value.strip():
+            clean_value = value.strip().replace(" ", "")
+            telefono_validator(clean_value)
+            return clean_value
+        return ""
+
+    def validate(self, attrs):
+        # Validación de que al menos se provea rol_codigo o rol_id si se desea asignar rol
+        rol_codigo = attrs.get('rol_codigo')
+        rol_id = attrs.get('rol_id')
+        if not rol_codigo and not rol_id:
+            raise serializers.ValidationError({"rol": "Debe especificar rol_codigo o rol_id para asignar al usuario."})
+
+        # Comprobación de existencia del rol
+        from users_app.models import RolUsuario
+        rol_obj = None
+        if rol_id:
+            rol_obj = RolUsuario.objects.filter(id_rol=rol_id).first()
+        elif rol_codigo:
+            rol_obj = RolUsuario.objects.filter(codigo__iexact=rol_codigo).first()
+            if not rol_obj:
+                rol_obj = RolUsuario.objects.filter(nombre_rol__iexact=rol_codigo).first()
+
+        if not rol_obj:
+            raise serializers.ValidationError({"rol": "El rol especificado no existe en el sistema."})
+
+        attrs['rol_instancia'] = rol_obj
+
+        # Validación de unicidad de email excluyendo al usuario en edición (se inyecta id_usuario_destino en contexto)
+        id_usuario_destino = self.context.get('id_usuario_destino')
+        email = attrs.get('email')
+        if email:
+            from users_app.selectors import email_existe_excluyendo_usuario
+            if id_usuario_destino and email_existe_excluyendo_usuario(email, id_usuario_destino):
+                raise serializers.ValidationError({"email": "El correo electrónico ya se encuentra registrado por otro usuario."})
+
+        return attrs
+
+
+class ModificarRolInputSerializer(serializers.Serializer):
+    """
+    CU-84: Aduana Administrativa para modificar nombre y/o descripción de un rol del sistema.
+    """
+    nombre = serializers.CharField(max_length=100, required=False, allow_blank=False)
+    descripcion = serializers.CharField(max_length=1000, required=False, allow_blank=True, allow_null=True)
+
+    def validate(self, attrs):
+        nombre = attrs.get('nombre')
+        descripcion = attrs.get('descripcion')
+
+        if nombre is None and descripcion is None:
+            raise serializers.ValidationError("Debe proporcionar al menos 'nombre' o 'descripcion' para modificar el rol.")
+
+        if nombre:
+            nombre_limpio = nombre.strip()
+            if not nombre_limpio:
+                raise serializers.ValidationError({"nombre": "El nombre del rol no puede estar vacío."})
+            attrs['nombre'] = nombre_limpio
+
+            # Verificar que no exista otro rol con ese mismo nombre
+            from users_app.models import RolUsuario
+            id_rol_actual = self.context.get('id_rol')
+            qs_conflicto = RolUsuario.objects.filter(nombre_rol__iexact=nombre_limpio)
+            if id_rol_actual:
+                qs_conflicto = qs_conflicto.exclude(id_rol=id_rol_actual)
+
+            if qs_conflicto.exists():
+                raise serializers.ValidationError({"nombre": "Ya existe otro rol con ese nombre en el sistema."})
+
+        return attrs
+
+
+class RolUsuarioOutputSerializer(serializers.Serializer):
+    """Estructura de salida para datos de RolUsuario."""
+    id_rol = serializers.IntegerField()
+    codigo = serializers.CharField()
+    nombre_rol = serializers.CharField()
+    descripcion = serializers.CharField(allow_null=True)

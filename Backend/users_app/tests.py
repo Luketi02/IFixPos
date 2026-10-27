@@ -487,4 +487,284 @@ class VerificacionCorreoOTPTestCase(TestCase):
         self.assertTrue(notif_rec.leida)  # Debe pasar a leída
 
 
+class ModificarUsuarioAdminTestCase(TestCase):
+    """Pruebas unitarias e integración para el CU-44: Modificar Usuario por Administrador."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # Roles necesarios
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Acceso total'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Taller'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Consumidor'}
+        )
+
+        # Usuario Administrador ejecutor
+        self.admin_user = Usuario.objects.create(
+            email='admin.mod@ifixpos.com',
+            contrasena='hash_admin',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.admin_user,
+            nombre='Admin',
+            apellido='Supremo',
+            dni='11223344',
+            telefono='+5491122334455'
+        )
+
+        # Usuario Cliente ejecutor (para probar acceso denegado)
+        self.cliente_user = Usuario.objects.create(
+            email='cliente.normal@ifixpos.com',
+            contrasena='hash_cliente',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente_user,
+            nombre='Cliente',
+            apellido='Prueba',
+            dni='22334455',
+            telefono='+5491133445566'
+        )
+
+        # Usuario Objetivo a ser modificado
+        self.target_user = Usuario.objects.create(
+            email='tecnico.objetivo@ifixpos.com',
+            contrasena='hash_antiguo',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_tecnico,
+            is_active=True
+        )
+        self.target_perfil = PerfilUsuario.objects.create(
+            id_usuario=self.target_user,
+            nombre='Carlos',
+            apellido='Gómez',
+            dni='33445566',
+            telefono='+5491144556677',
+            telefono_alt='+5491199887766'
+        )
+
+    def test_modificar_usuario_admin_exitoso_con_cambio_rol_y_contrasena(self):
+        """Un administrador puede modificar datos personales, rol y forzar nueva clave."""
+        from django.contrib.auth.hashers import check_password
+        from core_app.models import LogSistema
+
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {
+            "nombre": "Carlos Alberto",
+            "apellido": "Gómez Pérez",
+            "email": "carlos.nuevo@ifixpos.com",
+            "rol_codigo": "CLIENTE",
+            "telefono": "+5491155667788",
+            "telefono_alt": "+5491188776655",
+            "forzar_contrasena": "NuevaClaveSuperSegura2026!"
+        }
+
+        url = f"/api/users/{self.target_user.id_usuario}/admin-edit/"
+        response = self.client.put(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('mensaje'), "Usuario actualizado correctamente.")
+
+        # Verificar persistencia en base de datos
+        self.target_user.refresh_from_db()
+        self.target_perfil.refresh_from_db()
+
+        self.assertEqual(self.target_user.email, "carlos.nuevo@ifixpos.com")
+        self.assertEqual(self.target_user.id_rol.codigo, "CLIENTE")
+        self.assertTrue(check_password("NuevaClaveSuperSegura2026!", self.target_user.contrasena))
+
+        self.assertEqual(self.target_perfil.nombre, "Carlos Alberto")
+        self.assertEqual(self.target_perfil.apellido, "Gómez Pérez")
+        self.assertEqual(self.target_perfil.telefono, "+5491155667788")
+        self.assertEqual(self.target_perfil.telefono_alt, "+5491188776655")
+
+        # Verificar auditoría en LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin_user,
+            accion__icontains="CU-44"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn("Se forzó contraseña: Sí", log.detalle)
+
+    def test_modificar_usuario_sin_forzar_contrasena(self):
+        """Si no se ingresa contraseña para forzar, la clave previa se mantiene inalterada."""
+        self.client.force_authenticate(user=self.admin_user)
+        clave_previa = self.target_user.contrasena
+        payload = {
+            "nombre": "Carlos Solo Datos",
+            "apellido": "Gómez",
+            "email": "tecnico.objetivo@ifixpos.com",
+            "rol_codigo": "TECNICO",
+            "telefono": "+5491144556677"
+        }
+
+        url = f"/api/users/{self.target_user.id_usuario}/admin-edit/"
+        response = self.client.put(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.contrasena, clave_previa)
+
+    def test_modificar_usuario_email_duplicado_rechaza(self):
+        """No permite utilizar el email de otro usuario registrado."""
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {
+            "nombre": "Carlos",
+            "apellido": "Gómez",
+            "email": self.admin_user.email,  # Ya en uso por el administrador
+            "rol_codigo": "TECNICO"
+        }
+
+        url = f"/api/users/{self.target_user.id_usuario}/admin-edit/"
+        response = self.client.put(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", str(response.data))
+
+    def test_modificar_usuario_rol_no_admin_denegado(self):
+        """Un usuario que no sea Administrador recibe 403 Forbidden."""
+        self.client.force_authenticate(user=self.cliente_user)
+        payload = {
+            "nombre": "Hacker",
+            "apellido": "Intento",
+            "email": "hacker@test.com",
+            "rol_codigo": "ADMIN"
+        }
+
+        url = f"/api/users/{self.target_user.id_usuario}/admin-edit/"
+        response = self.client.put(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 403)
+
+
+class ModificarRolTestCase(TestCase):
+    """Pruebas unitarias e integración para el CU-84: Modificar Rol."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Acceso total al sistema'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Personal técnico de reparación'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Consumidor y dueño de equipos'}
+        )
+
+        self.admin_user = Usuario.objects.create(
+            email='admin.roles@ifixpos.com',
+            contrasena='hash_admin',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+
+        self.cliente_user = Usuario.objects.create(
+            email='cliente.roles@ifixpos.com',
+            contrasena='hash_cliente',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+    def test_modificar_rol_exitoso_nombre_y_descripcion(self):
+        """Un administrador puede actualizar nombre y descripción de un rol existente."""
+        from core_app.models import LogSistema
+
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {
+            "nombre": "Técnico Especialista",
+            "descripcion": "Encargado de reparaciones complejas y diagnósticos avanzados"
+        }
+
+        url = f"/api/users/roles/{self.rol_tecnico.id_rol}/editar/"
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get("mensaje"), "Rol actualizado correctamente.")
+        self.assertEqual(response.data.get("rol", {}).get("nombre_rol"), "Técnico Especialista")
+
+        # Verificar en base de datos
+        self.rol_tecnico.refresh_from_db()
+        self.assertEqual(self.rol_tecnico.nombre_rol, "Técnico Especialista")
+        self.assertEqual(self.rol_tecnico.descripcion, "Encargado de reparaciones complejas y diagnósticos avanzados")
+
+        # Verificar LogSistema
+        log = LogSistema.objects.filter(
+            id_usuario=self.admin_user,
+            accion__icontains="CU-84"
+        ).order_by('-id_log').first()
+        self.assertIsNotNone(log)
+        self.assertIn("Técnico Especialista", log.detalle)
+
+    def test_modificar_rol_solo_descripcion(self):
+        """Se puede modificar únicamente la descripción manteniendo el nombre."""
+        self.client.force_authenticate(user=self.admin_user)
+        nombre_original = self.rol_cliente.nombre_rol
+        payload = {
+            "descripcion": "Nueva descripción exclusiva de clientes frecuentes"
+        }
+
+        url = f"/api/users/roles/{self.rol_cliente.id_rol}/editar/"
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.rol_cliente.refresh_from_db()
+        self.assertEqual(self.rol_cliente.nombre_rol, nombre_original)
+        self.assertEqual(self.rol_cliente.descripcion, "Nueva descripción exclusiva de clientes frecuentes")
+
+    def test_modificar_rol_nombre_duplicado_rechaza(self):
+        """No permite colocarle a un rol el nombre de otro rol preexistente."""
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {
+            "nombre": self.rol_admin.nombre_rol  # "Administrador" ya existe
+        }
+
+        url = f"/api/users/roles/{self.rol_tecnico.id_rol}/editar/"
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("nombre", str(response.data))
+
+    def test_modificar_rol_sin_campos_rechaza(self):
+        """Enviar payload vacío sin nombre ni descripción es rechazado por la aduana."""
+        self.client.force_authenticate(user=self.admin_user)
+        payload = {}
+
+        url = f"/api/users/roles/{self.rol_tecnico.id_rol}/editar/"
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_modificar_rol_usuario_no_admin_denegado(self):
+        """Un usuario que no sea Administrador recibe 403 Forbidden."""
+        self.client.force_authenticate(user=self.cliente_user)
+        payload = {
+            "nombre": "Rol Hackeado"
+        }
+
+        url = f"/api/users/roles/{self.rol_tecnico.id_rol}/editar/"
+        response = self.client.patch(url, data=payload, format='json')
+
+        self.assertEqual(response.status_code, 403)
+
+
 

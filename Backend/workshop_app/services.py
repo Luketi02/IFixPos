@@ -1685,4 +1685,245 @@ def entregar_dispositivo_cliente(
     return reparacion
 
 
+# ==============================================================================
+# CU-19: CALIFICAR SERVICIO TÉCNICO (SERVICES)
+# ==============================================================================
+
+@transaction.atomic
+def calificar_reparacion(
+    *,
+    usuario_cliente: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+) -> Calificacion:
+    """
+    CU-19: Calificar Servicio Técnico.
+    Permite al cliente valorar una reparación culminada (estado 'ENTREGADO').
+    Persiste de forma inmutable la calificación (puntuación cuantitativa 1 a 5 y opinión)
+    asentando la auditoría de calidad en LogSistema.
+
+    Reglas de Arquitectura HackSoftware:
+    - @transaction.atomic para consistencia transaccional.
+    - No recibe el objeto request; recibe usuario_cliente, id_reparacion y datos_validados.
+    - Ejecuta validaciones de precondición y pertenencia a través del selector especializado.
+    - Persiste el log de auditoría inmutable en LogSistema.
+    """
+    from workshop_app.selectors import obtener_reparacion_para_calificar
+    from workshop_app.models import Calificacion
+
+    # Paso 1: Validar precondiciones operativas, pertenencia y unicidad vía selector
+    reparacion = obtener_reparacion_para_calificar(
+        usuario_cliente=usuario_cliente,
+        id_reparacion=id_reparacion
+    )
+
+    # Paso 2: Extraer datos validados
+    puntuacion = datos_validados['puntuacion']
+    comentario = datos_validados.get('comentario')
+
+    # Paso 3: Persistir la calificación inmutable vinculada relacionalmente a la reparación
+    fecha_actual = django_timezone.now().date()
+    calificacion = Calificacion.objects.create(
+        puntuacion=puntuacion,
+        comentario=comentario,
+        fecha=fecha_actual,
+        id_reparacion=reparacion
+    )
+
+    # Paso 4: Registro de auditoría inmutable en LogSistema
+    email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
+    comentario_log = f"'{calificacion.comentario}'" if calificacion.comentario else "Sin comentario"
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Calificar Servicio Técnico (CU-19)",
+        detalle=(
+            f"El cliente {email_cliente} emitió una calificación de {calificacion.puntuacion}/5 estrellas "
+            f"para la Orden de Reparación #{reparacion.id_reparacion}. Comentario: {comentario_log}"
+        )[:1000],
+        tipo="AUDITORIA_CALIDAD",
+        modulo_origen="workshop_app",
+        tabla_afectada="calificacion",
+        id_registro_afectado=str(calificacion.id_calificacion),
+        id_usuario=usuario_cliente if hasattr(usuario_cliente, 'pk') else None
+    )
+
+    return calificacion
+
+
+# ==============================================================================
+# CU-72 & CU-73: INTELIGENCIA DE NEGOCIOS Y REPORTES BI (SERVICES)
+# ==============================================================================
+
+@transaction.atomic
+def generar_auditoria_reporte_conversion(
+    *,
+    usuario_admin: Usuario,
+    filtros_validados: dict
+) -> dict:
+    """
+    CU-72: Generar Reporte de Conversión de Presupuestos (Capa Transaccional / Auditoría).
+    Ejecuta el cálculo estadístico macro y micro a través del selector y sienta
+    la traza de auditoría inmutable en LogSistema.
+    """
+    from workshop_app.selectors import calcular_reporte_conversion
+    from core_app.models import LogSistema
+
+    # Invocación al selector especializado
+    resultado = calcular_reporte_conversion(
+        fecha_inicio=filtros_validados['fecha_inicio'],
+        fecha_fin=filtros_validados['fecha_fin'],
+        id_categoria=filtros_validados.get('id_categoria'),
+        id_medio_pago=filtros_validados.get('id_medio_pago')
+    )
+
+    # Asiento de auditoría inmutable
+    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
+    f_ini = filtros_validados['fecha_inicio']
+    f_fin = filtros_validados['fecha_fin']
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Generar Reporte de Conversión (CU-72)",
+        detalle=f"El administrador {id_admin} generó el Reporte de Conversión de Presupuestos para el periodo {f_ini} al {f_fin}.",
+        tipo="REPORTE_BI",
+        modulo_origen="workshop_app",
+        tabla_afectada="diagnostico",
+        id_registro_afectado="0",
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return resultado
+
+
+@transaction.atomic
+def generar_auditoria_reporte_eficiencia(
+    *,
+    usuario_admin: Usuario,
+    filtros_validados: dict
+) -> list[dict]:
+    """
+    CU-73: Generar Reporte de Demanda y Eficiencia por Categoría (Capa Transaccional / Auditoría).
+    Ejecuta el cálculo de volumen, facturación y eficiencia temporal vía selector y
+    registra el asiento de auditoría en LogSistema.
+    """
+    from workshop_app.selectors import calcular_reporte_eficiencia
+    from core_app.models import LogSistema
+
+    # Invocación al selector especializado
+    resultado = calcular_reporte_eficiencia(
+        fecha_inicio=filtros_validados['fecha_inicio'],
+        fecha_fin=filtros_validados['fecha_fin'],
+        id_categoria=filtros_validados.get('id_categoria'),
+        id_tipo_dispositivo=filtros_validados.get('id_tipo_dispositivo'),
+        id_medio_pago=filtros_validados.get('id_medio_pago')
+    )
+
+    # Asiento de auditoría inmutable
+    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
+    f_ini = filtros_validados['fecha_inicio']
+    f_fin = filtros_validados['fecha_fin']
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Generar Reporte de Demanda y Eficiencia (CU-73)",
+        detalle=f"El administrador {id_admin} generó el Reporte de Demanda y Eficiencia para el periodo {f_ini} al {f_fin}.",
+        tipo="REPORTE_BI",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado="0",
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return resultado
+
+
+# ==============================================================================
+# CU-74: GENERAR REPORTE DE PRODUCTIVIDAD Y CARGA DE TRABAJO TÉCNICA
+# ==============================================================================
+
+@transaction.atomic
+def generar_auditoria_productividad(
+    *,
+    usuario_admin: Usuario,
+    filtros_validados: dict
+) -> list[dict]:
+    """
+    CU-74: Generar Reporte de Productividad y Carga de Trabajo Técnica (Capa Transaccional / Auditoría).
+    Invoca el selector de cálculo de indicadores de productividad, disciplina operativa y carga actual,
+    y asienta el evento de auditoría en LogSistema.
+    """
+    from workshop_app.selectors import calcular_reporte_productividad
+    from core_app.models import LogSistema
+
+    # Invocación al selector
+    resultado = calcular_reporte_productividad(
+        fecha_inicio=filtros_validados['fecha_inicio'],
+        fecha_fin=filtros_validados['fecha_fin'],
+        id_tecnico=filtros_validados.get('id_tecnico')
+    )
+
+    # Asiento de auditoría inmutable
+    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
+    f_ini = filtros_validados['fecha_inicio']
+    f_fin = filtros_validados['fecha_fin']
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Generar Reporte de Productividad (CU-74)",
+        detalle=f"El administrador {id_admin} generó el Reporte de Productividad y Carga de Trabajo Técnica para el periodo {f_ini} al {f_fin}.",
+        tipo="REPORTE_BI",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado="0",
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return resultado
+
+
+# ==============================================================================
+# CU-76: GENERAR REPORTE DE SATISFACCIÓN Y CALIDAD
+# ==============================================================================
+
+@transaction.atomic
+def generar_auditoria_reporte_satisfaccion(
+    *,
+    usuario_admin: Usuario,
+    filtros_validados: dict
+) -> dict:
+    """
+    CU-76: Generar Reporte de Satisfacción y Calidad (Capa Transaccional / Auditoría).
+    Invoca el selector de cálculo de indicadores de satisfacción, promedios por técnico,
+    por categoría y comentarios, y asienta el evento de auditoría en LogSistema.
+    """
+    from workshop_app.selectors import calcular_reporte_satisfaccion
+    from core_app.models import LogSistema
+
+    resultado = calcular_reporte_satisfaccion(
+        fecha_inicio=filtros_validados['fecha_inicio'],
+        fecha_fin=filtros_validados['fecha_fin'],
+        id_tecnico=filtros_validados.get('id_tecnico'),
+        id_categoria=filtros_validados.get('id_categoria'),
+        rango_estrellas_min=filtros_validados.get('rango_estrellas_min'),
+        rango_estrellas_max=filtros_validados.get('rango_estrellas_max')
+    )
+
+    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
+    f_ini = filtros_validados['fecha_inicio']
+    f_fin = filtros_validados['fecha_fin']
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now().time(),
+        accion="Generar Reporte de Satisfacción y Calidad (CU-76)",
+        detalle=f"El administrador {id_admin} generó el Reporte de Satisfacción y Calidad (CSAT) para el periodo {f_ini} al {f_fin}.",
+        tipo="REPORTE_BI",
+        modulo_origen="workshop_app",
+        tabla_afectada="calificacion",
+        id_registro_afectado="0",
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return resultado
+
+
+
+
+
+
 

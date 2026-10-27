@@ -240,3 +240,70 @@ class ActualizarCoberturaZonasInputSerializer(serializers.Serializer):
         allow_empty=False,
         error_messages={'required': 'Debe enviar la lista de zonas modificadas.', 'empty': 'La lista no puede estar vacía.'}
     )
+
+
+class FiltroPaisesInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de países."""
+    todas = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        todas_raw = attrs.get('todas', '')
+        return {'solo_habilitados': str(todas_raw).strip().lower() not in ['true', '1']}
+
+
+class FiltroProvinciasInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de provincias."""
+    pais_id = serializers.IntegerField(required=False, allow_null=True)
+    id_pais = serializers.IntegerField(required=False, allow_null=True)
+    todas = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        pid = attrs.get('pais_id') if attrs.get('pais_id') is not None else attrs.get('id_pais')
+        todas_raw = attrs.get('todas', '')
+        return {
+            'pais_id': pid,
+            'solo_habilitadas': str(todas_raw).strip().lower() not in ['true', '1']
+        }
+
+
+class FiltroCiudadesInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de ciudades."""
+    provincia_id = serializers.IntegerField(required=False, allow_null=True)
+    id_provincia = serializers.IntegerField(required=False, allow_null=True)
+    todas = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        pvid = attrs.get('provincia_id') if attrs.get('provincia_id') is not None else attrs.get('id_provincia')
+        todas_raw = attrs.get('todas', '')
+        return {
+            'provincia_id': pvid,
+            'solo_habilitadas': str(todas_raw).strip().lower() not in ['true', '1']
+        }
+
+
+class FiltroMisDireccionesInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de mis direcciones."""
+    todas = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        todas_raw = attrs.get('todas', '')
+        return {'todas': str(todas_raw).strip().lower() in ['true', '1']}
+
+
+class FiltroZonasCoberturaInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de zonas de cobertura (CU-59)."""
+    nivel = serializers.CharField(required=False, allow_blank=True)
+    nivel_taxonomico = serializers.CharField(required=False, allow_blank=True)
+    padre_id = serializers.IntegerField(required=False, allow_null=True)
+    estado = serializers.CharField(required=False, allow_blank=True)
+    busqueda = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        nivel = (attrs.get('nivel') or attrs.get('nivel_taxonomico') or 'PAIS').upper()
+        return {
+            'nivel': nivel,
+            'padre_id': attrs.get('padre_id'),
+            'estado': attrs.get('estado') or None,
+            'busqueda': (attrs.get('busqueda') or '').strip()
+        }
+

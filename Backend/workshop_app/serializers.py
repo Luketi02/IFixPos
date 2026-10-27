@@ -1517,4 +1517,452 @@ class EntregarDispositivoInputSerializer(serializers.Serializer):
         return attrs
 
 
+# ==============================================================================
+# CU-19: CALIFICAR SERVICIO TÉCNICO (SERIALIZERS)
+# ==============================================================================
+
+class CalificarReparacionInputSerializer(serializers.Serializer):
+    """
+    CU-19: La Aduana Comercial para Calificar Servicio Técnico.
+    Valida que la puntuación sea obligatoria y numérica entre 1 y 5 estrellas,
+    y recibe un comentario cualitativo opcional de texto libre.
+    """
+    puntuacion = serializers.IntegerField(
+        required=True,
+        error_messages={
+            'required': 'La puntuación debe ser un valor entre 1 y 5.',
+            'null': 'La puntuación debe ser un valor entre 1 y 5.',
+            'invalid': 'La puntuación debe ser un valor entre 1 y 5.'
+        }
+    )
+    comentario = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=1000
+    )
+
+    def validate_puntuacion(self, value):
+        if value is None or not (1 <= value <= 5):
+            raise serializers.ValidationError("La puntuación debe ser un valor entre 1 y 5.")
+        return value
+
+    def validate(self, attrs):
+        puntuacion = attrs.get('puntuacion')
+        if puntuacion is None or not (1 <= puntuacion <= 5):
+            raise serializers.ValidationError("La puntuación debe ser un valor entre 1 y 5.")
+
+        comentario = attrs.get('comentario')
+        if comentario is not None:
+            comentario_limpio = comentario.strip()
+            attrs['comentario'] = comentario_limpio if comentario_limpio else None
+        else:
+            attrs['comentario'] = None
+
+        return attrs
+
+
+class ReparacionDispositivoCalificacionSerializer(serializers.Serializer):
+    """
+    Datos anidados de la reparación y del dispositivo para contextualizar la calificación (CU-51).
+    """
+    id_reparacion = serializers.IntegerField(read_only=True)
+    etapa = serializers.CharField(read_only=True)
+    marca = serializers.SerializerMethodField()
+    modelo = serializers.SerializerMethodField()
+    numero_serie = serializers.SerializerMethodField()
+
+    def get_marca(self, obj):
+        if obj.id_dispositivo and obj.id_dispositivo.id_modelo and obj.id_dispositivo.id_modelo.id_marca:
+            return obj.id_dispositivo.id_modelo.id_marca.nombre
+        return ""
+
+    def get_modelo(self, obj):
+        if obj.id_dispositivo and obj.id_dispositivo.id_modelo:
+            return obj.id_dispositivo.id_modelo.nombre
+        return ""
+
+    def get_numero_serie(self, obj):
+        if obj.id_dispositivo:
+            return obj.id_dispositivo.numero_serie or ""
+        return ""
+
+
+class CalificacionOutputSerializer(serializers.Serializer):
+    """
+    OutputSerializer para exponer los datos inmutables de la calificación emitida (CU-19 y CU-51).
+    Exhibe id_calificacion, puntuacion, comentario ('Sin comentario' si no posee texto),
+    fecha, fecha_creacion y el objeto anidado reparacion con marca y modelo.
+    """
+    id_calificacion = serializers.IntegerField(read_only=True)
+    puntuacion = serializers.IntegerField(read_only=True)
+    comentario = serializers.SerializerMethodField()
+    fecha = serializers.DateField(read_only=True)
+    fecha_creacion = serializers.DateField(source='fecha', read_only=True)
+    id_reparacion = serializers.IntegerField(source='id_reparacion_id', read_only=True)
+    reparacion = serializers.SerializerMethodField()
+
+    def get_comentario(self, obj):
+        if obj.comentario and str(obj.comentario).strip():
+            return str(obj.comentario).strip()
+        return "Sin comentario"
+
+    def get_reparacion(self, obj):
+        if not obj.id_reparacion:
+            return None
+        return ReparacionDispositivoCalificacionSerializer(obj.id_reparacion).data
+
+
+# ==============================================================================
+# CU-72 & CU-73: INTELIGENCIA DE NEGOCIOS Y REPORTES BI (SERIALIZERS)
+# ==============================================================================
+
+class FiltroReportesInputSerializer(serializers.Serializer):
+    """
+    La Aduana (CU-72 & CU-73): Valida parámetros temporales y de segmentación para reportes BI.
+    Exige fecha_inicio y fecha_fin obligatorias, verificando que fecha_inicio <= fecha_fin.
+    """
+    fecha_inicio = serializers.DateField(
+        required=True,
+        error_messages={
+            'required': 'La fecha de inicio es obligatoria.',
+            'invalid': 'Formato de fecha de inicio inválido (AAAA-MM-DD).'
+        }
+    )
+    fecha_fin = serializers.DateField(
+        required=True,
+        error_messages={
+            'required': 'La fecha de fin es obligatoria.',
+            'invalid': 'Formato de fecha de fin inválido (AAAA-MM-DD).'
+        }
+    )
+    id_categoria = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    id_tipo_dispositivo = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    id_medio_pago = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        help_text='Filtro opcional por medio de pago utilizado en la venta asociada.'
+    )
+
+    def validate(self, attrs):
+        fecha_inicio = attrs.get('fecha_inicio')
+        fecha_fin = attrs.get('fecha_fin')
+
+        if fecha_inicio and fecha_fin and fecha_inicio > fecha_fin:
+            raise serializers.ValidationError(
+                "El rango cronológico es inválido: la fecha de inicio no puede ser posterior a la fecha de fin"
+            )
+        return attrs
+
+
+class PeriodoReporteOutputSerializer(serializers.Serializer):
+    """Sub-estructura para exponer el rango temporal analizado."""
+    fecha_inicio = serializers.DateField(read_only=True)
+    fecha_fin = serializers.DateField(read_only=True)
+
+
+class NivelMacroConversionOutputSerializer(serializers.Serializer):
+    """Sub-estructura para los indicadores financieros y de embudo a Nivel Macro (CU-72)."""
+    total_presupuestos = serializers.IntegerField(read_only=True)
+    total_presupuestado = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    total_aceptados = serializers.IntegerField(read_only=True)
+    monto_aceptado = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    tasa_conversion = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    total_rechazados = serializers.IntegerField(read_only=True)
+    lucro_cesante = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    tasa_fuga = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    total_pendientes = serializers.IntegerField(read_only=True)
+    monto_pendiente = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+
+class NivelMicroConversionOutputSerializer(serializers.Serializer):
+    """Sub-estructura para las incidencias y tasa de rechazo por rubro a Nivel Micro (CU-72)."""
+    id_categoria = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_categoria = serializers.CharField(read_only=True)
+    total_presupuestos = serializers.IntegerField(read_only=True)
+    total_aceptados = serializers.IntegerField(read_only=True)
+    total_rechazados = serializers.IntegerField(read_only=True)
+    tasa_rechazo = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+
+
+class ReporteConversionOutputSerializer(serializers.Serializer):
+    """
+    Expediente estructurado consolidado del Reporte de Conversión de Presupuestos (CU-72).
+    """
+    periodo = PeriodoReporteOutputSerializer(read_only=True)
+    macro = NivelMacroConversionOutputSerializer(read_only=True)
+    micro = NivelMicroConversionOutputSerializer(many=True, read_only=True)
+
+
+class CategoriaEficienciaOutputSerializer(serializers.Serializer):
+    """Métricas operativas y de facturación agrupadas por categoría (CU-73)."""
+    id_categoria = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_categoria = serializers.CharField(read_only=True)
+    volumen_reparaciones = serializers.IntegerField(read_only=True)
+    facturacion_mano_obra = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    facturacion_insumos = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    facturacion_bruta = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    tiempo_promedio_dias = serializers.FloatField(read_only=True)
+    tiempo_promedio_horas = serializers.FloatField(read_only=True)
+
+
+class ReporteEficienciaOutputSerializer(serializers.Serializer):
+    """
+    Expediente consolidado del Reporte de Demanda y Eficiencia por Categoría (CU-73).
+    """
+    id_categoria = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_categoria = serializers.CharField(read_only=True)
+    volumen_reparaciones = serializers.IntegerField(read_only=True)
+    facturacion_mano_obra = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    facturacion_insumos = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    facturacion_bruta = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    tiempo_promedio_dias = serializers.FloatField(read_only=True)
+    tiempo_promedio_horas = serializers.FloatField(read_only=True)
+
+
+# ==============================================================================
+# CU-74: GENERAR REPORTE DE PRODUCTIVIDAD Y CARGA DE TRABAJO TÉCNICA
+# ==============================================================================
+
+class FiltroProductividadInputSerializer(serializers.Serializer):
+    """
+    CU-74: Aduana de parámetros para el reporte de productividad y carga técnica.
+    Valida el horizonte cronológico y la segmentación opcional por técnico.
+    """
+    fecha_inicio = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de inicio es requerida.'}
+    )
+    fecha_fin = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de fin es requerida.'}
+    )
+    id_tecnico = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+
+    def validate(self, attrs):
+        fecha_inicio = attrs.get('fecha_inicio')
+        fecha_fin = attrs.get('fecha_fin')
+
+        if fecha_inicio and fecha_fin and fecha_inicio > fecha_fin:
+            raise serializers.ValidationError(
+                "El rango cronológico es inválido: la fecha de inicio no puede ser posterior a la fecha de fin"
+            )
+        return attrs
+
+
+class ReporteProductividadItemOutputSerializer(serializers.Serializer):
+    """
+    CU-74: Estructura individual de indicadores de productividad, disciplina
+    operativa y carga en tiempo real por cada técnico auditado.
+    """
+    id_tecnico = serializers.IntegerField(read_only=True)
+    nombre_completo = serializers.CharField(read_only=True)
+    email = serializers.CharField(read_only=True)
+    carga_tiempo_real = serializers.IntegerField(read_only=True)
+    volumen_finalizadas = serializers.IntegerField(read_only=True)
+    facturacion_mano_obra = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    velocidad_media_dias = serializers.FloatField(read_only=True)
+    velocidad_media_horas = serializers.FloatField(read_only=True)
+    registros_bitacora = serializers.IntegerField(read_only=True)
+
+
+# ==============================================================================
+# CU-76: GENERAR REPORTE DE SATISFACCIÓN Y CALIDAD
+# ==============================================================================
+
+class FiltroSatisfaccionInputSerializer(serializers.Serializer):
+    """
+    CU-76: Aduana de parámetros para el reporte de satisfacción y calidad (CSAT).
+    Captura horizonte temporal obligatorio y filtros opcionales de segmentación
+    por técnico, categoría de reparación y rango de valoración en estrellas.
+    """
+    fecha_inicio = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de inicio es requerida.'}
+    )
+    fecha_fin = serializers.DateField(
+        required=True,
+        error_messages={'required': 'La fecha de fin es requerida.'}
+    )
+    id_tecnico = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    id_categoria = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    rango_estrellas_min = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        max_value=5,
+        error_messages={
+            'min_value': 'La puntuación mínima no puede ser menor a 1 estrella.',
+            'max_value': 'La puntuación mínima no puede superar 5 estrellas.'
+        }
+    )
+    rango_estrellas_max = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        max_value=5,
+        error_messages={
+            'min_value': 'La puntuación máxima no puede ser menor a 1 estrella.',
+            'max_value': 'La puntuación máxima no puede superar 5 estrellas.'
+        }
+    )
+
+    def validate(self, attrs):
+        fecha_inicio = attrs.get('fecha_inicio')
+        fecha_fin = attrs.get('fecha_fin')
+
+        if fecha_inicio and fecha_fin and fecha_inicio > fecha_fin:
+            raise serializers.ValidationError(
+                "El rango cronológico es inválido: la fecha de inicio no puede ser superior a la fecha de fin"
+            )
+
+        min_estrellas = attrs.get('rango_estrellas_min')
+        max_estrellas = attrs.get('rango_estrellas_max')
+        if min_estrellas is not None and max_estrellas is not None:
+            if min_estrellas > max_estrellas:
+                raise serializers.ValidationError(
+                    "El rango de estrellas es inválido: el valor mínimo no puede superar al máximo"
+                )
+
+        return attrs
+
+
+class ComentarioSatisfaccionOutputSerializer(serializers.Serializer):
+    """Reseña y feedback cualitativo emitido por el cliente."""
+    id_calificacion = serializers.IntegerField(read_only=True)
+    puntuacion = serializers.IntegerField(read_only=True)
+    comentario = serializers.CharField(read_only=True, allow_null=True, allow_blank=True)
+    fecha = serializers.DateField(read_only=True)
+    cliente_nombre = serializers.CharField(read_only=True)
+    tecnico_nombre = serializers.CharField(read_only=True)
+    categorias = serializers.ListField(child=serializers.CharField(), read_only=True)
+
+
+class TecnicoSatisfaccionOutputSerializer(serializers.Serializer):
+    """Métricas agregadas de satisfacción y promedio de estrellas por técnico."""
+    id_tecnico = serializers.IntegerField(read_only=True)
+    nombre_completo = serializers.CharField(read_only=True)
+    total_resenas = serializers.IntegerField(read_only=True)
+    promedio_estrellas = serializers.FloatField(read_only=True)
+
+
+class CategoriaSatisfaccionOutputSerializer(serializers.Serializer):
+    """Métricas agregadas de satisfacción y promedio de estrellas por rubro o categoría."""
+    id_categoria = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_categoria = serializers.CharField(read_only=True)
+    total_resenas = serializers.IntegerField(read_only=True)
+    promedio_estrellas = serializers.FloatField(read_only=True)
+
+
+class MatrizCalidadOutputSerializer(serializers.Serializer):
+    """Cruce Técnico x Categoría: promedio de estrellas hiper-específico (CU-76)."""
+    id_tecnico = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_tecnico = serializers.CharField(read_only=True)
+    id_categoria = serializers.IntegerField(read_only=True, allow_null=True)
+    nombre_categoria = serializers.CharField(read_only=True)
+    total_resenas = serializers.IntegerField(read_only=True)
+    promedio_estrellas = serializers.FloatField(read_only=True)
+
+
+class ReporteSatisfaccionOutputSerializer(serializers.Serializer):
+    """
+    Expediente estructurado consolidado del Reporte de Satisfacción y Calidad (CU-76).
+    """
+    periodo = PeriodoReporteOutputSerializer(read_only=True)
+    total_resenas = serializers.IntegerField(read_only=True)
+    csat_global = serializers.FloatField(read_only=True)
+    resenas_criticas_total = serializers.IntegerField(read_only=True)
+    porcentaje_criticas = serializers.FloatField(read_only=True)
+    promedio_por_tecnico = TecnicoSatisfaccionOutputSerializer(many=True, read_only=True)
+    promedio_por_categoria = CategoriaSatisfaccionOutputSerializer(many=True, read_only=True)
+    matriz_calidad = MatrizCalidadOutputSerializer(many=True, read_only=True)
+    comentarios = ComentarioSatisfaccionOutputSerializer(many=True, read_only=True)
+
+
+
+
+
+
+
+
+
+
+class FiltrarMisDispositivosInputSerializer(serializers.Serializer):
+    """CU-34: Valida los parámetros de consulta de 'Filtrar Mis Dispositivos'."""
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    etapa_reparacion = serializers.CharField(required=False, allow_blank=True, max_length=40)
+    id_marca = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    id_modelo = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    ordenar_mas_recientes = serializers.BooleanField(required=False, default=True)
+
+
+class FiltrarDispositivosClienteInputSerializer(serializers.Serializer):
+    """CU-34: Valida los parámetros de consulta del listado de dispositivos del cliente."""
+    buscar = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    marca = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    modelo = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    estado = serializers.CharField(required=False, allow_blank=True, max_length=40)
+
+    def validate_buscar(self, valor):
+        valor = (valor or '').strip()
+        if valor and any(c in valor for c in '<>;{}\\'):
+            raise serializers.ValidationError("El texto de búsqueda contiene caracteres no permitidos.")
+        return valor
+
+
+class FiltroModelosPorMarcaInputSerializer(serializers.Serializer):
+    """Aduana para listar modelos de una marca específica."""
+    id_marca = serializers.IntegerField(required=False, allow_null=True)
+
+
+class FiltroCategoriasReparacionInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de categorías de reparación (CU-64)."""
+    buscar = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    search = serializers.CharField(required=False, allow_blank=True)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True)
+    estado = serializers.CharField(required=False, allow_blank=True)
+    estado_activo = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        texto = attrs.get('buscar') or attrs.get('q') or attrs.get('search') or attrs.get('texto_busqueda') or None
+        estado_activo = attrs.get('estado') or attrs.get('estado_activo') or None
+        return {
+            'texto_busqueda': texto.strip() if texto else None,
+            'estado_activo': estado_activo
+        }
+
+
+class BuscarReparacionEntregaInputSerializer(serializers.Serializer):
+    """Aduana para búsqueda de reparación previa a la entrega (CU-46)."""
+    codigo_seguridad = serializers.CharField(required=False, allow_blank=True)
+    token = serializers.CharField(required=False, allow_blank=True)
+    dni_cliente = serializers.CharField(required=False, allow_blank=True)
+    dni = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        codigo = (attrs.get('codigo_seguridad') or attrs.get('token') or '').strip() or None
+        dni = (attrs.get('dni_cliente') or attrs.get('dni') or '').strip() or None
+        if not codigo and not dni:
+            raise serializers.ValidationError("Debe especificar el código de seguridad o el DNI del cliente.")
+        return {
+            'codigo_seguridad': codigo,
+            'dni_cliente': dni
+        }
 

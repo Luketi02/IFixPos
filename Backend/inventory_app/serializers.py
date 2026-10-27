@@ -149,3 +149,25 @@ class ActualizarStockOutputSerializer(serializers.Serializer):
     motivo = serializers.CharField()
     usado_taller = serializers.BooleanField()
     fecha = serializers.DateField()
+
+
+class FiltrarStockInputSerializer(serializers.Serializer):
+    """CU-35: Valida los parámetros de consulta del filtrado de stock (reemplaza el acceso crudo a query_params)."""
+    buscar = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    nivel_stock = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    nivel = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    id_categoria = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    id_proveedor = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    proposito = serializers.CharField(required=False, allow_blank=True, max_length=30)
+
+    def validate(self, attrs):
+        # Unifica alias para que la vista consuma claves canónicas
+        return {
+            'texto_busqueda': attrs.get('buscar') or attrs.get('texto_busqueda') or None,
+            'nivel_stock': attrs.get('nivel_stock') or attrs.get('nivel') or None,
+            'id_categoria': attrs.get('id_categoria'),
+            'id_proveedor': attrs.get('id_proveedor') or attrs.get('cuit_prov') or None,
+            'proposito': attrs.get('proposito') or None,
+        }

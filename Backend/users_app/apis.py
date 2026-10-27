@@ -311,37 +311,137 @@ class CompletarOnboardingApi(APIView):
 
 
 from users_app.selectors import filtrar_usuarios
-from users_app.serializers import UsuarioFiltradoOutputSerializer
+from users_app.serializers import UsuarioFiltradoOutputSerializer, FiltrarUsuariosInputSerializer
 
 class FiltrarUsuariosApi(APIView):
     permission_classes = [IsAuthenticated] 
 
     def get(self, request):
-        try:
-            dni = request.query_params.get('dni')
-            email = request.query_params.get('email')
-            id_rol = request.query_params.get('id_rol')
-            activo = request.query_params.get('activo')
-            id_pais = request.query_params.get('id_pais')
-            id_provincia = request.query_params.get('id_provincia')
-            id_ciudad = request.query_params.get('id_ciudad')
-
-            if id_rol is not None: id_rol = int(id_rol)
-            if activo is not None: activo = activo.lower() in ['true', '1', 't', 'y']
-            if id_pais is not None: id_pais = int(id_pais)
-            if id_provincia is not None: id_provincia = int(id_provincia)
-            if id_ciudad is not None: id_ciudad = int(id_ciudad)
-
-            usuarios = filtrar_usuarios(
-                dni=dni, email=email, id_rol=id_rol, activo=activo,
-                id_pais=id_pais, id_provincia=id_provincia, id_ciudad=id_ciudad
+        # CU-32: Solo Administradores y Técnicos tienen autorización para consultar/filtrar usuarios
+        rol_codigo = getattr(getattr(request.user, 'id_rol', None), 'codigo', '')
+        rol_nombre = getattr(getattr(request.user, 'id_rol', None), 'nombre_rol', '')
+        es_autorizado = rol_codigo in ['ADMIN', 'TECNICO'] or rol_nombre in ['Administrador', 'Técnico']
+        if not es_autorizado:
+            return Response(
+                {"error": "No posee permisos para buscar o listar usuarios del sistema."},
+                status=status.HTTP_403_FORBIDDEN
             )
-            
-            serializer = UsuarioFiltradoOutputSerializer(usuarios, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-            
-        except ValueError:
-            return Response({"error": "Parámetro numérico inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        input_serializer = FiltrarUsuariosInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+
+        usuarios = filtrar_usuarios(**input_serializer.validated_data)
+        serializer = UsuarioFiltradoOutputSerializer(usuarios, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+from users_app.serializers import ModificarUsuarioAdminInputSerializer
+from users_app.services import modificar_usuario_por_admin
+
+class ModificarUsuarioAdminApi(APIView):
+    """
+    CU-44: Modificar Usuario por Administrador.
+    Permite al administrador modificar datos personales, de contacto, reasignar rol
+    y forzar nueva contraseña de cualquier usuario registrado en el sistema.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol_codigo = getattr(getattr(user, 'id_rol', None), 'codigo', '')
+        rol_nombre = getattr(getattr(user, 'id_rol', None), 'nombre_rol', '')
+        return rol_codigo == 'ADMIN' or rol_nombre == 'Administrador'
+
+    def put(self, request, id_usuario: int):
+        if not self._verificar_admin(request.user):
+            return Response(
+                {"error": "Acceso restringido. Solo los administradores pueden modificar cuentas de usuario."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = ModificarUsuarioAdminInputSerializer(
+            data=request.data,
+            context={'id_usuario_destino': id_usuario}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            usuario_actualizado = modificar_usuario_por_admin(
+                usuario_admin=request.user,
+                id_usuario_destino=id_usuario,
+                datos_validados=serializer.validated_data
+            )
+        except ValidationError as e:
+            return Response(
+                {"detail": e.messages if hasattr(e, 'messages') else str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": "Usuario actualizado correctamente.",
+                "id_usuario": usuario_actualizado.id_usuario,
+                "email": usuario_actualizado.email,
+                "rol": usuario_actualizado.id_rol.nombre_rol if usuario_actualizado.id_rol else None
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def patch(self, request, id_usuario: int):
+        return self.put(request, id_usuario=id_usuario)
+
+
+from users_app.serializers import ModificarRolInputSerializer, RolUsuarioOutputSerializer
+from users_app.services import modificar_rol_sistema
+
+class ModificarRolApi(APIView):
+    """
+    CU-84: Modificar Rol de Sistema por Administrador.
+    Permite modificar la configuración de nombre y descripción de los roles.
+    Requiere autenticación y rol estricto de ADMIN.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol_codigo = getattr(getattr(user, 'id_rol', None), 'codigo', '')
+        rol_nombre = getattr(getattr(user, 'id_rol', None), 'nombre_rol', '')
+        return rol_codigo == 'ADMIN' or rol_nombre == 'Administrador'
+
+    def patch(self, request, id_rol: int):
+        if not self._verificar_admin(request.user):
+            return Response(
+                {"error": "Acceso restringido. Solo los administradores pueden modificar roles del sistema."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = ModificarRolInputSerializer(
+            data=request.data,
+            context={'id_rol': id_rol}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            rol_actualizado = modificar_rol_sistema(
+                usuario_admin=request.user,
+                id_rol=id_rol,
+                datos_validados=serializer.validated_data
+            )
+        except ValidationError as e:
+            return Response(
+                {"detail": e.messages if hasattr(e, 'messages') else str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = RolUsuarioOutputSerializer(rol_actualizado)
+        return Response(
+            {
+                "mensaje": "Rol actualizado correctamente.",
+                "rol": output_serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def put(self, request, id_rol: int):
+        return self.patch(request, id_rol=id_rol)
 
 
 class CambiarSesionDevApi(APIView):

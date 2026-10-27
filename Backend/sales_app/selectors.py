@@ -1,7 +1,8 @@
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List, Tuple, Any
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import QuerySet
-from sales_app.models import Venta, CarritoCompra, CarritoProducto
+from sales_app.models import Venta, CarritoCompra, CarritoProducto, MedioPago
 
 
 def obtener_venta_por_id(id_venta: int) -> Optional[Venta]:
@@ -136,7 +137,10 @@ def buscar_operacion_pendiente_cobro(*, identificador: str):
         raise ObjectDoesNotExist("No se encontraron operaciones pendientes.")
 
     # 1. Buscar en Venta (estado PENDIENTE)
-    venta = Venta.objects.filter(
+    venta = Venta.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario'
+    ).filter(
         Q(estado_venta__iexact='PENDIENTE'),
         Q(codigo_sec__iexact=query_str) | Q(id_usuario__email__iexact=query_str)
     ).order_by('-fecha_venta', '-id_venta').first()
@@ -152,7 +156,11 @@ def buscar_operacion_pendiente_cobro(*, identificador: str):
         'FINALIZADO',
         'FINALIZADA'
     ]
-    reparacion = Reparacion.objects.filter(
+    reparacion = Reparacion.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_dispositivo'
+    ).filter(
         Q(etapa__in=etapas_pendientes) | Q(etapa__icontains='PAGO'),
         Q(codigo_sec__iexact=query_str) | Q(id_usuario__email__iexact=query_str)
     ).order_by('-fecha_inicio', '-id_reparacion').first()
@@ -504,5 +512,373 @@ def filtrar_cobros_y_pagos(
             'total_anulado': str(total_anulado.quantize(Decimal('0.01')))
         }
     }
+
+
+# ==============================================================================
+# CU-70: FILTRAR BENEFICIOS OTORGADOS (SELECTORS)
+# ==============================================================================
+
+def filtrar_beneficios_otorgados(
+    *,
+    usuario_ejecutor: Usuario,
+    filtros: dict
+) -> QuerySet:
+    """
+    CU-70: Filtrar Beneficios Otorgados.
+    Permite al Administrador segmentar y localizar recomendaciones o descuentos generados
+    por el motor predictivo y de fidelización.
+    Criterios: Cliente (ID, DNI o Email), rango de fechas, canal de emisión, porcentaje de descuento y producto.
+    """
+    rol = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
+    codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+    if codigo_rol != 'ADMIN':
+        raise PermissionDenied("Se requiere rol de Administrador para consultar el historial de beneficios otorgados.")
+
+    fecha_desde = filtros.get('fecha_desde')
+    fecha_hasta = filtros.get('fecha_hasta')
+    if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
+        raise ValidationError("La fecha inicial (fecha_desde) no puede ser posterior a la fecha final (fecha_hasta).")
+
+    from sales_app.models import Beneficio
+    qs = Beneficio.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_usuario__id_rol',
+        'id_producto',
+        'id_producto__id_categoria'
+    ).order_by('-fecha', '-id_beneficio')
+
+    id_usuario = filtros.get('id_usuario')
+    if id_usuario:
+        qs = qs.filter(id_usuario_id=id_usuario)
+
+    cliente_query = str(filtros.get('cliente_query') or filtros.get('buscar') or '').strip()
+    if cliente_query:
+        qs = qs.filter(
+            Q(id_usuario__email__icontains=cliente_query) |
+            Q(id_usuario__perfilusuario__nombre__icontains=cliente_query) |
+            Q(id_usuario__perfilusuario__apellido__icontains=cliente_query) |
+            Q(id_usuario__perfilusuario__dni__icontains=cliente_query)
+        )
+
+    if fecha_desde:
+        qs = qs.filter(fecha__gte=fecha_desde)
+    if fecha_hasta:
+        qs = qs.filter(fecha__lte=fecha_hasta)
+
+    enviado_momento_compra = filtros.get('enviado_momento_compra')
+    if enviado_momento_compra is not None:
+        qs = qs.filter(enviado_momento_compra=bool(enviado_momento_compra))
+
+    enviado_durante_carrito = filtros.get('enviado_durante_carrito')
+    if enviado_durante_carrito is not None:
+        qs = qs.filter(enviado_durante_carrito=bool(enviado_durante_carrito))
+
+    por_desc_min = filtros.get('por_desc_min')
+    if por_desc_min is not None:
+        qs = qs.filter(por_desc__gte=por_desc_min)
+
+    por_desc_max = filtros.get('por_desc_max')
+    if por_desc_max is not None:
+        qs = qs.filter(por_desc__lte=por_desc_max)
+
+    id_producto = filtros.get('id_producto')
+    if id_producto:
+        qs = qs.filter(id_producto_id=id_producto)
+
+    return qs
+
+
+def obtener_medio_pago_por_nombre(nombre: str) -> Optional[MedioPago]:
+    """
+    CU-82: Busca si un medio de pago ya existe por su nombre (case-insensitive).
+    Retorna la instancia si existe, o None si no.
+    """
+    if not nombre:
+        return None
+    nombre_limpio = nombre.strip()
+    return MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_limpio).first()
+
+
+def obtener_medio_pago_por_id(id_mediopago: int) -> Optional[MedioPago]:
+    """
+    Recupera un medio de pago por su clave primaria.
+    """
+    try:
+        return MedioPago.objects.get(id_mediopago=id_mediopago)
+    except MedioPago.DoesNotExist:
+        return None
+
+
+def obtener_medio_pago_para_toggle(id_medio_pago: int) -> MedioPago:
+    """
+    CU-83: Recupera una instancia de MedioPago para alternar su estado operativo.
+    Si no existe, levanta ObjectDoesNotExist.
+    """
+    try:
+        return MedioPago.objects.get(id_mediopago=id_medio_pago)
+    except MedioPago.DoesNotExist:
+        raise ObjectDoesNotExist(f"No se encontró el medio de pago con ID {id_medio_pago}.")
+
+
+# ==============================================================================
+# CU-67: REALIZAR VENTA PRESENCIAL (VALIDACIÓN DE PRODUCTOS Y STOCK)
+# ==============================================================================
+
+def validar_productos_para_venta(productos_input: List[dict]) -> Tuple[List[Any], List[str]]:
+    """
+    CU-67: Valida los artículos antes de procesar una venta presencial.
+    - Verifica que todos los IDs existan y estén aptos para la venta.
+    - Evalúa el stock disponible actual e inyecta advertencias si el stock baja a cero o queda en negativo.
+    Retorna la lista de productos y la lista de advertencias de stock.
+    """
+    from django.core.exceptions import ValidationError
+    from catalog_app.models import Producto
+    from inventory_app.selectors import obtener_stock_actual_producto
+
+    if not productos_input:
+        raise ValidationError("Debe incluir al menos un producto para realizar la venta.")
+
+    ids_productos = [item['id_producto'] for item in productos_input]
+    productos_qs = Producto.objects.filter(id_producto__in=ids_productos)
+    dict_prods = {p.id_producto: p for p in productos_qs}
+
+    # Verificar existencia en catálogo
+    faltantes = [pid for pid in ids_productos if pid not in dict_prods]
+    if faltantes:
+        raise ValidationError(f"Uno o más productos no existen en el catálogo: {faltantes}.")
+
+    warnings: List[str] = []
+    cantidades_por_prod = {}
+    for item in productos_input:
+        pid = item['id_producto']
+        cantidades_por_prod[pid] = cantidades_por_prod.get(pid, 0) + int(item.get('cantidad', 1))
+
+    for pid, p in dict_prods.items():
+        if not p.estado or not p.apto_venta:
+            raise ValidationError(f"El producto '{p.nombre}' no se encuentra habilitado para la venta.")
+
+        cant_solicitada = cantidades_por_prod[pid]
+        stock_actual = obtener_stock_actual_producto(pid)
+        stock_restante = stock_actual - cant_solicitada
+
+        if stock_restante <= 0:
+            warnings.append(
+                f"Advertencia de stock: El producto '{p.nombre}' quedará con stock bajo o nulo ({stock_restante} unidades)."
+            )
+
+    return list(dict_prods.values()), warnings
+
+
+# ==============================================================================
+# CU-69: AUDITAR HISTORIAL DE BENEFICIOS Y PROMOCIONES (SELECTORS)
+# ==============================================================================
+
+def obtener_historial_beneficios(*, filtros: Optional[dict] = None) -> QuerySet:
+    """
+    CU-69: Recupera el QuerySet consolidado de beneficios y sugerencias comerciales
+    generados por el motor predictivo y de fidelización.
+    Optimizado estrictamente con select_related para erradicar consultas N+1.
+    """
+    from sales_app.models import Beneficio
+    filtros = filtros or {}
+
+    qs = Beneficio.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_usuario__id_rol',
+        'id_producto',
+        'id_producto__id_categoria'
+    ).order_by('-fecha', '-id_beneficio')
+
+    id_cliente = filtros.get('id_cliente') or filtros.get('id_usuario')
+    if id_cliente:
+        qs = qs.filter(id_usuario_id=id_cliente)
+
+    fecha_desde = filtros.get('fecha_desde')
+    if fecha_desde:
+        qs = qs.filter(fecha__gte=fecha_desde)
+
+    fecha_hasta = filtros.get('fecha_hasta')
+    if fecha_hasta:
+        qs = qs.filter(fecha__lte=fecha_hasta)
+
+    return qs
+
+
+def obtener_beneficio_para_auditoria(id_beneficio: int) -> Any:
+    """
+    CU-69: Recupera el expediente técnico completo de una sugerencia o beneficio específico.
+    Si no existe en el sistema, levanta ObjectDoesNotExist.
+    """
+    from sales_app.models import Beneficio
+
+    beneficio = Beneficio.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_usuario__id_rol',
+        'id_producto',
+        'id_producto__id_categoria'
+    ).filter(id_beneficio=id_beneficio).first()
+
+    if not beneficio:
+        raise ObjectDoesNotExist(f"No se encontró el beneficio con ID {id_beneficio}.")
+    return beneficio
+
+
+# ==============================================================================
+# CU-71: REVOCAR BENEFICIO ACTIVO (SELECTORS)
+# ==============================================================================
+
+def obtener_beneficio_para_revocacion(id_beneficio: int) -> Any:
+    """
+    CU-71: Recupera el beneficio objetivo para validar y procesar su revocación administrativa.
+    Si no existe, levanta ObjectDoesNotExist.
+    """
+    from sales_app.models import Beneficio
+
+    beneficio = Beneficio.objects.select_related(
+        'id_usuario',
+        'id_producto'
+    ).filter(id_beneficio=id_beneficio).first()
+
+    if not beneficio:
+        raise ObjectDoesNotExist(f"No se encontró el beneficio solicitado con ID {id_beneficio}.")
+    return beneficio
+
+
+def beneficio_esta_activo(beneficio: Any) -> bool:
+    """
+    Verifica si un beneficio se encuentra activo y dentro de su ventana temporal de validez.
+    """
+    if not beneficio:
+        return False
+    if beneficio.motivo and '[REVOCADO]' in beneficio.motivo:
+        return False
+    if beneficio.tiempo_disp is not None and beneficio.tiempo_disp <= Decimal('0.00'):
+        return False
+    if not beneficio.fecha or beneficio.tiempo_disp is None:
+        return False
+
+    import math
+    import datetime
+    from django.utils import timezone
+    horas = float(beneficio.tiempo_disp)
+    dias = math.ceil(horas / 24.0)
+    fecha_expiracion = beneficio.fecha + datetime.timedelta(days=dias)
+    return timezone.now().date() <= fecha_expiracion
+
+
+# ==============================================================================
+# CU-75: GENERAR REPORTE DE DISTRIBUCIÓN GEOGRÁFICA Y LOGÍSTICA
+# ==============================================================================
+
+def calcular_reporte_logistico(
+    *,
+    fecha_inicio,
+    fecha_fin,
+    id_provincia: Optional[int] = None,
+    id_ciudad: Optional[int] = None,
+    estado_venta: Optional[str] = None,
+    id_medio_pago: Optional[int] = None
+) -> list[dict]:
+    """
+    CU-75: Generar Reporte de Distribución Geográfica y Logística (Motor Estadístico).
+    Analiza la concentración territorial de las compras bajo modalidad e-commerce (Envío a domicilio),
+    aislando la dirección unívoca sellada en cada venta.
+    Calcula: volumen logístico, recaudación de fletes, facturación bruta y ticket promedio por territorio.
+    - Excepción Paso 5: Si no existen transacciones de envío en el periodo o zona, levanta ValidationError.
+    """
+    from decimal import Decimal
+    from django.db.models import Q
+    from rest_framework.exceptions import ValidationError
+    from sales_app.models import Venta
+
+    ventas_qs = Venta.objects.filter(
+        fecha_venta__gte=fecha_inicio,
+        fecha_venta__lte=fecha_fin,
+        id_direccion_envio__isnull=False
+    ).filter(
+        Q(metodo_entrega__iexact='ENVIO') |
+        Q(metodo_entrega__icontains='ENVIO') |
+        Q(metodo_entrega__icontains='DOMICILIO')
+    )
+
+    if id_provincia is not None:
+        ventas_qs = ventas_qs.filter(id_direccion_envio__id_ciudad__id_provincia_id=id_provincia)
+
+    if id_ciudad is not None:
+        ventas_qs = ventas_qs.filter(id_direccion_envio__id_ciudad_id=id_ciudad)
+
+    if estado_venta:
+        ventas_qs = ventas_qs.filter(estado_venta__iexact=estado_venta.strip())
+
+    if id_medio_pago is not None:
+        # Una venta con varios pagos del mismo medio no debe contarse dos veces
+        ventas_qs = ventas_qs.filter(pago__medio_pago_id=id_medio_pago).distinct()
+
+    ventas_qs = ventas_qs.select_related(
+        'id_direccion_envio',
+        'id_direccion_envio__id_ciudad',
+        'id_direccion_envio__id_ciudad__id_provincia'
+    )
+
+    # Excepción Paso 5: Sin operaciones logísticas en el periodo/zona
+    if not ventas_qs.exists():
+        raise ValidationError("En el periodo o zona consultada no existen ventas bajo modalidad de envío")
+
+    grupos = {}
+    for v in ventas_qs:
+        dir_envio = v.id_direccion_envio
+        ciudad = getattr(dir_envio, 'id_ciudad', None)
+        provincia = getattr(ciudad, 'id_provincia', None) if ciudad else None
+
+        prov_id = getattr(provincia, 'id_provincia', None) if provincia else None
+        prov_nombre = getattr(provincia, 'nombre_provincia', 'Sin Provincia') if provincia else 'Sin Provincia'
+        ciudad_id = getattr(ciudad, 'id_ciudad', None) if ciudad else None
+        ciudad_nombre = getattr(ciudad, 'nombre_ciudad', 'Sin Ciudad') if ciudad else 'Sin Ciudad'
+
+        key = (prov_id, ciudad_id)
+        if key not in grupos:
+            grupos[key] = {
+                "id_provincia": prov_id,
+                "nombre_provincia": prov_nombre,
+                "id_ciudad": ciudad_id,
+                "nombre_ciudad": ciudad_nombre,
+                "volumen_envios": 0,
+                "recaudacion_logistica": Decimal('0.00'),
+                "facturacion_bruta": Decimal('0.00'),
+            }
+
+        costo_env = Decimal(str(v.costo_envio or '0.00'))
+        subtotal = Decimal(str(v.monto_subtotal or '0.00'))
+        total_op = subtotal + costo_env
+
+        grupos[key]["volumen_envios"] += 1
+        grupos[key]["recaudacion_logistica"] += costo_env
+        grupos[key]["facturacion_bruta"] += total_op
+
+    resultado = []
+    for g in grupos.values():
+        vol = g["volumen_envios"]
+        fact = g["facturacion_bruta"]
+        ticket_prom = round(fact / Decimal(str(vol)), 2) if vol > 0 else Decimal('0.00')
+
+        resultado.append({
+            "id_provincia": g["id_provincia"],
+            "nombre_provincia": g["nombre_provincia"],
+            "id_ciudad": g["id_ciudad"],
+            "nombre_ciudad": g["nombre_ciudad"],
+            "volumen_envios": vol,
+            "recaudacion_logistica": g["recaudacion_logistica"],
+            "facturacion_bruta": fact,
+            "ticket_promedio": ticket_prom,
+        })
+
+    # Ordenar por volumen logístico descendente
+    resultado.sort(key=lambda x: x["volumen_envios"], reverse=True)
+    return resultado
+
+
 
 

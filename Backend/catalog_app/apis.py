@@ -61,20 +61,17 @@ class MarcaApi(APIView):
 
     def get(self, request):
         from .selectors import obtener_todas_marcas
-        from .serializers import MarcaOutputSerializer
+        from .serializers import MarcaOutputSerializer, FiltroMarcasInputSerializer
 
-        solo_activos_param = request.query_params.get('solo_activas')
-        solo_activas = solo_activos_param is not None and str(solo_activos_param).lower() in ['true', '1', 'si']
-        estado_param = request.query_params.get('estado') or request.query_params.get('estado_activo')
+        input_serializer = FiltroMarcasInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
-        buscar = (
-            request.query_params.get('buscar')
-            or request.query_params.get('q')
-            or request.query_params.get('search')
-            or request.query_params.get('texto_busqueda')
+        marcas = obtener_todas_marcas(
+            solo_activas=filtros['solo_activas'],
+            texto_busqueda=filtros['texto_busqueda'],
+            estado_activo=filtros['estado_activo']
         )
-
-        marcas = obtener_todas_marcas(solo_activas=solo_activas, texto_busqueda=buscar, estado_activo=estado_param)
         serializer = MarcaOutputSerializer(marcas, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -191,28 +188,17 @@ class ModeloDispositivoApi(APIView):
         self._verificar_admin_o_tecnico(request.user)
 
         from .selectors import filtrar_modelos
-        from .serializers import ModeloDispositivoOutputSerializer
+        from .serializers import ModeloDispositivoOutputSerializer, FiltroModelosInputSerializer
 
-        buscar = (
-            request.query_params.get('buscar')
-            or request.query_params.get('q')
-            or request.query_params.get('search')
-            or request.query_params.get('texto_busqueda')
-        )
-
-        id_marca_param = request.query_params.get('id_marca')
-        id_marca = int(id_marca_param) if id_marca_param and str(id_marca_param).isdigit() else None
-
-        id_tipo_param = request.query_params.get('id_tipo_dispositivo')
-        id_tipo_dispositivo = int(id_tipo_param) if id_tipo_param and str(id_tipo_param).isdigit() else None
-
-        estado_activo_param = request.query_params.get('estado_activo')
+        input_serializer = FiltroModelosInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
         modelos = filtrar_modelos(
-            texto_busqueda=buscar,
-            id_marca=id_marca,
-            id_tipo_dispositivo=id_tipo_dispositivo,
-            estado_activo=estado_activo_param
+            texto_busqueda=filtros['texto_busqueda'],
+            id_marca=filtros['id_marca'],
+            id_tipo_dispositivo=filtros['id_tipo_dispositivo'],
+            estado_activo=filtros['estado_activo']
         )
 
         serializer = ModeloDispositivoOutputSerializer(modelos, many=True)
@@ -309,18 +295,18 @@ class ProductoTiendaListApi(APIView):
     """
     def get(self, request):
         from .selectors import obtener_productos_tienda
-        from .serializers import ProductoTiendaOutputSerializer
+        from .serializers import ProductoTiendaOutputSerializer, FiltroProductosTiendaInputSerializer
 
-        search = request.query_params.get('search') or request.query_params.get('q') or request.query_params.get('texto_busqueda')
-        id_categoria = request.query_params.get('id_categoria') or request.query_params.get('categoria')
-
-        try:
-            id_cat = int(id_categoria) if id_categoria else None
-        except (ValueError, TypeError):
-            id_cat = None
+        input_serializer = FiltroProductosTiendaInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
         usuario = request.user if (request.user and request.user.is_authenticated) else None
-        productos = obtener_productos_tienda(search=search, id_categoria=id_cat, usuario=usuario)
+        productos = obtener_productos_tienda(
+            search=filtros['search'],
+            id_categoria=filtros['id_categoria'],
+            usuario=usuario
+        )
         serializer = ProductoTiendaOutputSerializer(productos, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -531,13 +517,16 @@ class TipoDispositivoApi(APIView):
 
     def get(self, request):
         from .selectors import obtener_todos_tipos_dispositivos
-        from .serializers import TipoDispositivoOutputSerializer
+        from .serializers import TipoDispositivoOutputSerializer, FiltroTiposDispositivosInputSerializer
 
-        solo_activos_param = request.query_params.get('solo_activos')
-        solo_activos = solo_activos_param is not None and str(solo_activos_param).lower() in ['true', '1', 'si']
-        estado_param = request.query_params.get('estado') or request.query_params.get('estado_activo')
+        input_serializer = FiltroTiposDispositivosInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
-        tipos = obtener_todos_tipos_dispositivos(solo_activos=solo_activos, estado_activo=estado_param)
+        tipos = obtener_todos_tipos_dispositivos(
+            solo_activos=filtros['solo_activos'],
+            estado_activo=filtros['estado_activo']
+        )
         serializer = TipoDispositivoOutputSerializer(tipos, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -616,17 +605,16 @@ class CategoriaProductoApi(APIView):
         self._verificar_admin(request.user)
 
         from .selectors import filtrar_categorias_producto
-        from .serializers import CategoriaProductoOutputSerializer
+        from .serializers import CategoriaProductoOutputSerializer, FiltroCategoriasProductoInputSerializer
 
-        buscar = (
-            request.query_params.get('buscar')
-            or request.query_params.get('q')
-            or request.query_params.get('search')
-            or request.query_params.get('texto_busqueda')
+        input_serializer = FiltroCategoriasProductoInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
+
+        categorias = filtrar_categorias_producto(
+            texto_busqueda=filtros['texto_busqueda'],
+            estado_activo=filtros['estado_activo']
         )
-        estado_param = request.query_params.get('estado') or request.query_params.get('estado_activo')
-
-        categorias = filtrar_categorias_producto(texto_busqueda=buscar, estado_activo=estado_param)
         serializer = CategoriaProductoOutputSerializer(categorias, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 

@@ -18,7 +18,13 @@ from .apis import (
     CambiarEstadoReparacionApi,
     CategoriaReparacionApi,
     CategoriaReparacionEstadoApi,
-    EntregarDispositivoApi
+    EntregarDispositivoApi,
+    CalificarReparacionApi,
+    ConsultarCalificacionApi,
+    ReporteConversionApi,
+    ReporteEficienciaApi,
+    ReporteProductividadApi,
+    ReporteSatisfaccionApi
 )
 
 app_name = 'workshop_app'
@@ -73,6 +79,26 @@ urlpatterns = [
 
     # CU-46: Entregar Dispositivo
     path('reparaciones/entregar/', EntregarDispositivoApi.as_view(), name='entregar-dispositivo'),
+
+    # CU-19: Calificar Servicio Técnico
+    path('reparaciones/<int:id_reparacion>/calificar/', CalificarReparacionApi.as_view(), name='calificar-reparacion'),
+
+    # CU-51: Consultar Calificación de Servicio
+    path('reparaciones/<int:id_reparacion>/calificacion/', ConsultarCalificacionApi.as_view(), name='consultar-calificacion'),
+
+    # CU-72: Generar Reporte de Conversión de Presupuestos
+    path('reportes/conversion/', ReporteConversionApi.as_view(), name='reporte-conversion'),
+
+    # CU-73: Generar Reporte de Demanda y Eficiencia por Categoría
+    path('reportes/eficiencia/', ReporteEficienciaApi.as_view(), name='reporte-eficiencia'),
+
+    # CU-74: Generar Reporte de Productividad y Carga de Trabajo Técnica
+    path('reportes/productividad/', ReporteProductividadApi.as_view(), name='reporte-productividad'),
+
+    # CU-76: Generar Reporte de Satisfacción y Calidad
+    path('reportes/satisfaccion/', ReporteSatisfaccionApi.as_view(), name='reporte-satisfaccion'),
 ]
+
+
 
 

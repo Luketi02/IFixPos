@@ -47,7 +47,10 @@ class PaisesListApi(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        solo_habilitados = request.query_params.get('todas', '').lower() not in ['true', '1']
+        from .serializers import FiltroPaisesInputSerializer
+        input_serializer = FiltroPaisesInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        solo_habilitados = input_serializer.validated_data['solo_habilitados']
         paises = obtener_paises(solo_habilitados=solo_habilitados)
         serializer = PaisOutputSerializer(paises, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -62,8 +65,13 @@ class ProvinciasListApi(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, id_pais=None):
-        pais_id = id_pais or request.query_params.get('pais_id') or request.query_params.get('id_pais')
-        solo_habilitadas = request.query_params.get('todas', '').lower() not in ['true', '1']
+        from .serializers import FiltroProvinciasInputSerializer
+        input_serializer = FiltroProvinciasInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
+
+        pais_id = id_pais or filtros['pais_id']
+        solo_habilitadas = filtros['solo_habilitadas']
 
         if not pais_id:
             # Si no se especifica país pero se solicita ?todas=true, listar todas las provincias
@@ -96,14 +104,19 @@ class CiudadesListApi(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, id_provincia=None):
-        provincia_id = id_provincia or request.query_params.get('provincia_id') or request.query_params.get('id_provincia')
+        from .serializers import FiltroCiudadesInputSerializer
+        input_serializer = FiltroCiudadesInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
+
+        provincia_id = id_provincia or filtros['provincia_id']
         if not provincia_id:
             return Response(
                 {"error": "Debe especificar el identificador de provincia ('provincia_id')."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         try:
-            solo_habilitadas = request.query_params.get('todas', '').lower() not in ['true', '1']
+            solo_habilitadas = filtros['solo_habilitadas']
             ciudades = obtener_ciudades_por_provincia(int(provincia_id), solo_habilitadas=solo_habilitadas)
         except (ValueError, TypeError):
             return Response(
@@ -130,8 +143,12 @@ class MisDireccionesApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from .serializers import FiltroMisDireccionesInputSerializer
+        input_serializer = FiltroMisDireccionesInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        todas = input_serializer.validated_data['todas']
+
         user_id = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
-        todas = request.query_params.get('todas', '').lower() in ['true', '1']
         direcciones = obtener_direcciones_usuario(user_id, solo_activas=not todas)
 
         serializer = DireccionOutputSerializer(direcciones, many=True)
@@ -357,16 +374,20 @@ class ZonasCoberturaApi(APIView):
     def get(self, request):
         self._verificar_admin(request.user)
 
-        nivel = (request.query_params.get('nivel') or request.query_params.get('nivel_taxonomico') or 'PAIS').upper()
-        padre_id_raw = request.query_params.get('padre_id')
-        padre_id = int(padre_id_raw) if padre_id_raw and str(padre_id_raw).isdigit() else None
-        estado = request.query_params.get('estado')
-        busqueda = request.query_params.get('busqueda', '')
+        from .serializers import FiltroZonasCoberturaInputSerializer
+        input_serializer = FiltroZonasCoberturaInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
+
+        nivel = filtros['nivel']
+        padre_id = filtros['padre_id']
+        estado = filtros['estado']
+        busqueda = filtros['busqueda']
 
         try:
             # Regla de Rendimiento Crítica en API HTTP:
             # En nivel CIUDAD, si no se especifica provincia (padre_id) ni búsqueda, no serializar 152.000 registros
-            if nivel == 'CIUDAD' and not padre_id and not busqueda.strip():
+            if nivel == 'CIUDAD' and not padre_id and not busqueda:
                 return Response([], status=status.HTTP_200_OK)
 
             queryset = filtrar_zonas_cobertura(

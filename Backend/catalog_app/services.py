@@ -604,3 +604,86 @@ def cambiar_estado_categoria_producto(
     )
 
     return categoria
+
+
+@transaction.atomic
+def crear_producto_desde_compra_directa(
+    *,
+    usuario_admin: Any,
+    nombre: str,
+    descripcion: str = '',
+    precio_costo: Any = None,
+    cantidad: int = 1
+) -> Producto:
+    """
+    CU-31 (Extensión a CU-12/13): Alta de Producto en Inventario desde Compra Directa.
+    Crea el producto en el catálogo e inicializa su stock con un MovimientoStock de tipo 'compra'.
+    """
+    from decimal import Decimal
+    from catalog_app.models import Producto, CategoriaProducto, DetalleCategoriaProducto
+    from inventory_app.models import Stock, MovimientoStock
+    from core_app.models import LogSistema
+
+    # Obtener o crear categoría general para compras directas
+    categoria, _ = CategoriaProducto.objects.get_or_create(
+        nombre='Compras Directas',
+        defaults={
+            'descripcion': 'Categoría para artículos e insumos ingresados por compras directas',
+            'estado': True
+        }
+    )
+
+    # Determinar precio de venta estimado
+    precio_base = Decimal(str(precio_costo)) if precio_costo and Decimal(str(precio_costo)) > 0 else Decimal('1.00')
+    precio_venta = (precio_base * Decimal('1.30')).quantize(Decimal('0.01'))
+
+    producto = Producto.objects.create(
+        nombre=str(nombre or 'Artículo Compra Directa')[:255],
+        descripcion=str(descripcion or '')[:1000],
+        precio_venta=precio_venta,
+        estado=True,
+        apto_venta=True,
+        apto_reparacion=True,
+        apto_consumible=True,
+        modulo_automatico=False,
+        id_categoria=categoria
+    )
+
+    DetalleCategoriaProducto.objects.get_or_create(
+        id_producto=producto,
+        id_categoria=categoria
+    )
+
+    stock = Stock.objects.create(
+        id_producto=producto,
+        stock_minimo=0
+    )
+
+    cant = int(cantidad or 0)
+    if cant > 0:
+        MovimientoStock.objects.create(
+            id_stock=stock,
+            tipo_movimiento='compra',
+            cantidad=cant,
+            fecha=timezone.now().date(),
+            motivo=f"Ingreso inicial por Compra Directa #{producto.id_producto} - {producto.nombre[:50]}",
+            uso_taller=False
+        )
+
+    email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Alta de Producto por Compra Directa (CU-31)",
+        detalle=(
+            f"Se generó el producto '{producto.nombre}' (ID: {producto.id_producto}) "
+            f"con {cant} unidades por compra directa registrada por {email_admin}."
+        )[:1000],
+        tipo="ADMINISTRACION",
+        modulo_origen="catalog_app",
+        tabla_afectada="producto",
+        id_registro_afectado=str(producto.id_producto),
+        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
+    )
+
+    return producto
+

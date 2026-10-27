@@ -13,7 +13,9 @@ from users_app.apis import (
     FiltrarUsuariosApi,
     CompletarOnboardingApi,
     VerificarCorreoApi,
-    CambiarSesionDevApi
+    CambiarSesionDevApi,
+    ModificarUsuarioAdminApi,
+    ModificarRolApi
 )
 
 urlpatterns = [
@@ -32,4 +34,10 @@ urlpatterns = [
     path('filtrar/', FiltrarUsuariosApi.as_view(), name='api_filtrar_usuarios'),
     path('onboarding/completar/', CompletarOnboardingApi.as_view(), name='api_completar_onboarding'),
     path('onboarding/', CompletarOnboardingApi.as_view(), name='api_onboarding'),
+    # CU-44: Modificar Usuario por Administrador
+    path('<int:id_usuario>/admin-edit/', ModificarUsuarioAdminApi.as_view(), name='api_admin_modificar_usuario'),
+    path('modificar/<int:id_usuario>/', ModificarUsuarioAdminApi.as_view(), name='api_modificar_usuario_admin'),
+    # CU-84: Modificar Rol
+    path('roles/<int:id_rol>/editar/', ModificarRolApi.as_view(), name='api_modificar_rol'),
+    path('roles/<int:id_rol>/', ModificarRolApi.as_view(), name='api_roles_detalle_edit'),
 ]

@@ -6,6 +6,7 @@ backend/__pycache__/
 backend/**/*.pyc
 backend/.env
 *.sqlite3
+Backend/Documentación/*
 
 # =========================
 # FRONTEND (React & Node)
@@ -15,6 +16,7 @@ Frontend/dist/
 Frontend/.env
 Frontend/.env.local
 Frontend/.env.*.local
+Frontend/Documentación/*
 
 # =========================
 # SISTEMA Y EDITORES

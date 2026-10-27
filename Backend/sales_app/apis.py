@@ -4,10 +4,21 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import ValidationError as DjangoValidationError, ObjectDoesNotExist
 
 from sales_app.serializers import RealizarCompraInputSerializer, VentaOutputSerializer
 from sales_app.services import procesar_compra_virtual
+
+
+def _exigir_rol_cliente(user) -> None:
+    """
+    Seguridad horizontal del carrito: el carrito de compras es un recurso exclusivo
+    del rol CLIENTE. Cualquier otro rol autenticado recibe 403.
+    """
+    rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+    codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+    if codigo_rol != 'CLIENTE':
+        raise PermissionDenied("El carrito de compras es de uso exclusivo para clientes.")
 
 
 class RealizarCompraVirtualApi(APIView):
@@ -59,6 +70,7 @@ class AgregarAlCarritoApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        _exigir_rol_cliente(request.user)
         from sales_app.serializers import AgregarAlCarritoInputSerializer
         from sales_app.services import agregar_producto_a_carrito
 
@@ -97,6 +109,7 @@ class CarritoDetalleApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        _exigir_rol_cliente(request.user)
         from sales_app.selectors import obtener_resumen_carrito
         from sales_app.serializers import CarritoResumenOutputSerializer
 
@@ -112,6 +125,7 @@ class QuitarDelCarritoApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        _exigir_rol_cliente(request.user)
         from sales_app.serializers import QuitarDelCarritoInputSerializer
         from sales_app.services import quitar_producto_de_carrito
 
@@ -172,7 +186,11 @@ class CompletarPagoApi(APIView):
         from workshop_app.models import Reparacion
         from django.core.exceptions import ObjectDoesNotExist
 
-        ident = identificador or request.query_params.get('identificador')
+        from sales_app.serializers import BuscarOperacionCobroInputSerializer
+        input_query = BuscarOperacionCobroInputSerializer(data=request.query_params)
+        input_query.is_valid(raise_exception=True)
+
+        ident = identificador or input_query.validated_data.get('identificador')
         if not ident:
             return Response(
                 {"error": "Debe especificar el código de seguridad o correo del cliente."},
@@ -257,13 +275,16 @@ class CompletarPagoApi(APIView):
         self._verificar_rol_cajero(request.user)
 
 
-        from sales_app.serializers import CompletarPagoInputSerializer
+        from sales_app.serializers import CompletarPagoInputSerializer, BuscarOperacionCobroInputSerializer
         from sales_app.selectors import buscar_operacion_pendiente_cobro
         from sales_app.services import registrar_cobro_operacion
         from django.core.exceptions import ObjectDoesNotExist
 
+        input_query = BuscarOperacionCobroInputSerializer(data=request.query_params)
+        input_query.is_valid(raise_exception=True)
+
         # El identificador puede venir en la URL, query params o en el body
-        ident = identificador or request.query_params.get('identificador') or request.data.get('identificador')
+        ident = identificador or input_query.validated_data.get('identificador') or request.data.get('identificador')
         if not ident:
             return Response(
                 {"error": "Debe especificar el código de seguridad o correo del cliente para localizar la operación."},
@@ -372,5 +393,393 @@ class FiltrarCobrosPagosApi(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ==============================================================================
+# CU-70: FILTRAR BENEFICIOS OTORGADOS
+# ==============================================================================
+
+class FiltrarBeneficiosOtorgadosApi(APIView):
+    """
+    CU-70: Filtrar Beneficios Otorgados.
+    Endpoint exclusivo para Administradores.
+    Permite auditar el historial de recomendaciones, cupones y descuentos otorgados
+    por el motor predictivo y de fidelización comercial.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _exigir_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        if codigo_rol != 'ADMIN':
+            raise PermissionDenied("Se requiere rol de Administrador para consultar el historial de beneficios.")
+
+    def get(self, request):
+        self._exigir_admin(request.user)
+
+        from sales_app.selectors import filtrar_beneficios_otorgados
+        from sales_app.serializers import FiltrarBeneficiosInputSerializer, BeneficioOtorgadoOutputSerializer
+
+        serializer = FiltrarBeneficiosInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        beneficios = filtrar_beneficios_otorgados(
+            usuario_ejecutor=request.user,
+            filtros=serializer.validated_data
+        )
+
+        output = BeneficioOtorgadoOutputSerializer(beneficios, many=True)
+        return Response(output.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-82: REGISTRAR MEDIO DE PAGO
+# ==============================================================================
+
+from sales_app.serializers import RegistrarMedioPagoInputSerializer, MedioPagoOutputSerializer
+from sales_app.services import registrar_o_reactivar_medio_pago
+
+class RegistrarMedioPagoApi(APIView):
+    """
+    CU-82: Registrar medio de pago.
+    Permite al Administrador dar de alta un nuevo canal de cobro o reactivar uno existente.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        return codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
+
+    def post(self, request):
+        if not self._verificar_admin(request.user):
+            return Response(
+                {"error": "Acceso restringido. Solo los administradores pueden registrar o reactivar medios de pago."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = RegistrarMedioPagoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            medio_pago = registrar_o_reactivar_medio_pago(
+                usuario_admin=request.user,
+                datos_validados=serializer.validated_data
+            )
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.message_dict if hasattr(e, 'message_dict') else (e.messages if hasattr(e, 'messages') else str(e))},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = MedioPagoOutputSerializer(medio_pago)
+        return Response(
+            {
+                "mensaje": "Medio de pago registrado con éxito.",
+                "medio_pago": output_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ==============================================================================
+# CU-83: CAMBIAR ESTADO DE MEDIO DE PAGO
+# ==============================================================================
+
+from sales_app.serializers import AlternarEstadoMedioPagoInputSerializer
+from sales_app.services import alternar_estado_medio_pago
+
+class AlternarEstadoMedioPagoApi(APIView):
+    """
+    CU-83: Cambiar estado de medio de pago.
+    Permite al Administrador alternar entre Activo e Inactivo un canal de cobro.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        return codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
+
+    def patch(self, request, id_medio_pago: int):
+        if not self._verificar_admin(request.user):
+            return Response(
+                {"error": "Acceso restringido. Solo los administradores pueden cambiar el estado de los medios de pago."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = AlternarEstadoMedioPagoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            medio_pago = alternar_estado_medio_pago(
+                usuario_admin=request.user,
+                id_medio_pago=id_medio_pago
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.message_dict if hasattr(e, 'message_dict') else (e.messages if hasattr(e, 'messages') else str(e))},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = MedioPagoOutputSerializer(medio_pago)
+        mensaje_exito = (
+            "Medio de pago activado con éxito."
+            if medio_pago.estado else
+            "Medio de pago desactivado con éxito."
+        )
+
+        return Response(
+            {
+                "mensaje": mensaje_exito,
+                "medio_pago": output_serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request, id_medio_pago: int):
+        return self.patch(request, id_medio_pago)
+
+
+# ==============================================================================
+# CU-67: REALIZAR VENTA PRESENCIAL
+# ==============================================================================
+
+from sales_app.serializers import RealizarVentaPresencialInputSerializer
+from sales_app.services import crear_venta_presencial
+
+class RealizarVentaPresencialApi(APIView):
+    """
+    CU-67: Realizar Venta Presencial.
+    Permite al personal operativo de mostrador (Técnico o Administrador)
+    registrar una venta directa de productos, congelando precios y descontando inventario,
+    dejándola en estado PENDIENTE para su cobro y facturación.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_operador(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        return codigo_rol in ['ADMIN', 'TECNICO'] or nombre_rol in ['administrador', 'técnico', 'tecnico']
+
+    def post(self, request):
+        if not self._verificar_operador(request.user):
+            return Response(
+                {"error": "Acceso restringido. Solo el personal de administración o técnico puede registrar ventas presenciales."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = RealizarVentaPresencialInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            venta, warnings = crear_venta_presencial(
+                usuario_cajero=request.user,
+                datos_validados=serializer.validated_data
+            )
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.message_dict if hasattr(e, 'message_dict') else (e.messages if hasattr(e, 'messages') else str(e))},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": "Venta presencial registrada pendiente de cobro",
+                "id_venta": venta.id_venta,
+                "codigo_seguridad": venta.codigo_sec,
+                "monto_total": str(venta.monto_subtotal),
+                "estado_venta": venta.estado_venta,
+                "cliente": venta.id_usuario.email if venta.id_usuario else "Consumidor Final",
+                "advertencias_stock": warnings
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ==============================================================================
+# CU-69: AUDITAR HISTORIAL DE BENEFICIOS Y PROMOCIONES (APIS)
+# ==============================================================================
+
+from sales_app.selectors import obtener_historial_beneficios
+from sales_app.serializers import BeneficioListOutputSerializer, BeneficioDetailOutputSerializer
+from sales_app.services import auditar_inspeccion_beneficio
+
+class ListarHistorialBeneficiosApi(APIView):
+    """
+    CU-69: Auditar Historial de Beneficios y Promociones (Listado Consolidado).
+    Permite al perfil gerencial (Administrador) listar y consultar todas las sugerencias,
+    descuentos y beneficios emitidos por el motor algorítmico de fidelización.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _exigir_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
+            raise PermissionDenied("Se requiere rol de Administrador para auditar el historial de beneficios.")
+
+    def get(self, request):
+        self._exigir_admin(request.user)
+
+        from sales_app.serializers import FiltrarHistorialBeneficiosInputSerializer
+        input_serializer = FiltrarHistorialBeneficiosInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+
+        beneficios = obtener_historial_beneficios(filtros=dict(input_serializer.validated_data))
+        serializer = BeneficioListOutputSerializer(beneficios, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class InspeccionarBeneficioApi(APIView):
+    """
+    CU-69: Inspección de Expediente de Beneficio.
+    Expone el detalle técnico del disparo algorítmico y genera obligatoriamente
+    la traza de auditoría en LogSistema.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _exigir_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
+            raise PermissionDenied("Se requiere rol de Administrador para auditar beneficios.")
+
+    def get(self, request, id_beneficio: int):
+        self._exigir_admin(request.user)
+
+        try:
+            beneficio = auditar_inspeccion_beneficio(
+                usuario_admin=request.user,
+                id_beneficio=id_beneficio
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = BeneficioDetailOutputSerializer(beneficio)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-71: REVOCAR BENEFICIO ACTIVO (APIS)
+# ==============================================================================
+
+from sales_app.serializers import RevocarBeneficioInputSerializer
+from sales_app.services import revocar_beneficio_activo
+
+class RevocarBeneficioApi(APIView):
+    """
+    CU-71: Revocar Beneficio Activo.
+    Permite al Administrador invalidar de forma inmediata un beneficio o descuento,
+    bloqueando su aplicación en futuras transacciones comerciales.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _exigir_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
+            raise PermissionDenied("Se requiere rol de Administrador para revocar beneficios.")
+
+    def patch(self, request, id_beneficio: int):
+        self._exigir_admin(request.user)
+
+        serializer = RevocarBeneficioInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            beneficio = revocar_beneficio_activo(
+                usuario_admin=request.user,
+                id_beneficio=id_beneficio,
+                datos_validados=serializer.validated_data
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except DjangoValidationError as e:
+            return Response(
+                {"detail": e.message_dict if hasattr(e, 'message_dict') else (e.messages if hasattr(e, 'messages') else str(e))},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": "Beneficio revocado exitosamente.",
+                "id_beneficio": beneficio.id_beneficio,
+                "estado": "REVOCADO",
+                "motivo_anulacion": serializer.validated_data.get('motivo_anulacion', 'Sin justificación ingresada')
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request, id_beneficio: int):
+        return self.patch(request, id_beneficio)
+
+
+# ==============================================================================
+# CU-75: GENERAR REPORTE DE DISTRIBUCIÓN GEOGRÁFICA Y LOGÍSTICA (APIS)
+# ==============================================================================
+
+class ReporteLogisticaApi(APIView):
+    """
+    CU-75: Generar Reporte de Distribución Geográfica y Logística.
+    Permite a la gerencia visualizar la concentración territorial de las ventas bajo modalidad e-commerce,
+    analizando el volumen logístico, la recaudación de fletes y el ticket promedio por territorio.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _exigir_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
+            raise PermissionDenied("Se requiere rol de Administrador para consultar el reporte logístico.")
+
+    def get(self, request):
+        self._exigir_admin(request.user)
+
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from sales_app.serializers import (
+            FiltroLogisticaInputSerializer,
+            ReporteLogisticaItemOutputSerializer
+        )
+        from sales_app.services import generar_auditoria_logistica
+
+        serializer = FiltroLogisticaInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = generar_auditoria_logistica(
+                usuario_admin=request.user,
+                filtros_validados=serializer.validated_data
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReporteLogisticaItemOutputSerializer(resultado, many=True)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
 
 

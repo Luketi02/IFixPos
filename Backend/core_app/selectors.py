@@ -1,7 +1,7 @@
 from typing import Any
 from typing import Optional
 from django.db.models import QuerySet
-from core_app.models import ConfiguracionSistema, Notificacion
+from core_app.models import ConfiguracionSistema, Notificacion, CopiaSeguridad
 
 def obtener_configuracion_texto(clave: str, fallback: str = "noreply@ifixpos.com") -> str:
     """Obtiene un valor de texto de ConfiguracionSistema. Fail-safe a fallback."""
@@ -134,3 +134,111 @@ def obtener_todas_las_configuraciones() -> dict:
         for config in configuraciones
         if config.clave is not None
     }
+
+
+# ==============================================================================
+# CU-40: FILTRAR LOGS DE AUDITORÍA (SELECTORS)
+# ==============================================================================
+
+def filtrar_logs_auditoria(
+    *,
+    usuario_ejecutor: Any,
+    filtros: dict
+) -> QuerySet:
+    """
+    CU-40: Filtrar Logs de Auditoría.
+    Permite al Administrador auditar la trazabilidad de eventos del sistema.
+    Criterios: Usuario responsable, tipo de acción, módulo origen, tabla afectada y búsqueda de texto.
+    """
+    from rest_framework.exceptions import PermissionDenied
+    from django.db.models import Q
+    from core_app.models import LogSistema
+
+    rol = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
+    codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+    if codigo_rol != 'ADMIN':
+        raise PermissionDenied("Se requiere rol de Administrador para auditar los registros de log del sistema.")
+
+    qs = LogSistema.objects.select_related(
+        'id_usuario',
+        'id_usuario__id_rol',
+        'id_usuario__perfilusuario'
+    ).order_by('-id_log')
+
+    texto_busqueda = str(filtros.get('buscar') or filtros.get('texto_busqueda') or '').strip()
+    if texto_busqueda:
+        qs = qs.filter(
+            Q(accion__icontains=texto_busqueda) |
+            Q(detalle__icontains=texto_busqueda) |
+            Q(id_registro_afectado__icontains=texto_busqueda)
+        )
+
+    tipo = str(filtros.get('tipo') or '').strip()
+    if tipo:
+        qs = qs.filter(tipo__iexact=tipo)
+
+    modulo_origen = str(filtros.get('modulo_origen') or '').strip()
+    if modulo_origen:
+        qs = qs.filter(modulo_origen__iexact=modulo_origen)
+
+    tabla_afectada = str(filtros.get('tabla_afectada') or '').strip()
+    if tabla_afectada:
+        qs = qs.filter(tabla_afectada__iexact=tabla_afectada)
+
+    id_usuario = filtros.get('id_usuario')
+    if id_usuario:
+        qs = qs.filter(id_usuario_id=id_usuario)
+
+    usuario_query = str(filtros.get('usuario_query') or '').strip()
+    if usuario_query:
+        qs = qs.filter(
+            Q(id_usuario__email__icontains=usuario_query) |
+            Q(id_usuario__perfilusuario__nombre__icontains=usuario_query) |
+            Q(id_usuario__perfilusuario__apellido__icontains=usuario_query) |
+            Q(id_usuario__perfilusuario__dni__icontains=usuario_query)
+        )
+
+    return qs
+
+
+# ==============================================================================
+# CU-22 & CU-23: COPIAS DE SEGURIDAD Y RESTAURACIÓN (SELECTORS)
+# ==============================================================================
+
+def listar_copias_seguridad() -> QuerySet:
+    """
+    CU-22 / CU-23: Retorna todas las copias de seguridad registradas en el sistema,
+    ordenadas cronológicamente de forma descendente (las más recientes primero).
+    Optimizado con select_related para evitar el problema N+1 queries.
+    """
+    return CopiaSeguridad.objects.select_related(
+        'id_usuario',
+        'id_usuario__perfilusuario',
+        'id_usuario__id_rol'
+    ).order_by('-id_backup')
+
+
+def obtener_copia_seguridad(id_backup: int) -> CopiaSeguridad:
+    """
+    CU-23: Obtiene una instancia específica de CopiaSeguridad por su ID.
+    Valida la existencia del registro en la base de datos y la presencia
+    física del archivo en el sistema de archivos del servidor.
+    Levanta NotFound si no existe el registro, o ValidationError si el archivo físico no está.
+    """
+    import os
+    from rest_framework.exceptions import NotFound, ValidationError
+
+    try:
+        copia = CopiaSeguridad.objects.select_related(
+            'id_usuario',
+            'id_usuario__perfilusuario',
+            'id_usuario__id_rol'
+        ).get(pk=id_backup)
+    except CopiaSeguridad.DoesNotExist:
+        raise NotFound(f"No existe ninguna copia de seguridad con ID {id_backup}.")
+
+    if not copia.ubicacion_archivo or not os.path.exists(copia.ubicacion_archivo):
+        raise ValidationError(f"El archivo físico de respaldo no existe en la ruta configurada: {copia.ubicacion_archivo}")
+
+    return copia
+

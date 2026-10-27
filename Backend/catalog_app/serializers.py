@@ -637,3 +637,97 @@ class TipoDispositivoCreateInputSerializer(serializers.Serializer):
             raise serializers.ValidationError("El tipo de dispositivo ya se encuentra registrado")
 
         return val
+
+
+class FiltroMarcasInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de marcas."""
+    solo_activas = serializers.CharField(required=False, allow_blank=True)
+    estado = serializers.CharField(required=False, allow_blank=True)
+    estado_activo = serializers.CharField(required=False, allow_blank=True)
+    buscar = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    search = serializers.CharField(required=False, allow_blank=True)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        solo_act = attrs.get('solo_activas')
+        solo_activas = solo_act is not None and str(solo_act).strip().lower() in ['true', '1', 'si']
+        estado_activo = attrs.get('estado') or attrs.get('estado_activo') or None
+        texto = attrs.get('buscar') or attrs.get('q') or attrs.get('search') or attrs.get('texto_busqueda') or None
+        return {
+            'solo_activas': solo_activas,
+            'estado_activo': estado_activo,
+            'texto_busqueda': texto.strip() if texto else None
+        }
+
+
+class FiltroModelosInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de modelos (CU-81)."""
+    buscar = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    search = serializers.CharField(required=False, allow_blank=True)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True)
+    id_marca = serializers.IntegerField(required=False, allow_null=True)
+    id_tipo_dispositivo = serializers.IntegerField(required=False, allow_null=True)
+    estado_activo = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        texto = attrs.get('buscar') or attrs.get('q') or attrs.get('search') or attrs.get('texto_busqueda') or None
+        return {
+            'texto_busqueda': texto.strip() if texto else None,
+            'id_marca': attrs.get('id_marca'),
+            'id_tipo_dispositivo': attrs.get('id_tipo_dispositivo'),
+            'estado_activo': attrs.get('estado_activo') or None
+        }
+
+
+class FiltroProductosTiendaInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta del catálogo público de productos."""
+    search = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True)
+    id_categoria = serializers.IntegerField(required=False, allow_null=True)
+    categoria = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        texto = attrs.get('search') or attrs.get('q') or attrs.get('texto_busqueda') or None
+        id_cat = attrs.get('id_categoria') if attrs.get('id_categoria') is not None else attrs.get('categoria')
+        return {
+            'search': texto.strip() if texto else None,
+            'id_categoria': id_cat
+        }
+
+
+class FiltroTiposDispositivosInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de tipos de dispositivo."""
+    solo_activos = serializers.CharField(required=False, allow_blank=True)
+    estado = serializers.CharField(required=False, allow_blank=True)
+    estado_activo = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        solo_act = attrs.get('solo_activos')
+        solo_activos = solo_act is not None and str(solo_act).strip().lower() in ['true', '1', 'si']
+        estado_activo = attrs.get('estado') or attrs.get('estado_activo') or None
+        return {
+            'solo_activos': solo_activos,
+            'estado_activo': estado_activo
+        }
+
+
+class FiltroCategoriasProductoInputSerializer(serializers.Serializer):
+    """Aduana para parámetros de consulta de categorías de producto (CU-39)."""
+    buscar = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+    search = serializers.CharField(required=False, allow_blank=True)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True)
+    estado = serializers.CharField(required=False, allow_blank=True)
+    estado_activo = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        texto = attrs.get('buscar') or attrs.get('q') or attrs.get('search') or attrs.get('texto_busqueda') or None
+        estado_activo = attrs.get('estado') or attrs.get('estado_activo') or None
+        return {
+            'texto_busqueda': texto.strip() if texto else None,
+            'estado_activo': estado_activo
+        }
+

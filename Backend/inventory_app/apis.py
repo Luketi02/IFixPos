@@ -6,7 +6,7 @@ from rest_framework.exceptions import PermissionDenied
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 
 from inventory_app.selectors import filtrar_stock_inventario
-from inventory_app.serializers import ProductoStockOutputSerializer
+from inventory_app.serializers import ProductoStockOutputSerializer, FiltrarStockInputSerializer
 
 
 class FiltrarStockApi(APIView):
@@ -18,26 +18,19 @@ class FiltrarStockApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # 1. Recuperar parámetros de filtrado desde query params
-        texto_busqueda = request.query_params.get('buscar') or request.query_params.get('texto_busqueda')
-        nivel_stock = request.query_params.get('nivel_stock') or request.query_params.get('nivel')
-        id_categoria = request.query_params.get('id_categoria')
-        id_proveedor = request.query_params.get('id_proveedor') or request.query_params.get('cuit_prov')
-        proposito = request.query_params.get('proposito')
-
-        # Convertir id_categoria si fue provisto
-        id_cat_int = None
-        if id_categoria and str(id_categoria).strip().isdigit():
-            id_cat_int = int(id_categoria)
+        # 1. Validar los filtros mediante el InputSerializer (sin acceso crudo a query_params)
+        input_serializer = FiltrarStockInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
         try:
             productos = filtrar_stock_inventario(
                 usuario=request.user,
-                texto_busqueda=texto_busqueda,
-                nivel_stock=nivel_stock,
-                id_categoria=id_cat_int,
-                id_proveedor=id_proveedor,
-                proposito=proposito
+                texto_busqueda=filtros['texto_busqueda'],
+                nivel_stock=filtros['nivel_stock'],
+                id_categoria=filtros['id_categoria'],
+                id_proveedor=filtros['id_proveedor'],
+                proposito=filtros['proposito']
             )
         except (PermissionDenied, DjangoPermissionDenied) as e:
             raise PermissionDenied(str(e))

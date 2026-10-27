@@ -93,7 +93,10 @@ class ModelosPorMarcaListApi(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, id_marca=None):
-        id_marca_param = id_marca or request.query_params.get('id_marca')
+        from workshop_app.serializers import FiltroModelosPorMarcaInputSerializer
+        input_serializer = FiltroModelosPorMarcaInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        id_marca_param = id_marca or input_serializer.validated_data.get('id_marca')
         if not id_marca_param:
             return Response(
                 {"error": "Debe especificar el identificador de marca ('id_marca')."},
@@ -215,14 +218,15 @@ class FiltrarMisDispositivosApi(APIView):
             if not id_usuario_propietario:
                 return Response({"error": "Usuario no autenticado."}, status=status.HTTP_401_UNAUTHORIZED)
 
-            texto_busqueda = request.query_params.get('texto_busqueda')
-            etapa_reparacion = request.query_params.get('etapa_reparacion')
-            id_marca = request.query_params.get('id_marca')
-            id_modelo = request.query_params.get('id_modelo')
-            ordenar_mas_recientes = request.query_params.get('ordenar_mas_recientes', 'true').lower() in ['true', '1']
-
-            if id_marca is not None: id_marca = int(id_marca)
-            if id_modelo is not None: id_modelo = int(id_modelo)
+            from workshop_app.serializers import FiltrarMisDispositivosInputSerializer
+            input_serializer = FiltrarMisDispositivosInputSerializer(data=request.query_params)
+            input_serializer.is_valid(raise_exception=True)
+            filtros = input_serializer.validated_data
+            texto_busqueda = filtros.get('texto_busqueda') or None
+            etapa_reparacion = filtros.get('etapa_reparacion') or None
+            id_marca = filtros.get('id_marca')
+            id_modelo = filtros.get('id_modelo')
+            ordenar_mas_recientes = filtros.get('ordenar_mas_recientes', True)
 
             dispositivos = filtrar_mis_dispositivos(
                 id_usuario_propietario=id_usuario_propietario,
@@ -252,24 +256,17 @@ class MisDispositivosApi(APIView):
 
     def get(self, request):
         _exigir_rol_cliente(request.user)
-        try:
-            id_marca = request.query_params.get('marca')
-            id_modelo = request.query_params.get('modelo')
-            id_marca = int(id_marca) if id_marca else None
-            id_modelo = int(id_modelo) if id_modelo else None
-        except ValueError:
-            raise ValidationError("Los parámetros 'marca' y 'modelo' deben ser números enteros.")
-
-        texto = (request.query_params.get('buscar') or '').strip() or None
-        if texto and (len(texto) > 100 or any(c in texto for c in '<>;{}\\')):
-            raise ValidationError("El texto de búsqueda contiene caracteres no permitidos.")
+        from workshop_app.serializers import FiltrarDispositivosClienteInputSerializer
+        input_serializer = FiltrarDispositivosClienteInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
         dispositivos = filtrar_dispositivos_cliente(
             usuario_cliente=request.user,
-            texto_busqueda=texto,
-            id_marca=id_marca,
-            id_modelo=id_modelo,
-            estado_reparacion=(request.query_params.get('estado') or '').strip() or None
+            texto_busqueda=filtros.get('buscar') or None,
+            id_marca=filtros.get('marca'),
+            id_modelo=filtros.get('modelo'),
+            estado_reparacion=(filtros.get('estado') or '').strip() or None
         )
         data = DispositivoListOutputSerializer(dispositivos, many=True).data
         if not data:
@@ -383,11 +380,16 @@ class CategoriaReparacionApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        rol = _obtener_codigo_rol(request.user)
-        estado = (
-            request.query_params.get('estado')
-            or request.query_params.get('estado_activo')
+        from workshop_app.serializers import (
+            CategoriaReparacionOutputSerializer,
+            FiltroCategoriasReparacionInputSerializer
         )
+        input_serializer = FiltroCategoriasReparacionInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
+
+        rol = _obtener_codigo_rol(request.user)
+        estado = filtros['estado_activo']
 
         if rol == 'CLIENTE':
             if not estado or str(estado).strip().lower() not in ('true', '1', 'activo', 'activa', 'si'):
@@ -396,20 +398,11 @@ class CategoriaReparacionApi(APIView):
             _exigir_rol_taller(request.user)
 
         from workshop_app.selectors import filtrar_categorias_reparacion
-        from workshop_app.serializers import CategoriaReparacionOutputSerializer
 
-        buscar = (
-            request.query_params.get('buscar')
-            or request.query_params.get('q')
-            or request.query_params.get('search')
-            or request.query_params.get('texto_busqueda')
+        categorias = filtrar_categorias_reparacion(
+            texto_busqueda=filtros['texto_busqueda'],
+            estado_activo=estado
         )
-        estado = (
-            request.query_params.get('estado')
-            or request.query_params.get('estado_activo')
-        )
-
-        categorias = filtrar_categorias_reparacion(texto_busqueda=buscar, estado_activo=estado)
         serializer = CategoriaReparacionOutputSerializer(categorias, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -848,18 +841,17 @@ class EntregarDispositivoApi(APIView):
         _exigir_rol_taller(request.user)
 
         from workshop_app.selectors import buscar_reparacion_para_entrega
+        from workshop_app.serializers import BuscarReparacionEntregaInputSerializer
         from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
         from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
         from sales_app.services import _calcular_total_operacion
 
-        codigo = request.query_params.get('codigo_seguridad') or request.query_params.get('token')
-        dni = request.query_params.get('dni_cliente') or request.query_params.get('dni')
+        input_serializer = BuscarReparacionEntregaInputSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+        filtros = input_serializer.validated_data
 
-        if not codigo and not dni:
-            return Response(
-                {"error": "Debe especificar el código de seguridad o el DNI del cliente."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        codigo = filtros['codigo_seguridad']
+        dni = filtros['dni_cliente']
 
         try:
             reparacion = buscar_reparacion_para_entrega(
@@ -991,6 +983,292 @@ class EntregarDispositivoApi(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+# ==============================================================================
+# CU-19: CALIFICAR SERVICIO TÉCNICO (CLIENTE)
+# ==============================================================================
+
+class CalificarReparacionApi(APIView):
+    """
+    CU-19: Calificar Servicio Técnico.
+    Endpoint exclusivo para clientes autenticados.
+    Permite valorar una reparación finalizada ('ENTREGADO') registrando puntuación (1 a 5)
+    y comentario cualitativo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id_reparacion: int):
+        _exigir_rol_cliente(request.user)
+
+        from rest_framework.exceptions import (
+            PermissionDenied as DRFPermissionDenied,
+            NotFound as DRFNotFound,
+            ValidationError as DRFValidationError
+        )
+        from django.core.exceptions import (
+            PermissionDenied as DjangoPermissionDenied,
+            ObjectDoesNotExist,
+            ValidationError as DjangoValidationError
+        )
+        from workshop_app.serializers import (
+            CalificarReparacionInputSerializer,
+            CalificacionOutputSerializer
+        )
+        from workshop_app.services import calificar_reparacion
+
+        serializer = CalificarReparacionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            calificacion = calificar_reparacion(
+                usuario_cliente=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: No posee permisos para calificar esta reparación."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = CalificacionOutputSerializer(calificacion)
+
+        return Response(
+            {
+                "mensaje": "Gracias por su retroalimentación.",
+                "calificacion": output_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ==============================================================================
+# CU-51: CONSULTAR CALIFICACIÓN DE SERVICIO
+# ==============================================================================
+
+class ConsultarCalificacionApi(APIView):
+    """
+    CU-51: Consultar Calificación de Servicio.
+    Endpoint de solo lectura para Clientes, Técnicos y Administradores.
+    Permite visualizar la valoración cualitativa y cuantitativa de una reparación finalizada,
+    aplicando Seguridad Horizontal según el rol del usuario autenticado.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id_reparacion: int):
+        from rest_framework.exceptions import (
+            PermissionDenied as DRFPermissionDenied,
+            NotFound as DRFNotFound,
+            ValidationError as DRFValidationError
+        )
+        from django.core.exceptions import (
+            PermissionDenied as DjangoPermissionDenied,
+            ObjectDoesNotExist,
+            ValidationError as DjangoValidationError
+        )
+        from workshop_app.selectors import obtener_calificacion_reparacion
+        from workshop_app.serializers import CalificacionOutputSerializer
+
+        try:
+            calificacion = obtener_calificacion_reparacion(
+                usuario_ejecutor=request.user,
+                id_reparacion=id_reparacion
+            )
+        except (DRFPermissionDenied, DjangoPermissionDenied) as e:
+            return Response(
+                {"error": str(e) if str(e) else "Acceso Denegado: No posee permisos para consultar esta calificación."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        except (DRFNotFound, ObjectDoesNotExist) as e:
+            msg = getattr(e, 'detail', None) or str(e)
+            return Response(
+                {"error": str(msg)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": msg[0] if isinstance(msg, list) and len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = CalificacionOutputSerializer(calificacion)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ReporteConversionApi(APIView):
+    """
+    CU-72: Generar Reporte de Conversión de Presupuestos.
+    Evalúa la efectividad comercial del taller cruzando la emisión de presupuestos
+    con las respuestas finales del cliente, exponiendo el nivel de aceptación global,
+    el lucro cesante y las tasas de rechazo segmentadas por tipo de servicio.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.serializers import (
+            FiltroReportesInputSerializer,
+            ReporteConversionOutputSerializer
+        )
+        from workshop_app.services import generar_auditoria_reporte_conversion
+
+        serializer = FiltroReportesInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = generar_auditoria_reporte_conversion(
+                usuario_admin=request.user,
+                filtros_validados=serializer.validated_data
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReporteConversionOutputSerializer(resultado)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class ReporteEficienciaApi(APIView):
+    """
+    CU-73: Generar Reporte de Demanda y Eficiencia por Categoría.
+    Evalúa la carga operativa y la viabilidad comercial de los distintos rubros del taller,
+    cruzando volumen de servicios finalizados, facturación bruta y tiempo operativo medio de resolución.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.serializers import (
+            FiltroReportesInputSerializer,
+            ReporteEficienciaOutputSerializer
+        )
+        from workshop_app.services import generar_auditoria_reporte_eficiencia
+
+        serializer = FiltroReportesInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = generar_auditoria_reporte_eficiencia(
+                usuario_admin=request.user,
+                filtros_validados=serializer.validated_data
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReporteEficienciaOutputSerializer(resultado, many=True)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class ReporteProductividadApi(APIView):
+    """
+    CU-74: Generar Reporte de Productividad y Carga de Trabajo Técnica.
+    Evalúa integralmente el rendimiento laboral y la disciplina operativa de los técnicos,
+    así como su nivel actual de asignación en tiempo real para facilitar el balanceo de carga.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.serializers import (
+            FiltroProductividadInputSerializer,
+            ReporteProductividadItemOutputSerializer
+        )
+        from workshop_app.services import generar_auditoria_productividad
+
+        serializer = FiltroProductividadInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = generar_auditoria_productividad(
+                usuario_admin=request.user,
+                filtros_validados=serializer.validated_data
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReporteProductividadItemOutputSerializer(resultado, many=True)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# CU-76: GENERAR REPORTE DE SATISFACCIÓN Y CALIDAD (APIS)
+# ==============================================================================
+
+class ReporteSatisfaccionApi(APIView):
+    """
+    CU-76: Generar Reporte de Satisfacción y Calidad.
+    Permite a la gerencia auditar la percepción de calidad del cliente cruzando las calificaciones
+    recibidas con el personal técnico responsable y los rubros intervenidos.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.serializers import (
+            FiltroSatisfaccionInputSerializer,
+            ReporteSatisfaccionOutputSerializer
+        )
+        from workshop_app.services import generar_auditoria_reporte_satisfaccion
+
+        serializer = FiltroSatisfaccionInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = generar_auditoria_reporte_satisfaccion(
+                usuario_admin=request.user,
+                filtros_validados=serializer.validated_data
+            )
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = ReporteSatisfaccionOutputSerializer(resultado)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+
+
+
 
 
 

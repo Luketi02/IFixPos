@@ -706,4 +706,680 @@ def buscar_reparacion_para_entrega(
     return reparacion
 
 
+# ==============================================================================
+# CU-19: CALIFICAR SERVICIO TÉCNICO (SELECTORS)
+# ==============================================================================
+
+def obtener_reparacion_para_calificar(
+    *,
+    usuario_cliente: Usuario,
+    id_reparacion: int
+) -> Reparacion:
+    """
+    CU-19: Calificar Servicio Técnico.
+    Verifica que la reparación sea apta para recibir una calificación por parte del cliente.
+    Aplica Seguridad Horizontal innegociable:
+    - Verifica que la reparación pertenezca a usuario_cliente.id (control de propiedad).
+      Si no, levanta PermissionDenied.
+    - Valida que la reparación exista (si no, levanta NotFound).
+    - Valida que la etapa de la reparación sea estrictamente 'ENTREGADO' (o 'ENTREGADA').
+      Si no, levanta ValidationError ("Solo puede calificar equipos que ya han sido entregados.").
+    - Valida que la reparación no posea una calificación previa vinculada (unicidad).
+      Si ya existe, levanta ValidationError ("Esta reparación ya fue calificada previamente.").
+    - Optimiza queries mediante select_related para evitar el problema de N+1 queries.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+    from workshop_app.models import Calificacion, Reparacion
+
+    try:
+        reparacion = Reparacion.objects.select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_usuario',
+            'id_usuario__perfilusuario'
+        ).get(pk=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise NotFound(f"No existe ninguna orden de reparación con ID {id_reparacion}.")
+
+    # Control de propiedad horizontal innegociable
+    cliente_id = getattr(usuario_cliente, 'id_usuario', None) or getattr(usuario_cliente, 'id', None)
+    es_propietario = False
+    if reparacion.id_dispositivo and reparacion.id_dispositivo.id_usuario_id == cliente_id:
+        es_propietario = True
+    elif reparacion.id_usuario_id == cliente_id:
+        es_propietario = True
+
+    if not es_propietario:
+        raise PermissionDenied("Acceso Denegado: Esta orden de reparación no pertenece a su cuenta.")
+
+    # Validación de Estado Operativo: Etapa estrictamente 'ENTREGADO'
+    etapa_limpia = (reparacion.etapa or '').strip().upper()
+    if etapa_limpia not in ('ENTREGADO', 'ENTREGADA'):
+        raise ValidationError("Solo puede calificar equipos que ya han sido entregados.")
+
+    # Validación de Unicidad: No poseer calificación previa
+    if Calificacion.objects.filter(id_reparacion=reparacion).exists():
+        raise ValidationError("Esta reparación ya fue calificada previamente.")
+
+    return reparacion
+
+
+# ==============================================================================
+# CU-51: CONSULTAR CALIFICACIÓN DE SERVICIO (SELECTORS)
+# ==============================================================================
+
+def obtener_calificacion_reparacion(
+    *,
+    usuario_ejecutor: Usuario,
+    id_reparacion: int
+) -> Calificacion:
+    """
+    CU-51: Consultar Calificación de Servicio.
+    Recupera el detalle de la valoración emitida para una reparación finalizada,
+    aplicando reglas de seguridad horizontal y vertical según el rol del usuario autenticado:
+    - Cliente: solo puede consultar calificaciones de sus propios dispositivos.
+    - Técnico: solo puede consultar calificaciones de las reparaciones donde fue responsable/asignado.
+    - Administrador: acceso total a cualquier calificación de servicio.
+    - Otros roles / usuarios no autorizados: levanta PermissionDenied.
+
+    Validación de existencia y precondiciones:
+    - Si la reparación aún no posee una calificación emitida o no existe, levanta NotFound
+      con el mensaje "Reparación pendiente de calificación por parte del cliente." (Paso 3 del CU).
+    - Optimiza las consultas mediante select_related sobre la calificación, reparación, dispositivo y modelo.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound
+    from workshop_app.models import Calificacion, Reparacion
+
+    # 1. Recuperar la calificación y los datos relacionales requeridos mediante select_related
+    calificacion = Calificacion.objects.select_related(
+        'id_reparacion',
+        'id_reparacion__id_dispositivo',
+        'id_reparacion__id_dispositivo__id_usuario',
+        'id_reparacion__id_dispositivo__id_modelo',
+        'id_reparacion__id_dispositivo__id_modelo__id_marca',
+        'id_reparacion__id_dispositivo__id_modelo__id_tipo_dispositivo',
+        'id_reparacion__id_usuario',
+        'id_reparacion__id_usuario__perfilusuario'
+    ).filter(id_reparacion_id=id_reparacion).first()
+
+    rol = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
+    codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+    ejecutor_id = getattr(usuario_ejecutor, 'id_usuario', None) or getattr(usuario_ejecutor, 'id', None)
+
+    # 2. Paso 3 (Existencia): Si no existe calificación vinculada a esta reparación
+    if not calificacion:
+        # Validación preventiva de seguridad horizontal si la orden existe
+        reparacion_existente = Reparacion.objects.select_related('id_dispositivo').filter(pk=id_reparacion).first()
+        if reparacion_existente:
+            if codigo_rol == 'CLIENTE' and reparacion_existente.id_dispositivo and reparacion_existente.id_dispositivo.id_usuario_id != ejecutor_id:
+                raise PermissionDenied("Acceso Denegado: No posee permisos para consultar esta calificación.")
+            if codigo_rol == 'TECNICO':
+                tec_id = getattr(reparacion_existente, 'id_tecnico_asignado_id', None) or reparacion_existente.id_usuario_id
+                if tec_id != ejecutor_id:
+                    raise PermissionDenied("Acceso Denegado: No posee permisos para consultar calificaciones de reparaciones no asignadas.")
+        raise NotFound("Reparación pendiente de calificación por parte del cliente.")
+
+    # 3. Paso 2 (Seguridad Horizontal y Control de Acceso por Rol)
+    reparacion = calificacion.id_reparacion
+
+    if codigo_rol == 'CLIENTE':
+        # El cliente debe ser el propietario del dispositivo
+        propietario_id = (
+            reparacion.id_dispositivo.id_usuario_id
+            if reparacion.id_dispositivo
+            else None
+        )
+        if propietario_id != ejecutor_id:
+            raise PermissionDenied("Acceso Denegado: No posee permisos para consultar esta calificación.")
+
+    elif codigo_rol == 'TECNICO':
+        # El técnico debe ser el asignado a la reparación
+        tecnico_id = getattr(reparacion, 'id_tecnico_asignado_id', None) or reparacion.id_usuario_id
+        if tecnico_id != ejecutor_id:
+            raise PermissionDenied("Acceso Denegado: No posee permisos para consultar calificaciones de reparaciones no asignadas.")
+
+    elif codigo_rol == 'ADMIN':
+        # Administrador posee acceso irrestricto
+        pass
+
+    else:
+        raise PermissionDenied("Acceso Denegado: Su rol no cuenta con permisos para consultar calificaciones.")
+
+    return calificacion
+
+
+
+
+def obtener_reparaciones_esperando_insumo_ordenadas(id_producto: int) -> QuerySet[Reparacion]:
+    """
+    CU-55: Retorna las reparaciones en estado de espera de insumos/repuestos
+    ('ESPERANDO_REPUESTOS' o 'ESPERANDO_INSUMOS') que requieran el insumo especificado,
+    ordenadas por fecha de inicio ascendente (FIFO: las más antiguas primero).
+    """
+    estados_espera = [
+        'ESPERANDO_REPUESTOS',
+        'ESPERANDO_INSUMOS',
+        'Esperando Repuestos',
+        'Esperando Insumos',
+    ]
+    return (
+        Reparacion.objects
+        .filter(
+            etapa__in=estados_espera,
+            detalleinsumoreparacion__id_producto_id=id_producto
+        )
+        .prefetch_related('detalleinsumoreparacion_set')
+        .order_by('fecha_inicio', 'id_reparacion')
+        .distinct()
+    )
+
+
+# ==============================================================================
+# CU-72 & CU-73: INTELIGENCIA DE NEGOCIOS Y REPORTES BI (SELECTORS)
+# ==============================================================================
+
+# Etapas que representan una reparación cerrada (Finalizado / Entregado)
+ETAPAS_CIERRE_EXITOSO = [
+    'FINALIZADO', 'FINALIZADA', 'ENTREGADO', 'ENTREGADA', 'Finalizado', 'Entregado'
+]
+# Etapas activas del taller (carga de trabajo en tiempo real)
+ETAPAS_ACTIVAS_TALLER = [
+    'ESPERANDO_DIAGNOSTICO', 'EN_REPARACION', 'ESPERANDO_REPUESTOS', 'ESPERANDO_REPUESTO',
+    'Esperando Diagnóstico', 'En Reparación', 'Esperando Repuesto', 'Esperando Repuestos',
+]
+
+
+def calcular_reporte_conversion(
+    *,
+    fecha_inicio,
+    fecha_fin,
+    id_categoria: Optional[int] = None,
+    id_medio_pago: Optional[int] = None
+) -> dict:
+    """
+    CU-72: Generar Reporte de Conversión de Presupuestos (Embudo de Ventas).
+
+    Nivel Macro (sin agrupar por categoría, la unidad es el Diagnóstico):
+      - Volumen Presupuestado Total = COUNT(idDiagnostico)
+      - Tasa de Aceptación Global (%) = COUNT(Aprobados) / COUNT(Total) * 100
+      - Tasa de Fuga Global (%)       = COUNT(Rechazados) / COUNT(Total) * 100
+      - Lucro Cesante ($)             = SUM(costo_diagnostico) donde la reparación fue Rechazada
+    Nivel Micro (agrupado por Categoría):
+      - Tasa de Rechazo = COUNT(Rechazados cat. X) / COUNT(Total cat. X) * 100
+      - ESTRICTAMENTE COUNT: se prohíbe SUM de montos para no duplicar importes por la
+        relación N:M Reparación-Categoría.
+    Filtros opcionales: id_categoria e id_medio_pago (pagos de la venta asociada).
+    """
+    from decimal import Decimal
+    from django.db.models import Exists, OuterRef
+    from rest_framework.exceptions import ValidationError
+    from workshop_app.models import Diagnostico, BitacoraReparacion
+
+    diagnosticos_qs = Diagnostico.objects.filter(
+        fecha_diagnostico__gte=fecha_inicio,
+        fecha_diagnostico__lte=fecha_fin
+    )
+
+    if id_categoria is not None:
+        diagnosticos_qs = diagnosticos_qs.filter(id_reparacion__categorias__id_categoria=id_categoria)
+
+    if id_medio_pago is not None:
+        diagnosticos_qs = diagnosticos_qs.filter(id_reparacion__id_venta__pago__medio_pago_id=id_medio_pago)
+
+    diagnosticos_qs = (
+        diagnosticos_qs
+        .select_related('id_reparacion')
+        .prefetch_related('id_reparacion__categorias')
+        .annotate(
+            _tiene_rechazo=Exists(
+                BitacoraReparacion.objects.filter(
+                    id_reparacion_id=OuterRef('id_reparacion_id'), estado_alcanzado=8
+                )
+            ),
+            _tiene_aprobacion=Exists(
+                BitacoraReparacion.objects.filter(
+                    id_reparacion_id=OuterRef('id_reparacion_id'), estado_alcanzado=5
+                )
+            ),
+        )
+        .distinct()
+    )
+
+    diagnosticos = list(diagnosticos_qs)
+
+    # Excepción Paso 5: Universo vacío
+    if not diagnosticos:
+        raise ValidationError("No se ha emitido ningún presupuesto en el periodo temporal solicitado")
+
+    etapas_aprobadas = {
+        'EN_REPARACION', 'FINALIZADO', 'FINALIZADA', 'ENTREGADO', 'ENTREGADA',
+        'ESPERANDO_REPUESTOS', 'ESPERANDO_REPUESTO', 'ESPERANDO_INSUMOS', 'REPARADO',
+        'LISTO_PARA_ENTREGA', 'LISTO_PARA_RETIRAR'
+    }
+
+    def _clasificar(diag) -> str:
+        etapa_norm = (diag.id_reparacion.etapa or '').strip().upper().replace(' ', '_')
+        if etapa_norm in ('CANCELADO', 'CANCELADA', 'RECHAZADO', 'RECHAZADA') or diag._tiene_rechazo:
+            return 'RECHAZADO'
+        if etapa_norm in etapas_aprobadas or etapa_norm == 'APROBADO' or diag._tiene_aprobacion:
+            return 'ACEPTADO'
+        return 'PENDIENTE'
+
+    cero = Decimal('0.00')
+    total_presupuestos = len(diagnosticos)
+    total_presupuestado = cero
+    monto_aceptado = cero
+    lucro_cesante = cero
+    monto_pendiente = cero
+    conteo = {'ACEPTADO': 0, 'RECHAZADO': 0, 'PENDIENTE': 0}
+    cat_metricas = {}
+
+    for diag in diagnosticos:
+        estado = _clasificar(diag)
+        monto = Decimal(str(diag.costo_diagnostico or 0))
+        conteo[estado] += 1
+        total_presupuestado += monto
+        if estado == 'ACEPTADO':
+            monto_aceptado += monto
+        elif estado == 'RECHAZADO':
+            lucro_cesante += monto
+        else:
+            monto_pendiente += monto
+
+        # Nivel Micro: únicamente conteos (nunca montos) por categoría
+        cats = list(diag.id_reparacion.categorias.all())
+        if id_categoria is not None:
+            cats = [c for c in cats if c.id_categoria == id_categoria]
+        grupos = [(c.id_categoria, c.nombre) for c in cats] or [(None, "General / Sin Categoría")]
+        for cat_id, cat_nombre in grupos:
+            m = cat_metricas.setdefault(cat_id, {
+                "id_categoria": cat_id,
+                "nombre_categoria": cat_nombre,
+                "total_presupuestos": 0,
+                "total_aceptados": 0,
+                "total_rechazados": 0,
+            })
+            m["total_presupuestos"] += 1
+            if estado == 'ACEPTADO':
+                m["total_aceptados"] += 1
+            elif estado == 'RECHAZADO':
+                m["total_rechazados"] += 1
+
+    cien = Decimal('100.00')
+    tasa_conversion = round(Decimal(conteo['ACEPTADO']) / Decimal(total_presupuestos) * cien, 2)
+    tasa_fuga = round(Decimal(conteo['RECHAZADO']) / Decimal(total_presupuestos) * cien, 2)
+
+    micro_list = []
+    for c in cat_metricas.values():
+        tot_cat = c["total_presupuestos"]
+        micro_list.append({
+            **c,
+            "tasa_rechazo": round(Decimal(c["total_rechazados"]) / Decimal(tot_cat) * cien, 2)
+        })
+
+    return {
+        "periodo": {"fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin},
+        "macro": {
+            "total_presupuestos": total_presupuestos,
+            "total_presupuestado": total_presupuestado,
+            "total_aceptados": conteo['ACEPTADO'],
+            "monto_aceptado": monto_aceptado,
+            "tasa_conversion": tasa_conversion,
+            "total_rechazados": conteo['RECHAZADO'],
+            "lucro_cesante": lucro_cesante,
+            "tasa_fuga": tasa_fuga,
+            "total_pendientes": conteo['PENDIENTE'],
+            "monto_pendiente": monto_pendiente
+        },
+        "micro": micro_list
+    }
+
+
+def calcular_reporte_eficiencia(
+    *,
+    fecha_inicio,
+    fecha_fin,
+    id_categoria: Optional[int] = None,
+    id_tipo_dispositivo: Optional[int] = None,
+    id_medio_pago: Optional[int] = None
+) -> list[dict]:
+    """
+    CU-73: Demanda, Facturación y Eficiencia Temporal por Categoría.
+      - Volumen de Demanda          = COUNT(idReparacion) por categoría
+      - Facturación Bruta ($)       = SUM(costo_diagnostico) de reparaciones Finalizadas/Entregadas
+      - Tiempo Promedio Resolución  = AVG(fecha_entrega - fecha_inicio) por categoría
+        (solo promedia reparaciones con ambas fechas; los nulos no sesgan el AVG)
+    Filtros: rango de fechas (obligatorio), id_categoria, id_tipo_dispositivo, id_medio_pago.
+    """
+    from decimal import Decimal
+    from rest_framework.exceptions import ValidationError
+    from workshop_app.models import Reparacion
+
+    reparaciones_qs = Reparacion.objects.filter(
+        fecha_inicio__gte=fecha_inicio,
+        fecha_inicio__lte=fecha_fin,
+        etapa__in=ETAPAS_CIERRE_EXITOSO
+    )
+
+    if id_categoria is not None:
+        reparaciones_qs = reparaciones_qs.filter(categorias__id_categoria=id_categoria)
+
+    if id_tipo_dispositivo is not None:
+        reparaciones_qs = reparaciones_qs.filter(
+            id_dispositivo__id_modelo__id_tipo_dispositivo_id=id_tipo_dispositivo
+        )
+
+    if id_medio_pago is not None:
+        reparaciones_qs = reparaciones_qs.filter(id_venta__pago__medio_pago_id=id_medio_pago)
+
+    reparaciones = list(
+        reparaciones_qs
+        .select_related('id_dispositivo', 'id_dispositivo__id_modelo')
+        .prefetch_related('categorias', 'diagnostico_set')
+        .distinct()
+    )
+
+    # Excepción Paso 5: Sin operaciones finalizadas en el periodo o filtros
+    if not reparaciones:
+        raise ValidationError("No existen reparaciones finalizadas en el periodo temporal o filtros indicados")
+
+    cat_stats = {}
+    for rep in reparaciones:
+        facturado = sum(
+            (Decimal(str(d.costo_diagnostico or 0)) for d in rep.diagnostico_set.all()),
+            Decimal('0.00')
+        )
+
+        delta_dias = None
+        if rep.fecha_entrega and rep.fecha_inicio:
+            delta_dias = max((rep.fecha_entrega - rep.fecha_inicio).days, 0)
+
+        cats = list(rep.categorias.all())
+        if id_categoria is not None:
+            cats = [c for c in cats if c.id_categoria == id_categoria]
+        grupos = [(c.id_categoria, c.nombre) for c in cats] or [(None, "General / Sin Categoría")]
+
+        for cat_id, cat_nombre in grupos:
+            s = cat_stats.setdefault(cat_id, {
+                "id_categoria": cat_id,
+                "nombre_categoria": cat_nombre,
+                "volumen_reparaciones": 0,
+                "facturacion_bruta": Decimal('0.00'),
+                "deltas_dias": []
+            })
+            s["volumen_reparaciones"] += 1
+            s["facturacion_bruta"] += facturado
+            if delta_dias is not None:
+                s["deltas_dias"].append(delta_dias)
+
+    resultado = []
+    for c in cat_stats.values():
+        deltas = c["deltas_dias"]
+        prom_dias = round(sum(deltas) / len(deltas), 1) if deltas else 0.0
+        resultado.append({
+            "id_categoria": c["id_categoria"],
+            "nombre_categoria": c["nombre_categoria"],
+            "volumen_reparaciones": c["volumen_reparaciones"],
+            # La facturación bruta es SUM(costo_diagnostico); se conservan los campos
+            # históricos del contrato: mano de obra = bruta e insumos = 0 (no se suman).
+            "facturacion_mano_obra": c["facturacion_bruta"],
+            "facturacion_insumos": Decimal('0.00'),
+            "facturacion_bruta": c["facturacion_bruta"],
+            "tiempo_promedio_dias": prom_dias,
+            "tiempo_promedio_horas": round(prom_dias * 24.0, 1)
+        })
+
+    # Ordenar por volumen de mayor a menor
+    resultado.sort(key=lambda x: x["volumen_reparaciones"], reverse=True)
+    return resultado
+
+
+# CU-74: GENERAR REPORTE DE PRODUCTIVIDAD Y CARGA DE TRABAJO TÉCNICA
+# ==============================================================================
+
+def calcular_reporte_productividad(
+    *,
+    fecha_inicio,
+    fecha_fin,
+    id_tecnico: Optional[int] = None
+) -> list[dict]:
+    """
+    CU-74: Productividad y Carga de Trabajo por Técnico.
+    A. Análisis Histórico (afectado por el rango de fechas):
+       - Reparaciones Cerradas   = COUNT(idReparacion) Finalizado/Entregado por técnico
+       - Monto Facturado ($)     = SUM(costo_diagnostico) de las órdenes cerradas
+       - Velocidad de Resolución = AVG(fecha_entrega - fecha_inicio) (nulos excluidos)
+       - Nivel de Actividad      = COUNT(Bitácora) por usuario
+    B. Tiempo Real (ignora fechas):
+       - Carga Actual = COUNT(idReparacion) en etapas activas
+         (Esperando Diagnóstico, En Reparación, Esperando Repuesto) por técnico.
+    """
+    from decimal import Decimal
+    from rest_framework.exceptions import ValidationError
+    from users_app.models import Usuario
+    from workshop_app.models import Reparacion, BitacoraReparacion
+
+    tecnicos_qs = Usuario.objects.filter(
+        id_rol__codigo='TECNICO',
+        is_active=True
+    ).select_related('id_rol', 'perfilusuario')
+
+    if id_tecnico is not None:
+        tecnicos_qs = tecnicos_qs.filter(id_usuario=id_tecnico)
+        if not tecnicos_qs.exists():
+            raise ValidationError("El técnico especificado no existe o no se encuentra activo.")
+
+    resultado = []
+    for tec in tecnicos_qs:
+        perfil = getattr(tec, 'perfilusuario', None)
+        nombre_completo = f"{getattr(perfil, 'nombre', '')} {getattr(perfil, 'apellido', '')}".strip() if perfil else tec.email
+        if not nombre_completo:
+            nombre_completo = tec.email
+
+        # B. Carga de Trabajo Actual en Tiempo Real (inmune a fechas)
+        carga_tiempo_real = Reparacion.objects.filter(
+            id_usuario=tec,
+            etapa__in=ETAPAS_ACTIVAS_TALLER
+        ).count()
+
+        # A. Análisis Histórico
+        reps_cerradas = list(
+            Reparacion.objects.filter(
+                id_usuario=tec,
+                fecha_inicio__gte=fecha_inicio,
+                fecha_inicio__lte=fecha_fin,
+                etapa__in=ETAPAS_CIERRE_EXITOSO
+            ).prefetch_related('diagnostico_set')
+        )
+        volumen_finalizadas = len(reps_cerradas)
+
+        facturacion_mo = Decimal('0.00')
+        deltas_dias = []
+        for rep in reps_cerradas:
+            for d in rep.diagnostico_set.all():
+                facturacion_mo += Decimal(str(d.costo_diagnostico or 0))
+            if rep.fecha_entrega and rep.fecha_inicio:
+                deltas_dias.append(max((rep.fecha_entrega - rep.fecha_inicio).days, 0))
+
+        prom_dias = round(sum(deltas_dias) / len(deltas_dias), 1) if deltas_dias else 0.0
+        prom_horas = round(prom_dias * 24.0, 1)
+
+        # Nivel de Actividad (interacciones en bitácora dentro del periodo)
+        registros_bitacora = BitacoraReparacion.objects.filter(
+            id_usuario=tec,
+            id_reparacion__fecha_inicio__gte=fecha_inicio,
+            id_reparacion__fecha_inicio__lte=fecha_fin
+        ).count()
+
+        resultado.append({
+            "id_tecnico": tec.id_usuario,
+            "nombre_completo": nombre_completo,
+            "email": tec.email,
+            "carga_tiempo_real": carga_tiempo_real,
+            "volumen_finalizadas": volumen_finalizadas,
+            "facturacion_mano_obra": facturacion_mo,
+            "velocidad_media_dias": prom_dias,
+            "velocidad_media_horas": prom_horas,
+            "registros_bitacora": registros_bitacora
+        })
+
+    # Ordenar por carga en tiempo real descendente y luego por volumen finalizadas descendente
+    resultado.sort(key=lambda x: (x["carga_tiempo_real"], x["volumen_finalizadas"]), reverse=True)
+    return resultado
+
+
+# CU-76: GENERAR REPORTE DE SATISFACCIÓN Y CALIDAD
+# ==============================================================================
+
+def calcular_reporte_satisfaccion(
+    *,
+    fecha_inicio,
+    fecha_fin,
+    id_tecnico: Optional[int] = None,
+    id_categoria: Optional[int] = None,
+    rango_estrellas_min: Optional[int] = None,
+    rango_estrellas_max: Optional[int] = None
+) -> dict:
+    """
+    CU-76: Índice de Satisfacción y Calidad Post-Reparación (CSAT).
+      - CSAT General        = AVG(puntuacion) del universo filtrado
+      - Volumen de Reseñas  = COUNT(idCalificacion)
+      - CSAT por Técnico    = AVG(puntuacion) agrupado por técnico asignado
+      - CSAT por Categoría  = AVG(puntuacion) agrupado por categoría
+      - Matriz de Calidad   = AVG(puntuacion) agrupado por Técnico x Categoría
+    Filtros: fechas (obligatorio), id_tecnico, rango de estrellas e id_categoria.
+    Excepción Paso 5: sin calificaciones bajo los parámetros -> ValidationError.
+    """
+    from rest_framework.exceptions import ValidationError
+    from workshop_app.models import Calificacion
+
+    calificaciones_qs = Calificacion.objects.filter(
+        fecha__gte=fecha_inicio,
+        fecha__lte=fecha_fin
+    )
+
+    if id_tecnico is not None:
+        calificaciones_qs = calificaciones_qs.filter(id_reparacion__id_usuario_id=id_tecnico)
+
+    if id_categoria is not None:
+        calificaciones_qs = calificaciones_qs.filter(id_reparacion__categorias__id_categoria=id_categoria)
+
+    if rango_estrellas_min is not None:
+        calificaciones_qs = calificaciones_qs.filter(puntuacion__gte=rango_estrellas_min)
+
+    if rango_estrellas_max is not None:
+        calificaciones_qs = calificaciones_qs.filter(puntuacion__lte=rango_estrellas_max)
+
+    calificaciones_qs = (
+        calificaciones_qs
+        .select_related(
+            'id_reparacion',
+            'id_reparacion__id_usuario',
+            'id_reparacion__id_usuario__perfilusuario',
+            'id_reparacion__id_dispositivo',
+            'id_reparacion__id_dispositivo__id_usuario',
+            'id_reparacion__id_dispositivo__id_usuario__perfilusuario'
+        )
+        .prefetch_related('id_reparacion__categorias')
+        .order_by('-fecha', '-id_calificacion')
+        .distinct()
+    )
+
+    calificaciones = list(calificaciones_qs)
+
+    if not calificaciones:
+        raise ValidationError("Bajo los parámetros establecidos no existen calificaciones válidas para analizar")
+
+    total_resenas = len(calificaciones)
+    csat_global = round(sum(c.puntuacion for c in calificaciones) / total_resenas, 2)
+
+    resenas_criticas_total = sum(1 for c in calificaciones if c.puntuacion <= 3)
+    porcentaje_criticas = round((resenas_criticas_total / total_resenas) * 100.0, 2)
+
+    tecnicos_map = {}
+    categorias_map = {}
+    matriz_map = {}
+    comentarios = []
+
+    for c in calificaciones:
+        rep = c.id_reparacion
+        tec = rep.id_usuario if rep else None
+        tec_id = tec.id_usuario if tec else None
+
+        if tec:
+            perfil_tec = getattr(tec, 'perfilusuario', None)
+            nom_tec = f"{getattr(perfil_tec, 'nombre', '')} {getattr(perfil_tec, 'apellido', '')}".strip() if perfil_tec else tec.email
+            if not nom_tec:
+                nom_tec = tec.email
+        else:
+            nom_tec = "Sin Técnico Asignado"
+
+        tecnicos_map.setdefault(tec_id, {
+            "id_tecnico": tec_id, "nombre_completo": nom_tec, "puntuaciones": []
+        })["puntuaciones"].append(c.puntuacion)
+
+        # Categorías intervenidas (si se filtró por categoría se agrupa solo esa)
+        cats = list(rep.categorias.all()) if rep else []
+        if id_categoria is not None:
+            cats = [cat for cat in cats if cat.id_categoria == id_categoria]
+        grupos = [(cat.id_categoria, cat.nombre) for cat in cats] or [(None, "General / Sin Categoría")]
+
+        for cat_id, cat_nombre in grupos:
+            categorias_map.setdefault(cat_id, {
+                "id_categoria": cat_id, "nombre_categoria": cat_nombre, "puntuaciones": []
+            })["puntuaciones"].append(c.puntuacion)
+
+            # Matriz de Calidad: cruce Técnico x Categoría
+            matriz_map.setdefault((tec_id, cat_id), {
+                "id_tecnico": tec_id,
+                "nombre_tecnico": nom_tec,
+                "id_categoria": cat_id,
+                "nombre_categoria": cat_nombre,
+                "puntuaciones": []
+            })["puntuaciones"].append(c.puntuacion)
+
+        # Nombre cliente para el comentario
+        cli = getattr(rep.id_dispositivo, 'id_usuario', None) if rep and rep.id_dispositivo else None
+        if cli:
+            perfil_cli = getattr(cli, 'perfilusuario', None)
+            nom_cli = f"{getattr(perfil_cli, 'nombre', '')} {getattr(perfil_cli, 'apellido', '')}".strip() if perfil_cli else cli.email
+            if not nom_cli:
+                nom_cli = cli.email
+        else:
+            nom_cli = "Cliente Anónimo"
+
+        comentarios.append({
+            "id_calificacion": c.id_calificacion,
+            "puntuacion": c.puntuacion,
+            "comentario": c.comentario or "",
+            "fecha": c.fecha,
+            "cliente_nombre": nom_cli,
+            "tecnico_nombre": nom_tec,
+            "categorias": [n for _, n in grupos]
+        })
+
+    def _consolidar(mapa, extra_keys):
+        salida = []
+        for item in mapa.values():
+            puntos = item["puntuaciones"]
+            fila = {k: item[k] for k in extra_keys}
+            fila["total_resenas"] = len(puntos)
+            fila["promedio_estrellas"] = round(sum(puntos) / len(puntos), 2)
+            salida.append(fila)
+        salida.sort(key=lambda x: x["promedio_estrellas"], reverse=True)
+        return salida
+
+    return {
+        "periodo": {"fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin},
+        "total_resenas": total_resenas,
+        "csat_global": csat_global,
+        "resenas_criticas_total": resenas_criticas_total,
+        "porcentaje_criticas": porcentaje_criticas,
+        "promedio_por_tecnico": _consolidar(tecnicos_map, ["id_tecnico", "nombre_completo"]),
+        "promedio_por_categoria": _consolidar(categorias_map, ["id_categoria", "nombre_categoria"]),
+        "matriz_calidad": _consolidar(
+            matriz_map, ["id_tecnico", "nombre_tecnico", "id_categoria", "nombre_categoria"]
+        ),
+        "comentarios": comentarios
+    }
 

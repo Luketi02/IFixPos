@@ -232,3 +232,123 @@ class NotificacionOutputSerializer(serializers.ModelSerializer):
         if obj.id_dispositivo:
             return f"/cliente/dispositivos/{obj.id_dispositivo.id_dispositivo}"
         return None
+
+
+# ==============================================================================
+# CU-40: FILTRAR LOGS DE AUDITORÍA (SERIALIZERS)
+# ==============================================================================
+
+class FiltrarLogsAuditoriaInputSerializer(serializers.Serializer):
+    """La Aduana (CU-40): Valida parámetros de consulta para logs de auditoría."""
+    buscar = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    texto_busqueda = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    tipo = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    modulo_origen = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    tabla_afectada = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    id_usuario = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    usuario_query = serializers.CharField(required=False, allow_blank=True, max_length=150)
+
+
+class LogSistemaOutputSerializer(serializers.Serializer):
+    """Formato estructurado de salida para eventos de auditoría."""
+    id_log = serializers.IntegerField(read_only=True)
+    fecha_hora = serializers.TimeField(read_only=True)
+    accion = serializers.CharField(read_only=True)
+    detalle = serializers.CharField(read_only=True, allow_null=True)
+    tipo = serializers.CharField(read_only=True)
+    modulo_origen = serializers.CharField(read_only=True, allow_null=True)
+    tabla_afectada = serializers.CharField(read_only=True, allow_null=True)
+    id_registro_afectado = serializers.CharField(read_only=True, allow_null=True)
+    id_usuario = serializers.IntegerField(source='id_usuario_id', read_only=True, allow_null=True)
+    email_usuario = serializers.SerializerMethodField()
+    nombre_usuario = serializers.SerializerMethodField()
+    rol_usuario = serializers.SerializerMethodField()
+
+    def get_email_usuario(self, obj):
+        return obj.id_usuario.email if obj.id_usuario else "Sistema / Desconocido"
+
+    def get_nombre_usuario(self, obj):
+        if obj.id_usuario and hasattr(obj.id_usuario, 'perfilusuario'):
+            perfil = obj.id_usuario.perfilusuario
+            nom = f"{perfil.nombre or ''} {perfil.apellido or ''}".strip()
+            return nom if nom else obj.id_usuario.email
+        return "Sistema"
+
+    def get_rol_usuario(self, obj):
+        if obj.id_usuario and obj.id_usuario.id_rol:
+            return obj.id_usuario.id_rol.nombre_rol
+        return "N/A"
+
+
+# ==============================================================================
+# CU-22 & CU-23: COPIAS DE SEGURIDAD Y RESTAURACIÓN (SERIALIZERS)
+# ==============================================================================
+
+class CopiaSeguridadOutputSerializer(serializers.Serializer):
+    """
+    Formato estructurado de salida para copias de seguridad (CU-22 / CU-23).
+    Expone metadatos del archivo de respaldo, tamaño real en disco e integridad física.
+    """
+    id_backup = serializers.IntegerField(read_only=True)
+    fecha_creacion = serializers.DateField(read_only=True)
+    automatico = serializers.BooleanField(read_only=True)
+    ubicacion_archivo = serializers.CharField(read_only=True)
+    nombre_archivo = serializers.SerializerMethodField()
+    version = serializers.CharField(read_only=True)
+    id_usuario = serializers.IntegerField(source='id_usuario_id', read_only=True, allow_null=True)
+    email_usuario = serializers.SerializerMethodField()
+    nombre_usuario = serializers.SerializerMethodField()
+    tamano_bytes = serializers.SerializerMethodField()
+    tamano_mb = serializers.SerializerMethodField()
+    archivo_existe = serializers.SerializerMethodField()
+
+    def get_nombre_archivo(self, obj):
+        import os
+        return os.path.basename(obj.ubicacion_archivo) if obj.ubicacion_archivo else "N/D"
+
+    def get_email_usuario(self, obj):
+        return obj.id_usuario.email if obj.id_usuario else "Automático / Sistema"
+
+    def get_nombre_usuario(self, obj):
+        if obj.id_usuario and hasattr(obj.id_usuario, 'perfilusuario'):
+            perfil = obj.id_usuario.perfilusuario
+            nombre_completo = f"{perfil.nombre or ''} {perfil.apellido or ''}".strip()
+            return nombre_completo if nombre_completo else obj.id_usuario.email
+        return "Sistema"
+
+    def get_tamano_bytes(self, obj):
+        import os
+        if obj.ubicacion_archivo and os.path.exists(obj.ubicacion_archivo):
+            try:
+                return os.path.getsize(obj.ubicacion_archivo)
+            except OSError:
+                return 0
+        return 0
+
+    def get_tamano_mb(self, obj):
+        bytes_totales = self.get_tamano_bytes(obj)
+        return round(bytes_totales / (1024 * 1024), 2)
+
+    def get_archivo_existe(self, obj):
+        import os
+        return bool(obj.ubicacion_archivo and os.path.exists(obj.ubicacion_archivo))
+
+
+class RestaurarBackupInputSerializer(serializers.Serializer):
+    """
+    La Aduana de Seguridad (CU-23): Valida las credenciales y el token OTP
+    exigidos de forma estricta para autorizar la restauración del sistema.
+    """
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        min_length=1,
+        error_messages={'required': 'Debe ingresar su contraseña de administrador.'}
+    )
+    otp_token = serializers.CharField(
+        required=True,
+        min_length=4,
+        max_length=20,
+        error_messages={'required': 'Debe ingresar el código OTP de seguridad de un solo uso.'}
+    )
+

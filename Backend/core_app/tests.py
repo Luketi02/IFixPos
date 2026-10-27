@@ -511,3 +511,326 @@ class GestionNotificacionesTests(TestCase):
         self.assertFalse(url_defecto.endswith('/'))
 
 
+# ==============================================================================
+# CU-22 & CU-23: PRUEBAS PARA COPIAS DE SEGURIDAD Y RESTAURACIÓN
+# ==============================================================================
+
+class CopiasSeguridadYRestauracionTests(TestCase):
+    """
+    Pruebas integrales de arquitectura HackSoftware para:
+    - CU-22: Realizar Copia de Seguridad
+    - CU-23: Restaurar Copia de Seguridad
+    """
+
+    def setUp(self):
+        import os
+        from django.contrib.auth.hashers import make_password
+        from django.core.cache import cache
+        from users_app.models import Usuario, RolUsuario, PerfilUsuario
+
+        self.client = APIClient()
+        cache.clear()
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol admin'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol cliente'}
+        )
+
+        # Usuario Administrador
+        self.raw_password = 'AdminPassword123!'
+        self.admin = Usuario.objects.create(
+            email='admin_backup@test.com',
+            contrasena=make_password(self.raw_password),
+            fecha_registro=date.today(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.admin,
+            nombre='Admin',
+            apellido='Supremo',
+            dni='11223344'
+        )
+
+        # Usuario Cliente
+        self.cliente = Usuario.objects.create(
+            email='cliente_backup@test.com',
+            contrasena=make_password('ClientPass123!'),
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+        self.archivos_creados = []
+
+    def tearDown(self):
+        import os
+        from django.core.cache import cache
+        cache.clear()
+        for ruta in self.archivos_creados:
+            if os.path.exists(ruta):
+                try:
+                    os.remove(ruta)
+                except OSError:
+                    pass
+
+    def test_servicio_generar_copia_seguridad_manual(self):
+        """CU-22: Verifica la generación de archivo físico, registro y auditoría."""
+        import os
+        from core_app.services import generar_copia_seguridad_manual
+        from core_app.models import CopiaSeguridad, LogSistema, Notificacion
+
+        copia = generar_copia_seguridad_manual(usuario_admin=self.admin, version="2.5.0")
+        self.archivos_creados.append(copia.ubicacion_archivo)
+
+        self.assertIsInstance(copia, CopiaSeguridad)
+        self.assertFalse(copia.automatico)
+        self.assertEqual(copia.version, "2.5.0")
+        self.assertEqual(copia.id_usuario, self.admin)
+        self.assertTrue(os.path.exists(copia.ubicacion_archivo))
+        self.assertGreater(os.path.getsize(copia.ubicacion_archivo), 0)
+
+        # Verificar LogSistema
+        log = LogSistema.objects.filter(
+            accion="Generar Copia de Seguridad Manual",
+            id_registro_afectado=str(copia.id_backup)
+        ).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.id_usuario, self.admin)
+
+        # Verificar Notificacion enviada
+        notif = Notificacion.objects.filter(
+            id_usuario=self.admin,
+            tipo="BACKUP"
+        ).first()
+        self.assertIsNotNone(notif)
+        self.assertIn("resguardado", notif.mensaje.lower())
+
+    def test_selectores_listar_y_obtener_copia_seguridad(self):
+        """CU-22/CU-23: Verifica lectura, orden descendente y validación de existencia física."""
+        import os
+        from rest_framework.exceptions import NotFound, ValidationError
+        from core_app.services import generar_copia_seguridad_manual
+        from core_app.selectors import listar_copias_seguridad, obtener_copia_seguridad
+        from core_app.models import CopiaSeguridad
+
+        copia1 = generar_copia_seguridad_manual(usuario_admin=self.admin, version="1.0.0")
+        copia2 = generar_copia_seguridad_manual(usuario_admin=self.admin, version="1.1.0")
+        self.archivos_creados.extend([copia1.ubicacion_archivo, copia2.ubicacion_archivo])
+
+        # Listar
+        qs = listar_copias_seguridad()
+        self.assertGreaterEqual(qs.count(), 2)
+        self.assertEqual(qs.first().id_backup, copia2.id_backup)
+
+        # Obtener válida
+        recuperada = obtener_copia_seguridad(copia1.id_backup)
+        self.assertEqual(recuperada.id_backup, copia1.id_backup)
+
+        # 404 si no existe
+        with self.assertRaises(NotFound):
+            obtener_copia_seguridad(999999)
+
+        # ValidationError si el archivo físico no existe
+        copia_fantasma = CopiaSeguridad.objects.create(
+            fecha_creacion=date.today(),
+            automatico=False,
+            ubicacion_archivo="/ruta/inexistente/backup_fantasma.sql",
+            version="1.0.0",
+            id_usuario=self.admin
+        )
+        with self.assertRaises(ValidationError):
+            obtener_copia_seguridad(copia_fantasma.id_backup)
+
+    def test_servicio_solicitar_token_restauracion(self):
+        """CU-23: Generación de OTP en caché de 6 dígitos y notificación."""
+        from django.core.cache import cache
+        from core_app.services import generar_copia_seguridad_manual, solicitar_token_restauracion
+        from core_app.models import LogSistema, Notificacion
+
+        copia = generar_copia_seguridad_manual(usuario_admin=self.admin)
+        self.archivos_creados.append(copia.ubicacion_archivo)
+
+        otp = solicitar_token_restauracion(usuario_admin=self.admin, id_backup=copia.id_backup)
+        self.assertEqual(len(otp), 6)
+        self.assertTrue(otp.isdigit())
+
+        # Verificar en caché
+        cache_key = f"otp_restore_{self.admin.id_usuario}_{copia.id_backup}"
+        self.assertEqual(cache.get(cache_key), otp)
+
+        # Verificar LogSistema
+        log = LogSistema.objects.filter(accion="Solicitud de Token de Restauración").first()
+        self.assertIsNotNone(log)
+
+        # Verificar Notificacion OTP
+        notif = Notificacion.objects.filter(id_usuario=self.admin, tipo="OTP").first()
+        self.assertIsNotNone(notif)
+
+    def test_servicio_ejecutar_restauracion_sistema_exito(self):
+        """CU-23: Restauración exitosa con contraseña y OTP válidos."""
+        from django.core.cache import cache
+        from core_app.services import (
+            generar_copia_seguridad_manual,
+            solicitar_token_restauracion,
+            ejecutar_restauracion_sistema
+        )
+        from core_app.models import LogSistema
+
+        copia = generar_copia_seguridad_manual(usuario_admin=self.admin)
+        self.archivos_creados.append(copia.ubicacion_archivo)
+
+        otp = solicitar_token_restauracion(usuario_admin=self.admin, id_backup=copia.id_backup)
+
+        resultado = ejecutar_restauracion_sistema(
+            usuario_admin=self.admin,
+            id_backup=copia.id_backup,
+            datos_validados={
+                'password': self.raw_password,
+                'otp_token': otp
+            }
+        )
+
+        self.assertEqual(resultado['codigo'], 'LOGOUT_REQUIRED')
+        self.assertIn("exitosa", resultado['mensaje'].lower())
+
+        # El OTP debe haberse invalidado tras su uso
+        cache_key = f"otp_restore_{self.admin.id_usuario}_{copia.id_backup}"
+        self.assertIsNone(cache.get(cache_key))
+
+        # Modo mantenimiento debe haberse apagado en el finally
+        self.assertFalse(cache.get('MAINTENANCE_MODE', False))
+
+        # Log de restauración
+        log = LogSistema.objects.filter(accion="Restauración de Sistema").first()
+        self.assertIsNotNone(log)
+        self.assertIn(str(copia.id_backup), log.detalle)
+
+    def test_servicio_ejecutar_restauracion_errores_seguridad(self):
+        """CU-23: Validación estricta contra contraseña errónea y OTP expirado."""
+        from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
+        from core_app.services import (
+            generar_copia_seguridad_manual,
+            solicitar_token_restauracion,
+            ejecutar_restauracion_sistema
+        )
+
+        copia = generar_copia_seguridad_manual(usuario_admin=self.admin)
+        self.archivos_creados.append(copia.ubicacion_archivo)
+
+        otp = solicitar_token_restauracion(usuario_admin=self.admin, id_backup=copia.id_backup)
+
+        # 1. Contraseña errónea
+        with self.assertRaises(AuthenticationFailed):
+            ejecutar_restauracion_sistema(
+                usuario_admin=self.admin,
+                id_backup=copia.id_backup,
+                datos_validados={
+                    'password': 'PasswordIncorrecta!',
+                    'otp_token': otp
+                }
+            )
+
+        # 2. OTP inválido
+        with self.assertRaises(PermissionDenied):
+            ejecutar_restauracion_sistema(
+                usuario_admin=self.admin,
+                id_backup=copia.id_backup,
+                datos_validados={
+                    'password': self.raw_password,
+                    'otp_token': '000000'
+                }
+            )
+
+    def test_api_flujo_completo_backup_y_restore(self):
+        """CU-22 y CU-23: Prueba integral de endpoints HTTP con rol ADMIN."""
+        from django.core.cache import cache
+        from users_app.services import generar_tokens_jwt
+
+        tokens_admin = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_admin['access']}")
+
+        # 1. Generar backup manual (POST /api/core/backups/manual/)
+        res_crear = self.client.post('/api/core/backups/manual/', {'version': '2.0.0'}, format='json')
+        self.assertEqual(res_crear.status_code, status.HTTP_201_CREATED)
+        data_crear = res_crear.json()
+        id_backup = data_crear['backup']['id_backup']
+        ruta_archivo = data_crear['backup']['ubicacion_archivo']
+        self.archivos_creados.append(ruta_archivo)
+
+        # 2. Listar backups (GET /api/core/backups/)
+        res_listar = self.client.get('/api/core/backups/')
+        self.assertEqual(res_listar.status_code, status.HTTP_200_OK)
+        lista = res_listar.json()
+        self.assertGreaterEqual(len(lista), 1)
+        self.assertTrue(lista[0]['archivo_existe'])
+        self.assertGreater(lista[0]['tamano_bytes'], 0)
+
+        # 3. Descargar backup (GET /api/core/backups/<id>/descargar/)
+        res_descargar = self.client.get(f'/api/core/backups/{id_backup}/descargar/')
+        self.assertEqual(res_descargar.status_code, status.HTTP_200_OK)
+
+        # 4. Solicitar OTP (POST /api/core/backups/<id>/solicitar-token/)
+        res_otp = self.client.post(f'/api/core/backups/{id_backup}/solicitar-token/')
+        self.assertEqual(res_otp.status_code, status.HTTP_200_OK)
+
+        # Recuperar token de la caché para simular ingreso del admin
+        cache_key = f"otp_restore_{self.admin.id_usuario}_{id_backup}"
+        token_otp = cache.get(cache_key)
+        self.assertIsNotNone(token_otp)
+
+        # 5. Restaurar sistema (POST /api/core/backups/<id>/restaurar/)
+        payload_restore = {
+            'password': self.raw_password,
+            'otp_token': token_otp
+        }
+        res_restore = self.client.post(
+            f'/api/core/backups/{id_backup}/restaurar/',
+            payload_restore,
+            format='json'
+        )
+        self.assertEqual(res_restore.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_restore.json()['codigo'], 'LOGOUT_REQUIRED')
+
+    def test_seguridad_bloqueo_roles_no_autorizados(self):
+        """Verifica que usuarios con rol distinto de ADMIN no puedan operar backups."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens_cliente = generar_tokens_jwt(self.cliente)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_cliente['access']}")
+
+        res1 = self.client.get('/api/core/backups/')
+        self.assertEqual(res1.status_code, status.HTTP_403_FORBIDDEN)
+
+        res2 = self.client.post('/api/core/backups/manual/', {})
+        self.assertEqual(res2.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Sin autenticar
+        self.client.credentials()
+        res3 = self.client.get('/api/core/backups/')
+        self.assertIn(res3.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_middleware_modo_mantenimiento(self):
+        """Verifica que el middleware bloquee con HTTP 503 peticiones ordinarias en mantenimiento."""
+        from django.core.cache import cache
+        from users_app.services import generar_tokens_jwt
+
+        tokens_cliente = generar_tokens_jwt(self.cliente)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_cliente['access']}")
+
+        cache.set('MAINTENANCE_MODE', True)
+
+        try:
+            # Petición a endpoint ordinario (ej. notificaciones) debe ser rechazada con 503
+            res = self.client.get('/api/core/notificaciones/')
+            self.assertEqual(res.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            self.assertEqual(res.json().get('codigo'), 'MODO_MANTENIMIENTO')
+        finally:
+            cache.set('MAINTENANCE_MODE', False)
+
+
