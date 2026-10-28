@@ -2,6 +2,7 @@ from django.urls import path
 from sales_app.apis import (
     RealizarCompraVirtualApi,
     AgregarAlCarritoApi,
+    ActualizarCantidadCarritoApi,
     CarritoDetalleApi,
     QuitarDelCarritoApi,
     CompletarPagoApi,
@@ -13,7 +14,15 @@ from sales_app.apis import (
     ListarHistorialBeneficiosApi,
     InspeccionarBeneficioApi,
     RevocarBeneficioApi,
-    ReporteLogisticaApi
+    ReporteLogisticaApi,
+    MercadoPagoCrearPreferenciaApi,
+    MercadoPagoWebhookApi,
+    MercadoPagoConfigPublicaApi,
+    ConsultarEstadoVentaApi,
+    CancelarVentaVirtualApi,
+    ConsultarCostoEnvioApi,
+    ConsultarCompraPendienteActivaApi,
+    DescargarFacturaVentaApi
 )
 
 urlpatterns = [
@@ -23,6 +32,7 @@ urlpatterns = [
 
     # Carrito de Compras
     path('carrito/agregar/', AgregarAlCarritoApi.as_view(), name='api_carrito_agregar'),
+    path('carrito/actualizar/', ActualizarCantidadCarritoApi.as_view(), name='api_carrito_actualizar'),
     path('carrito/quitar/', QuitarDelCarritoApi.as_view(), name='api_carrito_quitar'),
     path('carrito/', CarritoDetalleApi.as_view(), name='api_carrito_detalle'),
 
@@ -61,6 +71,16 @@ urlpatterns = [
 
     # CU-75: Generar Reporte de Distribución Geográfica y Logística
     path('reportes/logistica/', ReporteLogisticaApi.as_view(), name='api_reporte_logistica'),
+
+    # Integración Oficial Mercado Pago (Automatizada)
+    path('mercadopago/crear-preferencia/', MercadoPagoCrearPreferenciaApi.as_view(), name='api_mp_crear_preferencia'),
+    path('mercadopago/webhook/', MercadoPagoWebhookApi.as_view(), name='api_mp_webhook'),
+    path('mercadopago/config/', MercadoPagoConfigPublicaApi.as_view(), name='api_mp_config'),
+    path('compras/virtual/<int:id_venta>/estado/', ConsultarEstadoVentaApi.as_view(), name='api_estado_venta_virtual'),
+    path('compras/virtual/<int:id_venta>/cancelar/', CancelarVentaVirtualApi.as_view(), name='api_cancelar_venta_virtual'),
+    path('compras/costo-envio/', ConsultarCostoEnvioApi.as_view(), name='api_costo_envio'),
+    path('compras/virtual/pendiente-activa/', ConsultarCompraPendienteActivaApi.as_view(), name='api_compra_pendiente_activa'),
+    path('compras/virtual/<int:id_venta>/factura/', DescargarFacturaVentaApi.as_view(), name='api_descargar_factura_venta'),
 ]
 
 

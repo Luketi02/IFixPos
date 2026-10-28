@@ -208,7 +208,7 @@ export default function NotificationBell() {
     }
   }, [token]);
 
-  // 1. Carga inicial al montar y polling periódico cada 35 segundos
+  // 1. Carga inicial al montar y polling periódico cada 315 segundos
   useEffect(() => {
     cargarNotificaciones();
 

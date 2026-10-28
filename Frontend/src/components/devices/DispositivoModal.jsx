@@ -57,10 +57,10 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Alertas de error: se ocultan solas a los 6 segundos
+  // Alertas de error: se ocultan solas a los 15 segundos
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    const timer = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 

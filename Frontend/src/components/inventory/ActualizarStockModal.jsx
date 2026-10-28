@@ -16,10 +16,10 @@ export default function ActualizarStockModal({ isOpen, onClose, producto, onSucc
   const [enviando, setEnviando] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Auto-ocultar error temporal tras 6 segundos (Regla 6)
+  // Auto-ocultar error temporal tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 

@@ -38,17 +38,17 @@ export default function CategoriasProductoScreen() {
   const [toastMensaje, setToastMensaje] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Auto-ocultar error a los 6 segundos (Regla Global 6)
+  // Auto-ocultar error a los 15 segundos (Regla Global 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
-  // Auto-ocultar toast a los 4.5 segundos
+  // Auto-ocultar toast a los 15 segundos
   useEffect(() => {
     if (!toastMensaje) return undefined;
-    const t = setTimeout(() => setToastMensaje(''), 4500);
+    const t = setTimeout(() => setToastMensaje(''), 15000);
     return () => clearTimeout(t);
   }, [toastMensaje]);
 

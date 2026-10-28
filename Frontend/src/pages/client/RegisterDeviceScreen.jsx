@@ -54,12 +54,12 @@ export default function RegisterDeviceScreen() {
   const [successMessage, setSuccessMessage] = useState('');
   const [nuevoDispositivoId, setNuevoDispositivoId] = useState(null);
 
-  // Auto-ocultamiento de alertas de error a los 6 segundos (Regla de UX)
+  // Auto-ocultamiento de alertas de error a los 15 segundos (Regla de UX)
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);

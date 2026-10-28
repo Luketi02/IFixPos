@@ -47,13 +47,13 @@ export default function MisDispositivos() {
   // Las alertas desaparecen solas (error: 6 s, éxito: 5 s)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
   useEffect(() => {
     if (!successMessage) return undefined;
-    const t = setTimeout(() => setSuccessMessage(''), 5000);
+    const t = setTimeout(() => setSuccessMessage(''), 15000);
     return () => clearTimeout(t);
   }, [successMessage]);
 

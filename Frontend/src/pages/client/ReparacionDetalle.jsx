@@ -40,17 +40,17 @@ export default function ReparacionDetalle() {
 
   const isLoading = cargadoId !== id_reparacion;
 
-  // Auto-ocultamiento de alertas de error a los 6 segundos (Regla Global de UX)
+  // Auto-ocultamiento de alertas de error a los 15 segundos (Regla Global de UX)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    const timer = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 
-  // Auto-ocultamiento de alertas de éxito a los 6 segundos
+  // Auto-ocultamiento de alertas de éxito a los 15 segundos
   useEffect(() => {
     if (!successMessage) return undefined;
-    const timer = setTimeout(() => setSuccessMessage(''), 6000);
+    const timer = setTimeout(() => setSuccessMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [successMessage]);
 

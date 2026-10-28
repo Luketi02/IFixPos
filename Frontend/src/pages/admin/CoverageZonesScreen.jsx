@@ -36,18 +36,18 @@ export default function CoverageZonesScreen() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Auto-dismiss de mensajes de error a los 6 segundos (Regla de UX)
+  // Auto-dismiss de mensajes de error a los 15 segundos (Regla de UX)
   useEffect(() => {
     if (errorMessage) {
-      const timer = setTimeout(() => setErrorMessage(''), 6000);
+      const timer = setTimeout(() => setErrorMessage(''), 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);
 
-  // Auto-dismiss de mensajes de éxito a los 5 segundos
+  // Auto-dismiss de mensajes de éxito a los 15 segundos
   useEffect(() => {
     if (successMessage) {
-      const timer = setTimeout(() => setSuccessMessage(''), 5000);
+      const timer = setTimeout(() => setSuccessMessage(''), 15000);
       return () => clearTimeout(timer);
     }
   }, [successMessage]);

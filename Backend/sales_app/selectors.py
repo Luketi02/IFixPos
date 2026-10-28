@@ -880,5 +880,262 @@ def calcular_reporte_logistico(
     return resultado
 
 
+def obtener_medios_pago(*, solo_activos: bool = False) -> QuerySet[MedioPago]:
+    """
+    Recupera los medios de pago configurados en el sistema (CU-18, CU-82, CU-83).
+    """
+    qs = MedioPago.objects.all().order_by('id_mediopago')
+    if solo_activos:
+        qs = qs.filter(estado=True)
+    return qs
+
+
+def calcular_costo_envio_sistema(id_direccion: Optional[int] = None) -> dict:
+    """
+    Calcula el costo de entrega / flete según la Configuración del Sistema (ConfiguracionSistema):
+    - envioLocal: Ciudad sede central (Posadas)
+    - envioRegional: Misma provincia, distinta ciudad
+    - envioNacional: Otra provincia
+    """
+    from core_app.models import ConfiguracionSistema
+    from geo_app.models import Direccion
+
+    def _obtener_decimal(clave: str, fallback: str = '0.00') -> Decimal:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        val = cfg.valor if cfg and cfg.valor else fallback
+        try:
+            return Decimal(str(val).strip().replace(',', '.'))
+        except Exception:
+            return Decimal(fallback)
+
+    tarifa_local = _obtener_decimal('envioLocal', '0.00')
+    tarifa_regional = _obtener_decimal('envioRegional', '0.00')
+    tarifa_nacional = _obtener_decimal('envioNacional', '0.00')
+
+    tarifas_dict = {
+        'local': tarifa_local,
+        'regional': tarifa_regional,
+        'nacional': tarifa_nacional
+    }
+
+    if not id_direccion:
+        return {
+            'costo': tarifa_local,
+            'tipo': 'local',
+            'descripcion': 'Tarifa Base de Entrega Local',
+            'tarifas': tarifas_dict
+        }
+
+    direccion_destino = Direccion.objects.select_related(
+        'id_ciudad__id_provincia'
+    ).filter(id_direccion=id_direccion).first()
+
+    if not direccion_destino or not direccion_destino.id_ciudad:
+        return {
+            'costo': tarifa_local,
+            'tipo': 'local',
+            'descripcion': 'Tarifa de Entrega Local',
+            'tarifas': tarifas_dict
+        }
+
+    # Dirección de la sede central configurada
+    cfg_sede = ConfiguracionSistema.objects.filter(clave='direccionLocal').first()
+    id_sede = int(cfg_sede.valor) if cfg_sede and cfg_sede.valor and cfg_sede.valor.isdigit() else None
+    direccion_sede = Direccion.objects.select_related(
+        'id_ciudad__id_provincia'
+    ).filter(id_direccion=id_sede).first() if id_sede else None
+
+    if not direccion_sede or not direccion_sede.id_ciudad:
+        return {
+            'costo': tarifa_local,
+            'tipo': 'local',
+            'descripcion': 'Tarifa de Entrega Local',
+            'tarifas': tarifas_dict
+        }
+
+    id_ciudad_destino = getattr(direccion_destino.id_ciudad, 'id_ciudad', None)
+    id_ciudad_sede = getattr(direccion_sede.id_ciudad, 'id_ciudad', None)
+
+    id_provincia_destino = getattr(direccion_destino.id_ciudad, 'id_provincia_id', None)
+    id_provincia_sede = getattr(direccion_sede.id_ciudad, 'id_provincia_id', None)
+
+    if id_ciudad_destino and id_ciudad_sede and id_ciudad_destino == id_ciudad_sede:
+        return {
+            'costo': tarifa_local,
+            'tipo': 'local',
+            'descripcion': f"Envío Local ({direccion_destino.id_ciudad.nombre_ciudad})",
+            'tarifas': tarifas_dict
+        }
+    elif id_provincia_destino and id_provincia_sede and id_provincia_destino == id_provincia_sede:
+        costo = tarifa_regional if tarifa_regional > Decimal('0.00') else tarifa_local
+        return {
+            'costo': costo,
+            'tipo': 'regional',
+            'descripcion': f"Envío Regional ({direccion_destino.id_ciudad.id_provincia.nombre_provincia})",
+            'tarifas': tarifas_dict
+        }
+    else:
+        costo = tarifa_nacional if tarifa_nacional > Decimal('0.00') else (tarifa_regional if tarifa_regional > Decimal('0.00') else tarifa_local)
+        return {
+            'costo': costo,
+            'tipo': 'nacional',
+            'descripcion': "Envío Nacional (Resto del país)",
+            'tarifas': tarifas_dict
+        }
+
+
+def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
+    """
+    Recupera si el usuario cliente posee una venta en estado PENDIENTE con reserva temporal
+    de stock vigente (menos de 30 minutos). Permite retomar la compra o cancelar voluntariamente.
+    """
+    import datetime
+    from django.utils import timezone
+    from core_app.models import LogSistema
+    from sales_app.services import limpiar_ventas_pendientes_expiradas, crear_preferencia_mercadopago
+
+    limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+
+    id_u = getattr(usuario, 'id_usuario', getattr(usuario, 'pk', None))
+    venta = Venta.objects.filter(
+        id_usuario_id=id_u,
+        estado_venta__iexact='PENDIENTE'
+    ).select_related(
+        'id_direccion_envio__id_ciudad__id_provincia'
+    ).prefetch_related(
+        'detalleventa_set__id_producto'
+    ).order_by('-id_venta').first()
+
+    if not venta:
+        return None
+
+    ahora = timezone.now()
+    fecha_hoy = ahora.date()
+    if venta.fecha_venta < fecha_hoy:
+        return None
+
+    log_creacion = LogSistema.objects.filter(
+        modulo_origen='sales_app',
+        tabla_afectada='venta',
+        id_registro_afectado=str(venta.id_venta),
+        accion="Realizar Compra Virtual (CU-18)"
+    ).first()
+
+    if not log_creacion or not log_creacion.fecha_hora:
+        segundos_transcurridos = 0
+    else:
+        hora_log = log_creacion.fecha_hora
+        dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
+        if timezone.is_naive(dt_creacion):
+            dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+        segundos_transcurridos = (ahora - dt_creacion).total_seconds()
+
+    minutos_limite = 30
+    total_segundos = minutos_limite * 60
+    segundos_restantes = max(0, int(total_segundos - segundos_transcurridos))
+
+    if segundos_restantes <= 0:
+        limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+        return None
+
+    # Obtener o recrear link de pago Mercado Pago si es necesario
+    url_pago = None
+    pref_id = None
+    try:
+        pref = crear_preferencia_mercadopago(venta=venta, usuario=usuario)
+        url_pago = pref.get('init_point') or pref.get('sandbox_init_point')
+        pref_id = pref.get('preference_id')
+    except Exception:
+        pass
+
+    detalles = []
+    for d in venta.detalleventa_set.all():
+        detalles.append({
+            'id_producto': d.id_producto.id_producto,
+            'producto_nombre': d.id_producto.nombre,
+            'cantidad': d.cantidad,
+            'precio_unitario': d.precio_unitario,
+            'subtotal': d.subtotal
+        })
+
+    monto_subtotal = Decimal(str(venta.monto_subtotal or '0.00'))
+    costo_envio = Decimal(str(venta.costo_envio or '0.00'))
+    total_final = monto_subtotal + costo_envio
+
+    return {
+        'id_venta': venta.id_venta,
+        'codigo_sec': venta.codigo_sec,
+        'estado_venta': venta.estado_venta,
+        'metodo_entrega': venta.metodo_entrega,
+        'monto_subtotal': monto_subtotal,
+        'costo_envio': costo_envio,
+        'total': total_final,
+        'segundos_restantes': segundos_restantes,
+        'preference_id': pref_id,
+        'init_point': url_pago,
+        'detalles': detalles
+    }
+
+
+def obtener_factura_pdf_venta(*, id_venta: int, usuario: Any) -> Tuple[str, str]:
+    """
+    Recupera la ruta absoluta en disco del archivo PDF de la factura correspondiente
+    a una venta acreditada y pagada. Si el PDF físico no existe, lo genera en el momento.
+    Verifica que el usuario sea el comprador titular o pertenezca a la administración.
+    Retorna: (ruta_absoluta, nombre_descarga)
+    """
+    import os
+    from django.conf import settings
+    from django.core.exceptions import ValidationError
+    from sales_app.models import Venta, Pago, MedioPago
+    from sales_app.services import generar_comprobante_fiscal
+
+    try:
+        venta = Venta.objects.select_related('id_usuario').get(id_venta=id_venta)
+    except Venta.DoesNotExist:
+        raise ValidationError("La orden de compra especificada no existe.")
+
+    id_user_venta = getattr(venta.id_usuario, 'id_usuario', getattr(venta.id_usuario, 'pk', None))
+    id_user_req = getattr(usuario, 'id_usuario', getattr(usuario, 'pk', None))
+    rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
+    es_admin = (getattr(rol, 'codigo', '') or '').upper() in ['ADMIN', 'GERENTE']
+
+    if id_user_venta != id_user_req and not es_admin:
+        raise ValidationError("No posees autorización para acceder a este comprobante.")
+
+    # Buscar el pago asociado a la venta
+    pago = Pago.objects.filter(id_venta=venta).order_by('-id_pago').first()
+    if not pago:
+        if str(venta.estado_venta or '').upper() == 'PAGADA':
+            medio_mp = MedioPago.objects.filter(nombre_medio_pago__icontains='Mercado Pago').first()
+            pago = Pago.objects.create(
+                id_venta=venta,
+                medio_pago=medio_mp,
+                monto_pagado=venta.monto_subtotal + venta.costo_envio,
+                fecha_pago=venta.fecha_venta,
+                detalle="Pago registrado por compra virtual"
+            )
+        else:
+            raise ValidationError("La orden de compra aún no registra un pago acreditado para emitir factura.")
+
+    # Verificar existencia del PDF físico
+    ruta_rel = pago.ruta_comprobante
+    ruta_abs = None
+    if ruta_rel:
+        filename = os.path.basename(ruta_rel)
+        ruta_abs = os.path.join(settings.MEDIA_ROOT, 'facturas', filename)
+
+    if not ruta_abs or not os.path.exists(ruta_abs):
+        ruta_rel = generar_comprobante_fiscal(pago, venta)
+        filename = os.path.basename(ruta_rel)
+        ruta_abs = os.path.join(settings.MEDIA_ROOT, 'facturas', filename)
+
+    codigo_doc = venta.codigo_sec or f"VTA-{venta.id_venta}"
+    nombre_descarga = f"Factura_{codigo_doc}.pdf"
+    return ruta_abs, nombre_descarga
+
+
+
+
 
 

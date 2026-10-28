@@ -78,31 +78,31 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     modulo_automatico: false
   });
 
-  // Auto-ocultar error temporal tras 6 segundos (Regla 6)
+  // Auto-ocultar error temporal tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
-  // Auto-ocultar error de creación de nuevo modelo tras 6 segundos (Regla 6)
+  // Auto-ocultar error de creación de nuevo modelo tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorNuevoModelo) return undefined;
-    const t = setTimeout(() => setErrorNuevoModelo(''), 6000);
+    const t = setTimeout(() => setErrorNuevoModelo(''), 15000);
     return () => clearTimeout(t);
   }, [errorNuevoModelo]);
 
-  // Auto-ocultar error de creación de nueva categoría tras 6 segundos (Regla 6)
+  // Auto-ocultar error de creación de nueva categoría tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorNuevaCategoria) return undefined;
-    const t = setTimeout(() => setErrorNuevaCategoria(''), 6000);
+    const t = setTimeout(() => setErrorNuevaCategoria(''), 15000);
     return () => clearTimeout(t);
   }, [errorNuevaCategoria]);
 
-  // Auto-ocultar error de creación de nueva marca tras 6 segundos (Regla 6)
+  // Auto-ocultar error de creación de nueva marca tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorNuevaMarca) return undefined;
-    const t = setTimeout(() => setErrorNuevaMarca(''), 6000);
+    const t = setTimeout(() => setErrorNuevaMarca(''), 15000);
     return () => clearTimeout(t);
   }, [errorNuevaMarca]);
 

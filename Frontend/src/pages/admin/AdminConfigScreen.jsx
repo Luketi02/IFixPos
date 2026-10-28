@@ -13,10 +13,10 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Catálogo de categorías para pestañas de navegación rápida
 const CATEGORIAS_CONFIG = [
-  { id: 'all', label: 'Todas las Categorías', badge: '43' },
+  { id: 'all', label: 'Todas las Categorías', badge: '46' },
   { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '8' },
   { id: 'taller', label: 'Taller & Servicio Técnico', badge: '2' },
-  { id: 'fidelizacion', label: 'Fidelización & Logística', badge: '8' },
+  { id: 'fidelizacion', label: 'Fidelización & Pagos', badge: '11' },
   { id: 'institucional', label: 'Institucional (Master Data)', badge: '12' },
   { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '8' },
   { id: 'auditoria', label: 'Auditoría & Logs', badge: '5' }
@@ -26,7 +26,7 @@ export default function AdminConfigScreen() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
-  // Estado con los 43 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
+  // Estado con los 46 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
   const [formData, setFormData] = useState({
     // 🛡️ Seguridad
     tiempoSesionInactiva: '168',
@@ -46,6 +46,11 @@ export default function AdminConfigScreen() {
     envioLocal: '0',
     envioRegional: '0',
     envioNacional: '0',
+
+    // 💳 Pasarela de Pagos Digitales (Mercado Pago)
+    mpPublicKey: 'S/N',
+    mpAccessToken: 'S/N',
+    mpWebhookSecret: 'S/N',
 
     // 🏢 Institucional (Master Data)
     nombreLocal: 'S/N',
@@ -96,6 +101,10 @@ export default function AdminConfigScreen() {
   const [successMsg, setSuccessMsg] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchFilter, setSearchFilter] = useState('');
+
+  // Estados para alternar visibilidad de credenciales privadas de Mercado Pago
+  const [mostrarAccessTokenMP, setMostrarAccessTokenMP] = useState(false);
+  const [mostrarWebhookSecretMP, setMostrarWebhookSecretMP] = useState(false);
 
   // Estados para gestión de Dirección Física de la Sede (geo_app)
   const [direccionSede, setDireccionSede] = useState(null);
@@ -237,22 +246,22 @@ export default function AdminConfigScreen() {
     if (file) handleProcessLogoFile(file);
   };
 
-  // Temporizador para desvanecer errores a los 6 segundos (Regla de UX)
+  // Temporizador para desvanecer errores a los 15 segundos (Regla de UX)
   useEffect(() => {
     if (serverError) {
       const timer = setTimeout(() => {
         setServerError('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [serverError]);
 
-  // Temporizador para desvanecer notificación de éxito a los 5 segundos
+  // Temporizador para desvanecer notificación de éxito a los 15 segundos
   useEffect(() => {
     if (successMsg) {
       const timer = setTimeout(() => {
         setSuccessMsg('');
-      }, 5000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [successMsg]);
@@ -1060,6 +1069,154 @@ export default function AdminConfigScreen() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                       </svg>
                     </button>
+                  </div>
+                </div>
+
+                {/* 💳 Pasarela de Pagos Digitales - Mercado Pago */}
+                <div className="pt-6 border-t border-slate-700/60 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                          </svg>
+                        </div>
+                        <h3 className="text-base font-bold text-white tracking-tight">
+                          Pasarela de Pagos Digitales (Mercado Pago)
+                        </h3>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/20 border border-violet-500/40 text-violet-300">
+                          Parámetros Dinámicos
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Configura las credenciales de tu cuenta de vendedor para cobrar órdenes de compra y sincronizar transacciones mediante Webhooks oficiales.
+                      </p>
+                    </div>
+
+                    <a
+                      href="https://www.mercadopago.com/developers/panel/credentials"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 underline font-semibold transition-colors shrink-0"
+                    >
+                      <span>Obtener Credenciales MP</span>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                  </div>
+
+                  {/* Callout de Seguridad */}
+                  <div className="p-3.5 rounded-xl bg-slate-900/80 border border-violet-500/30 flex items-start gap-3">
+                    <span className="text-violet-400 text-base leading-none">🛡️</span>
+                    <div className="space-y-0.5 text-xs">
+                      <span className="font-bold text-violet-300 font-mono">Seguridad & Privacidad de Pasarela</span>
+                      <p className="text-slate-400 text-[11px] leading-relaxed">
+                        El <strong>Access Token</strong> y el <strong>Webhook Secret</strong> nunca son expuestos al frontend del cliente ni a usuarios sin privilegios administrativos. Si los valores se dejan en <code className="text-cyan-300 bg-slate-800 px-1 py-0.5 rounded">S/N</code>, el sistema utilizará de forma automática las variables de entorno de respaldo configuradas en el servidor.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Grilla de Credenciales */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 pt-2">
+                    {/* Public Key */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Public Key (Pública)
+                        </label>
+                        <span className="text-[10px] text-cyan-400 font-mono">Frontend / Checkout</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={formData.mpPublicKey}
+                        onChange={(e) => handleInputChange('mpPublicKey', e.target.value)}
+                        placeholder="APP_USR-xxxx-xxxx o TEST-xxxx"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                      />
+                      <p className="text-[10px] text-slate-400">
+                        Llave pública necesaria para inicializar el SDK y generar el checkout seguro.
+                      </p>
+                    </div>
+
+                    {/* Access Token */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Access Token (Privado)
+                        </label>
+                        <span className="text-[10px] text-violet-400 font-mono">Backend DRF</span>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={mostrarAccessTokenMP ? 'text' : 'password'}
+                          value={formData.mpAccessToken}
+                          onChange={(e) => handleInputChange('mpAccessToken', e.target.value)}
+                          placeholder="APP_USR-xxxx-xxxx o TEST-xxxx"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-3 pr-10 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMostrarAccessTokenMP(!mostrarAccessTokenMP)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors p-1 cursor-pointer"
+                          title={mostrarAccessTokenMP ? 'Ocultar token' : 'Revelar token'}
+                        >
+                          {mostrarAccessTokenMP ? (
+                            <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                            </svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        Token secreto del vendedor para crear preferencias e interactuar con la API.
+                      </p>
+                    </div>
+
+                    {/* Webhook Secret */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Webhook Secret (Firma)
+                        </label>
+                        <span className="text-[10px] text-violet-400 font-mono">HMAC SHA-256</span>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={mostrarWebhookSecretMP ? 'text' : 'password'}
+                          value={formData.mpWebhookSecret}
+                          onChange={(e) => handleInputChange('mpWebhookSecret', e.target.value)}
+                          placeholder="Secreto de firma de notificaciones"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-3 pr-10 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMostrarWebhookSecretMP(!mostrarWebhookSecretMP)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors p-1 cursor-pointer"
+                          title={mostrarWebhookSecretMP ? 'Ocultar secret' : 'Revelar secret'}
+                        >
+                          {mostrarWebhookSecretMP ? (
+                            <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                            </svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        Clave de firma para validar que las llamadas del webhook sean auténticas.
+                      </p>
+                    </div>
                   </div>
                 </div>
 

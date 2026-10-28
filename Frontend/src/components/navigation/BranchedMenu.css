@@ -154,10 +154,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  width: calc(100% - var(--bm-indent) + 6px);
   height: var(--bm-row);
   margin: 0;
-  padding: 0 8px 0 var(--bm-indent);
+  margin-left: calc(var(--bm-indent) - 6px);
+  padding: 0 10px 0 8px;
   border: 0;
   background: none;
   color: #94a3b8;
@@ -173,14 +174,16 @@
 
 .branched-menu__item:hover {
   color: #f8fafc;
-  background-color: rgba(51, 65, 85, 0.4);
+  background-color: rgba(51, 65, 85, 0.45);
   transform: translateX(2px);
 }
 
 .branched-menu__item[data-active] {
   color: var(--bm-accent, #06b6d4) !important;
-  background: linear-gradient(90deg, rgba(6, 182, 212, 0.15), rgba(139, 92, 246, 0.05));
-  border-left: 2px solid var(--bm-accent, #06b6d4);
+  background: linear-gradient(90deg, rgba(6, 182, 212, 0.18), rgba(139, 92, 246, 0.06));
+  border-left: 2.5px solid var(--bm-accent, #06b6d4);
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
   font-weight: 600;
   text-shadow: 0 0 10px rgba(6, 182, 212, 0.45);
 }

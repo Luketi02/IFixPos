@@ -38,10 +38,10 @@ export default function CargarDiagnosticoModal({
   const [enviando, setEnviando] = useState(false);
   const [errorLocal, setErrorLocal] = useState('');
 
-  // Auto-limpieza de error local a los 6 segundos (Regla 6)
+  // Auto-limpieza de error local a los 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorLocal) return undefined;
-    const t = setTimeout(() => setErrorLocal(''), 6000);
+    const t = setTimeout(() => setErrorLocal(''), 15000);
     return () => clearTimeout(t);
   }, [errorLocal]);
 

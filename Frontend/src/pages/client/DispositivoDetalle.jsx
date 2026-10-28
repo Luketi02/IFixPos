@@ -30,17 +30,17 @@ export default function DispositivoDetalle() {
 
   const isLoading = cargadoId !== `${id_dispositivo}-${recarga}`;
 
-  // Auto-ocultamiento de errores a los 6 segundos
+  // Auto-ocultamiento de errores a los 15 segundos
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    const timer = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 
-  // Auto-ocultamiento de mensajes de éxito a los 6 segundos
+  // Auto-ocultamiento de mensajes de éxito a los 15 segundos
   useEffect(() => {
     if (!successMessage) return undefined;
-    const timer = setTimeout(() => setSuccessMessage(''), 6000);
+    const timer = setTimeout(() => setSuccessMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [successMessage]);
 

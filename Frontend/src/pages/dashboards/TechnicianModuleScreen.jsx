@@ -69,12 +69,12 @@ export default function TechnicianModuleScreen({ forcedModule }) {
     { id: 'OC-2026-090', proveedor: 'MicroElectronica Corp', insumo: 'Conector de Carga USB-C Flexible', cantidad: 12, estado: 'En Tránsito' }
   ]);
 
-  // Alerta Cyber-Tech con auto-cierre de 6 segundos
+  // Alerta Cyber-Tech con auto-cierre de 15 segundos
   const dispararAlerta = (tipo, mensaje) => {
     setAlerta({ tipo, mensaje });
     setTimeout(() => {
       setAlerta(null);
-    }, 6000);
+    }, 15000);
   };
 
   return (

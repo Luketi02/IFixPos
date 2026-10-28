@@ -29,7 +29,7 @@ export default function DireccionModal({
   // Filtro de búsqueda rápida para ciudades
   const [filtroCiudad, setFiltroCiudad] = useState('');
 
-  // Mensaje de error general con fade-out a los 6 segundos
+  // Mensaje de error general con fade-out a los 15 segundos
   const [errorMessage, setErrorMessage] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
 
@@ -46,12 +46,12 @@ export default function DireccionModal({
     id_ciudad: ''
   });
 
-  // Temporizador para desvanecer mensaje de error a los 6 segundos
+  // Temporizador para desvanecer mensaje de error a los 15 segundos
   useEffect(() => {
     if (!errorMessage) return undefined;
     const timer = setTimeout(() => {
       setErrorMessage('');
-    }, 6000);
+    }, 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 

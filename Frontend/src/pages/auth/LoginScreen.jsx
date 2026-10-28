@@ -44,8 +44,8 @@ const LoginScreen = () => {
   useEffect(() => {
     if (errorMsg) {
       const timer = setTimeout(() => {
-        setErrorMsg(''); // Lo limpiamos después de 6 segundos
-      }, 6000);
+        setErrorMsg(''); // Lo limpiamos después de 15 segundos
+      }, 15000);
       
       return () => clearTimeout(timer);
     }

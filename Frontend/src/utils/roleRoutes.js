@@ -39,7 +39,7 @@ export const getDashboardPath = (role) => {
 
 /**
  * Formatea el saludo del cliente con la inicial del apellido seguida del nombre y el emoticón ^-^
- * Ejemplo: Lucas Miño -> "M. Lucas ^-^"
+ * Ejemplo: Juan Rodriguez -> "R. Juan ^-^"
  */
 export const formatearSaludoCliente = (user) => {
   const nombre = user?.nombre?.trim() || '';
@@ -58,7 +58,7 @@ export const formatearSaludoCliente = (user) => {
 
 /**
  * Formatea el nombre con la inicial del apellido si está disponible.
- * Ejemplo: Lucas Miño -> "M. Lucas"
+ * Ejemplo: Juan Rodriguez -> "R. Juan"
  */
 export const formatearNombreConInicial = (user, fallback = 'Usuario') => {
   const nombre = user?.nombre?.trim() || '';

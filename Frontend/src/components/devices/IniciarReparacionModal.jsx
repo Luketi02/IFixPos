@@ -67,10 +67,10 @@ export default function IniciarReparacionModal({
   // Respuesta de orden exitosa
   const [resultado, setResultado] = useState(null);
 
-  // Auto-ocultamiento de alertas de error a los 6 segundos (Regla Global 6)
+  // Auto-ocultamiento de alertas de error a los 15 segundos (Regla Global 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    const timer = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 

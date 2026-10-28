@@ -23,12 +23,12 @@ const OtpVerificationModal = ({ isOpen, email, onClose, onSuccess }) => {
 
   const inputRefs = useRef([]);
 
-  // Auto-Ocultar Errores tras 6 segundos (manteniendo coherencia con Login y Register)
+  // Auto-Ocultar Errores tras 15 segundos (manteniendo coherencia con Login y Register)
   useEffect(() => {
     if (errorMsg) {
       const timer = setTimeout(() => {
         setErrorMsg('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMsg]);

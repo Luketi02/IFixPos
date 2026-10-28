@@ -33,12 +33,12 @@ export default function CambiarEstadoModal({
   const selectRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Auto-limpieza de mensaje de error a los 6 segundos (Regla 6 de UX)
+  // Auto-limpieza de mensaje de error a los 15 segundos (Regla 6 de UX)
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);

@@ -116,22 +116,22 @@ export default function EditProfileScreen() {
     await procesarArchivoFoto(file);
   };
 
-  // Auto-ocultar errores tras 6 segundos según las reglas del proyecto
+  // Auto-ocultar errores tras 15 segundos según las reglas del proyecto
   useEffect(() => {
     if (serverError) {
       const timer = setTimeout(() => {
         setServerError('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [serverError]);
 
-  // Auto-ocultar mensaje de éxito tras 5 segundos
+  // Auto-ocultar mensaje de éxito tras 15 segundos
   useEffect(() => {
     if (successMsg) {
       const timer = setTimeout(() => {
         setSuccessMsg('');
-      }, 5000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [successMsg]);

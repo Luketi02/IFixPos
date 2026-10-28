@@ -40,17 +40,17 @@ export default function AdminInventoryScreen() {
   const [toastMensaje, setToastMensaje] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Auto-ocultar alerta de error temporal tras 6 segundos (Regla 6)
+  // Auto-ocultar alerta de error temporal tras 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
-  // Auto-ocultar Toast de éxito tras 4.5 segundos
+  // Auto-ocultar Toast de éxito tras 15 segundos
   useEffect(() => {
     if (!toastMensaje) return undefined;
-    const t = setTimeout(() => setToastMensaje(null), 4500);
+    const t = setTimeout(() => setToastMensaje(null), 15000);
     return () => clearTimeout(t);
   }, [toastMensaje]);
 

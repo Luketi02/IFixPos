@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
@@ -7,8 +7,106 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import { formatearNombreConInicial } from '../../utils/roleRoutes';
 import { obtenerImagenProducto, obtenerGaleriaImagenes, formatearMoneda } from '../../utils/productImages';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
+import CheckoutModal from '../../components/cart/CheckoutModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// =============================================================================
+// SUBCOMPONENTE AISLADO: BANNER DE ORDEN PENDIENTE (0 RE-RENDERS A LA TIENDA)
+// Sincronizado estrictamente con la hora oficial del sistema (Wall-Clock Time)
+// =============================================================================
+function BannerOrdenPendiente({ compra, onRetomar, onCancelar, onExpirado }) {
+  const tiempoFinRef = useRef(Date.now() + Math.max(0, compra?.segundos_restantes || 0) * 1000);
+  const [segundos, setSegundos] = useState(Math.max(0, compra?.segundos_restantes || 0));
+
+  useEffect(() => {
+    tiempoFinRef.current = Date.now() + Math.max(0, compra?.segundos_restantes || 0) * 1000;
+    setSegundos(Math.max(0, compra?.segundos_restantes || 0));
+  }, [compra?.segundos_restantes, compra?.id_venta]);
+
+  useEffect(() => {
+    const calcularRestante = () => {
+      const difMs = tiempoFinRef.current - Date.now();
+      return Math.max(0, Math.ceil(difMs / 1000));
+    };
+
+    const sincronizarTiempo = () => {
+      const segs = calcularRestante();
+      setSegundos(segs);
+      if (segs <= 0 && onExpirado) {
+        onExpirado();
+      }
+    };
+
+    sincronizarTiempo();
+    const t = setInterval(sincronizarTiempo, 1000);
+
+    const handleVisibilidad = () => {
+      if (document.visibilityState === 'visible') {
+        sincronizarTiempo();
+      }
+    };
+    const handleFocus = () => {
+      sincronizarTiempo();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilidad);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', handleVisibilidad);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [onExpirado]);
+
+  if (!compra || segundos <= 0) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      exit={{ opacity: 0, height: 0 }}
+      className="bg-gradient-to-r from-cyan-950/95 via-[#1E293B] to-slate-900 border-b border-cyan-500/40 px-4 sm:px-6 lg:px-8 py-3 shadow-lg shadow-cyan-950/30 sticky top-16 z-20"
+    >
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+            <span className="text-base">⏱️</span>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-white flex items-center gap-2">
+              <span>Tienes una orden de compra en curso con repuestos reservados</span>
+              <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono text-[11px] font-black">
+                {String(Math.floor(segundos / 60)).padStart(2, '0')}:{String(segundos % 60).padStart(2, '0')}
+              </span>
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Total a abonar: <span className="text-cyan-400 font-mono font-bold">{formatearMoneda(compra.total)}</span> • Puedes retomar el pago o cancelar para liberar el stock a tu carrito.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => onRetomar(compra)}
+            className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/25 transition-all flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>⚡ Retomar Pago</span>
+          </button>
+          <button
+            type="button"
+            onClick={onCancelar}
+            className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:border-rose-400 text-xs font-medium transition-all cursor-pointer"
+          >
+            <span>✕ Cancelar Reserva</span>
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export default function ClientStoreScreen() {
   const { user, token } = useAuth();
@@ -34,8 +132,17 @@ export default function ClientStoreScreen() {
   const [quitandoId, setQuitandoId] = useState(null);
   const [resumenCarrito, setResumenCarrito] = useState({ total_articulos: 0, items: [], monto_subtotal: 0 });
   const [carritoDrawerAbierto, setCarritoDrawerAbierto] = useState(false);
+  const [checkoutModalAbierto, setCheckoutModalAbierto] = useState(false);
   const [toastNotificacion, setToastNotificacion] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // ---------------------------------------------------------------------------
+  // Estado para Órdenes Pendientes de Pago en Curso (Reserva TTL de 30 min)
+  // ---------------------------------------------------------------------------
+  const [compraPendiente, setCompraPendiente] = useState(null);
+  const [ordenParaRetomar, setOrdenParaRetomar] = useState(null);
+  const [sincronizandoCheckout, setSincronizandoCheckout] = useState(false);
+  const sincronizacionesPendientesRef = useRef({});
 
   // ---------------------------------------------------------------------------
   // Estado para Vista Grande / Modal de Especificaciones del Producto
@@ -44,17 +151,17 @@ export default function ClientStoreScreen() {
   const [fotoActivaIndex, setFotoActivaIndex] = useState(0);
   const [cantidadDetalle, setCantidadDetalle] = useState(1);
 
-  // Auto-ocultar alerta de error temporal a los 6 segundos (Regla 6)
+  // Auto-ocultar alerta de error temporal a los 15 segundos (Regla 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 6000);
+    const timer = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 
-  // Auto-ocultar Toast de éxito a los 4.5 segundos
+  // Auto-ocultar Toast de éxito a los 15 segundos
   useEffect(() => {
     if (!toastNotificacion) return undefined;
-    const timer = setTimeout(() => setToastNotificacion(null), 4500);
+    const timer = setTimeout(() => setToastNotificacion(null), 15000);
     return () => clearTimeout(timer);
   }, [toastNotificacion]);
 
@@ -131,8 +238,115 @@ export default function ClientStoreScreen() {
   }, [cargarProductos]);
 
   // ---------------------------------------------------------------------------
-  // Lógica de "Añadir al Carrito" (POST /api/sales/carrito/agregar/)
+  // Sincronización Atómica del Carrito con Cantidad Absoluta y Debounce
   // ---------------------------------------------------------------------------
+  const forzarSincronizacionCarrito = useCallback(async () => {
+    const tareas = Object.values(sincronizacionesPendientesRef.current);
+    if (tareas.length > 0) {
+      await Promise.allSettled(tareas.map((t) => t.ejecutarAhora()));
+      sincronizacionesPendientesRef.current = {};
+    }
+    await refrescarCarrito();
+  }, [refrescarCarrito]);
+
+  const actualizarCantidadItem = useCallback((idProducto, nuevaCantidad, productoInfo = null) => {
+    if (!token) {
+      setErrorMessage('Debes iniciar sesión para administrar tu carrito de compras.');
+      return;
+    }
+
+    const cantidadObjetivo = Math.max(0, parseInt(nuevaCantidad, 10) || 0);
+
+    // 1. Actualización Optimista Instantánea (0ms de latencia visual, sin trabas)
+    setResumenCarrito((prev) => {
+      const itemsPrev = Array.isArray(prev?.items) ? prev.items : [];
+      let itemsCopia = [...itemsPrev];
+      const idx = itemsCopia.findIndex((i) => i.id_producto === idProducto);
+
+      if (cantidadObjetivo <= 0) {
+        itemsCopia = itemsCopia.filter((i) => i.id_producto !== idProducto);
+      } else if (idx >= 0) {
+        const itemActual = itemsCopia[idx];
+        const sub = cantidadObjetivo * Number(itemActual.precio_unitario || 0);
+        itemsCopia[idx] = {
+          ...itemActual,
+          cantidad: cantidadObjetivo,
+          subtotal: sub
+        };
+      } else if (productoInfo) {
+        const precioUnitario = Number(
+          productoInfo.tiene_descuento ? productoInfo.precio_final : productoInfo.precio_venta
+        ) || 0;
+        itemsCopia.push({
+          id_item: `temp-${Date.now()}`,
+          id_producto: idProducto,
+          producto_nombre: productoInfo.nombre,
+          producto_codigo: productoInfo.codigo_barras || '',
+          cantidad: cantidadObjetivo,
+          precio_unitario: precioUnitario,
+          subtotal: cantidadObjetivo * precioUnitario,
+          imagen_url: productoInfo.imagen_url || null
+        });
+      }
+
+      const nuevoSubtotal = itemsCopia.reduce((acc, i) => acc + Number(i.subtotal || 0), 0);
+      const nuevaCantTotal = itemsCopia.reduce((acc, i) => acc + Number(i.cantidad || 0), 0);
+
+      return {
+        ...prev,
+        items: itemsCopia,
+        monto_subtotal: nuevoSubtotal,
+        total_articulos: nuevaCantTotal
+      };
+    });
+
+    // 2. Control de Debounce de Red (250ms) por cada producto
+    // Si el usuario clica varias veces rápido (+ o -), solo se envía el valor final
+    if (sincronizacionesPendientesRef.current[idProducto]?.timerId) {
+      clearTimeout(sincronizacionesPendientesRef.current[idProducto].timerId);
+    }
+
+    const ejecutarPeticion = async () => {
+      delete sincronizacionesPendientesRef.current[idProducto];
+      try {
+        const res = await axios.post(
+          `${API_BASE_URL}/api/sales/carrito/actualizar/`,
+          {
+            id_producto: idProducto,
+            cantidad: cantidadObjetivo
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        return res.data;
+      } catch (err) {
+        console.error('Error al sincronizar cantidad en carrito:', err);
+        const dataErr = err.response?.data;
+        const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
+        setErrorMessage(msg || 'No pudimos sincronizar la cantidad solicitada. Verificando disponibilidad...');
+        await refrescarCarrito();
+        throw err;
+      }
+    };
+
+    const timerId = setTimeout(() => {
+      ejecutarPeticion();
+    }, 250);
+
+    sincronizacionesPendientesRef.current[idProducto] = {
+      timerId,
+      cantidad: cantidadObjetivo,
+      ejecutarAhora: () => {
+        clearTimeout(timerId);
+        return ejecutarPeticion();
+      }
+    };
+  }, [token, refrescarCarrito]);
+
   const handleAgregarAlCarrito = async (producto, cantidadDeseada = 1) => {
     if (!producto || !producto.en_stock) return;
 
@@ -142,81 +356,100 @@ export default function ClientStoreScreen() {
     }
 
     const cantidadFinal = Math.max(1, parseInt(cantidadDeseada, 10) || 1);
-    setAgregandoId(producto.id_producto);
-    try {
-      const payload = {
-        id_producto: producto.id_producto,
-        cantidad: cantidadFinal
-      };
+    const idProd = producto.id_producto;
+    const precioUnitario = Number(producto.tiene_descuento ? producto.precio_final : producto.precio_venta) || 0;
 
-      const res = await axios.post(
-        `${API_BASE_URL}/api/sales/carrito/agregar/`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+    const itemsActuales = Array.isArray(resumenCarrito?.items) ? resumenCarrito.items : [];
+    const itemExistente = itemsActuales.find((i) => i.id_producto === idProd);
+    const cantidadPrevia = Number(itemExistente?.cantidad || 0);
+    const nuevaCantidad = cantidadPrevia + cantidadFinal;
 
-      // Feedback UX: Toast elegante flotante
-      const mensajeToast = res.data?.mensaje || `¡${producto.nombre} agregado al carrito! :3`;
-      const precioUnitario = producto.tiene_descuento ? producto.precio_final : producto.precio_venta;
+    actualizarCantidadItem(idProd, nuevaCantidad, producto);
+
+    if (cantidadDeseada === 1 && !carritoDrawerAbierto) {
       setToastNotificacion({
         nombre: producto.nombre,
-        mensaje: mensajeToast,
+        mensaje: `¡${producto.nombre} agregado al carrito!`,
         precio: precioUnitario,
         cantidad: cantidadFinal
       });
-
-      // Actualizar contador del carrito
-      await refrescarCarrito();
-    } catch (err) {
-      console.error('Error al agregar al carrito:', err);
-      const dataErr = err.response?.data;
-      const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
-      setErrorMessage(msg || 'No pudimos agregar el producto a tu carrito. Verifica el stock disponible.');
-    } finally {
-      setAgregandoId(null);
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Lógica de "Quitar / Decrementar del Carrito" (POST /api/sales/carrito/quitar/)
-  // ---------------------------------------------------------------------------
-  const handleQuitarDelCarrito = async (idProducto, cantidadAQuitar = null) => {
+  const handleQuitarDelCarrito = (idProducto, cantidadAQuitar = null) => {
     if (!token) return;
 
-    setQuitandoId(idProducto);
-    try {
-      const payload = {
-        id_producto: idProducto
-      };
-      if (cantidadAQuitar !== null && cantidadAQuitar !== undefined) {
-        payload.cantidad = cantidadAQuitar;
-      }
-
-      await axios.post(
-        `${API_BASE_URL}/api/sales/carrito/quitar/`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      await refrescarCarrito();
-    } catch (err) {
-      console.error('Error al quitar del carrito:', err);
-      const dataErr = err.response?.data;
-      const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
-      setErrorMessage(msg || 'No pudimos actualizar tu carrito. Intenta nuevamente.');
-    } finally {
-      setQuitandoId(null);
+    if (cantidadAQuitar === null || cantidadAQuitar === undefined) {
+      // Eliminar por completo
+      actualizarCantidadItem(idProducto, 0);
+      return;
     }
+
+    const itemsActuales = Array.isArray(resumenCarrito?.items) ? resumenCarrito.items : [];
+    const itemExistente = itemsActuales.find((i) => i.id_producto === idProducto);
+    const cantidadPrevia = Number(itemExistente?.cantidad || 1);
+    const nuevaCantidad = Math.max(0, cantidadPrevia - Number(cantidadAQuitar));
+
+    actualizarCantidadItem(idProducto, nuevaCantidad);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Monitoreo de Compra Pendiente Activa (Reserva TTL de 30 min)
+  // ---------------------------------------------------------------------------
+  const consultarCompraPendiente = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/sales/compras/virtual/pendiente-activa/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.tiene_pendiente && res.data?.venta) {
+        setCompraPendiente(res.data.venta);
+      } else {
+        setCompraPendiente(null);
+      }
+    } catch (err) {
+      // Silencioso
+    }
+  }, [token]);
+
+  useEffect(() => {
+    consultarCompraPendiente();
+    const interval = setInterval(consultarCompraPendiente, 15000);
+    return () => clearInterval(interval);
+  }, [consultarCompraPendiente]);
+
+  const handleCancelarOrdenDesdeBanner = async () => {
+    if (!compraPendiente?.id_venta || !token) return;
+    try {
+      await axios.post(
+        `${API_BASE_URL}/api/sales/compras/virtual/${compraPendiente.id_venta}/cancelar/`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setCompraPendiente(null);
+      setOrdenParaRetomar(null);
+      await refrescarCarrito();
+      await cargarProductos();
+      setToastNotificacion({
+        nombre: 'Reserva Cancelada',
+        mensaje: 'La orden fue cancelada y tus repuestos han vuelto a tu carrito.'
+      });
+      setCarritoDrawerAbierto(true);
+    } catch (err) {
+      setErrorMessage('No pudimos cancelar la reserva en este momento.');
+    }
+  };
+
+  const handleCompraExitosa = async (datosVenta) => {
+    setCompraPendiente(null);
+    setOrdenParaRetomar(null);
+    await refrescarCarrito();
+    await cargarProductos();
+    setToastNotificacion({
+      nombre: 'Compra Confirmada',
+      mensaje: '¡Tu orden virtual ha sido registrada con éxito!',
+      precio: datosVenta?.total || datosVenta?.monto_subtotal
+    });
   };
 
   const nombreCliente = useMemo(() => formatearNombreConInicial(user, 'Cliente'), [user]);
@@ -280,6 +513,27 @@ export default function ClientStoreScreen() {
 
           </div>
         </header>
+
+        {/* Banner Informativo y de Acción: Orden Pendiente de Pago Activa (TTL 30 Minutos) */}
+        <AnimatePresence>
+          {compraPendiente && (
+            <BannerOrdenPendiente
+              compra={compraPendiente}
+              onRetomar={(c) => {
+                setOrdenParaRetomar(c);
+                setCheckoutModalAbierto(true);
+              }}
+              onCancelar={handleCancelarOrdenDesdeBanner}
+              onExpirado={async () => {
+                setCompraPendiente(null);
+                setOrdenParaRetomar(null);
+                await consultarCompraPendiente();
+                await refrescarCarrito();
+                await cargarProductos();
+              }}
+            />
+          )}
+        </AnimatePresence>
 
         {/* Sistema de Alertas Temporales de Error (Regla 6: 6 segundos con fade-out) */}
         <AnimatePresence>
@@ -922,14 +1176,13 @@ export default function ClientStoreScreen() {
                               </span>
                             </div>
 
-                            {/* Controles de Cantidad (+ / -) */}
+                            {/* Controles de Cantidad (+ / -) con Optimistic UI */}
                             <div className="flex items-center gap-2 pt-1">
                               <div className="inline-flex items-center bg-slate-950/80 rounded-lg border border-slate-800 p-0.5">
                                 <button
                                   type="button"
-                                  disabled={estaProcesando}
-                                  onClick={() => handleQuitarDelCarrito(item.id_producto, 1)}
-                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 transition-colors text-xs font-bold"
+                                  onClick={() => actualizarCantidadItem(item.id_producto, Math.max(0, Number(item.cantidad || 1) - 1), item)}
+                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors text-xs font-bold active:scale-95 cursor-pointer"
                                   title="Disminuir una unidad"
                                 >
                                   -
@@ -939,9 +1192,8 @@ export default function ClientStoreScreen() {
                                 </span>
                                 <button
                                   type="button"
-                                  disabled={estaProcesando}
-                                  onClick={() => handleAgregarAlCarrito({ id_producto: item.id_producto, nombre: item.producto_nombre, en_stock: true, precio_venta: item.precio_unitario }, 1)}
-                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 transition-colors text-xs font-bold"
+                                  onClick={() => actualizarCantidadItem(item.id_producto, Number(item.cantidad || 1) + 1, item)}
+                                  className="w-6 h-6 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors text-xs font-bold active:scale-95 cursor-pointer"
                                   title="Añadir una unidad"
                                 >
                                   +
@@ -954,9 +1206,8 @@ export default function ClientStoreScreen() {
                           <div className="flex flex-col items-end justify-between h-full shrink-0 gap-2">
                             <button
                               type="button"
-                              disabled={estaProcesando}
-                              onClick={() => handleQuitarDelCarrito(item.id_producto, null)}
-                              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all disabled:opacity-40"
+                              onClick={() => actualizarCantidadItem(item.id_producto, 0, item)}
+                              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all active:scale-90 cursor-pointer"
                               title="Quitar producto del carrito"
                             >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -989,22 +1240,39 @@ export default function ClientStoreScreen() {
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setCarritoDrawerAbierto(false);
-                        // Mensaje amigable anunciando la integración con Checkout virtual
-                        setToastNotificacion({
-                          nombre: 'Orden en curso',
-                          mensaje: '¡Listo para concretar tu compra virtual en IFixPos! :3',
-                          precio: resumenCarrito.monto_subtotal
-                        });
+                      disabled={sincronizandoCheckout}
+                      onClick={async () => {
+                        setSincronizandoCheckout(true);
+                        try {
+                          await forzarSincronizacionCarrito();
+                          setCarritoDrawerAbierto(false);
+                          setCheckoutModalAbierto(true);
+                        } catch (err) {
+                          console.error('Error al preparar orden:', err);
+                        } finally {
+                          setSincronizandoCheckout(false);
+                        }
                       }}
-                      className="w-full py-3.5 px-4 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                      className="w-full py-3.5 px-4 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                     >
-                      <span>Continuar con la Compra</span>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                      </svg>
+                      {sincronizandoCheckout ? (
+                        <>
+                          <svg className="animate-spin w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                          </svg>
+                          <span>Verificando tu carrito...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Continuar con la Compra</span>
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                          </svg>
+                        </>
+                      )}
                     </button>
+
                   </div>
                 )}
 
@@ -1059,6 +1327,43 @@ export default function ClientStoreScreen() {
         )}
       </AnimatePresence>
 
+      {/* ===================================================================== */}
+      {/* Modal de Checkout Virtual (CU-18)                                     */}
+      {/* ===================================================================== */}
+      <CheckoutModal
+        isOpen={checkoutModalAbierto}
+        onClose={() => {
+          setCheckoutModalAbierto(false);
+          setOrdenParaRetomar(null);
+        }}
+        itemsCarrito={resumenCarrito.items || []}
+        montoSubtotal={resumenCarrito.monto_subtotal || 0}
+        onCompraCompletada={handleCompraExitosa}
+        onOrdenCancelada={async (abrirCarrito = false) => {
+          setCompraPendiente(null);
+          setSegundosPendiente(0);
+          setOrdenParaRetomar(null);
+          await refrescarCarrito();
+          await cargarProductos();
+          if (abrirCarrito) {
+            setCarritoDrawerAbierto(true);
+            setToastNotificacion({
+              nombre: 'Retorno al Carrito',
+              mensaje: 'La reserva fue cancelada. Tus artículos siguen en el carrito para que sigas comprando.'
+            });
+          }
+        }}
+        onRetornarAlCarrito={() => {
+          setCarritoDrawerAbierto(true);
+        }}
+        ordenParaRetomar={ordenParaRetomar}
+        onOrdenCerradaConPendiente={(venta) => {
+          setOrdenParaRetomar(venta);
+          consultarCompraPendiente();
+        }}
+      />
+
     </div>
   );
 }
+

@@ -71,12 +71,12 @@ const RecoverPasswordScreen = () => {
   // Temporizador para redirección automática tras éxito (3 segundos)
   const [redirectCount, setRedirectCount] = useState(3);
 
-  // Manejo de Auto-Ocultar Errores tras 6 segundos
+  // Manejo de Auto-Ocultar Errores tras 15 segundos
   useEffect(() => {
     if (errorMsg) {
       const timer = setTimeout(() => {
         setErrorMsg('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMsg]);

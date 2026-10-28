@@ -29,22 +29,22 @@ export default function CoverageZonesSection({ token }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Temporizador para desvanecer errores a los 6 segundos (Regla de UX)
+  // Temporizador para desvanecer errores a los 15 segundos (Regla de UX)
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);
 
-  // Temporizador para desvanecer éxito a los 5 segundos
+  // Temporizador para desvanecer éxito a los 15 segundos
   useEffect(() => {
     if (successMessage) {
       const timer = setTimeout(() => {
         setSuccessMessage('');
-      }, 5000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [successMessage]);

@@ -761,9 +761,12 @@ def editar_perfil_usuario(
     perfil.nombre = nombre
     perfil.apellido = apellido
     perfil.telefono = telefono
-    perfil.dni = dni
-    perfil.telefono_alt = telefono_alt
-    perfil.foto_perfil = foto_perfil
+    if dni is not None:
+        perfil.dni = dni
+    if telefono_alt is not None:
+        perfil.telefono_alt = telefono_alt
+    if foto_perfil is not None:
+        perfil.foto_perfil = foto_perfil
     perfil.save()
     
     registrar_log_condicional(

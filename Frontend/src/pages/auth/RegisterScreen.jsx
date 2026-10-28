@@ -57,7 +57,7 @@ const RegisterScreen = () => {
     if (errorMsg) {
       const timer = setTimeout(() => {
         setErrorMsg('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMsg]);

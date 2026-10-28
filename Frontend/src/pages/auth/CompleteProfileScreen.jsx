@@ -26,12 +26,12 @@ const CompleteProfileScreen = () => {
   const [serverError, setServerError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Auto-ocultar mensajes de error del servidor a los 6 segundos (Regla Cyber-Tech)
+  // Auto-ocultar mensajes de error del servidor a los 15 segundos (Regla Cyber-Tech)
   useEffect(() => {
     if (serverError) {
       const timer = setTimeout(() => {
         setServerError('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [serverError]);
@@ -334,7 +334,7 @@ const CompleteProfileScreen = () => {
                 value={formData.nombre}
                 onChange={handleChange}
                 onBlur={handleBlur}
-                placeholder="Ej. Lucas"
+                placeholder="Ej. Juan"
                 disabled={isLoading}
                 className={`w-full px-4 py-3 bg-[#0F172A] border rounded-xl text-slate-100 placeholder-slate-500 transition-all duration-200 outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] ${
                   errors.nombre && touched.nombre
@@ -360,7 +360,7 @@ const CompleteProfileScreen = () => {
                 value={formData.apellido}
                 onChange={handleChange}
                 onBlur={handleBlur}
-                placeholder="Ej. Miño"
+                placeholder="Ej. Rodriguez"
                 disabled={isLoading}
                 className={`w-full px-4 py-3 bg-[#0F172A] border rounded-xl text-slate-100 placeholder-slate-500 transition-all duration-200 outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] ${
                   errors.apellido && touched.apellido

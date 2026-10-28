@@ -43,12 +43,12 @@ export default function AddressManagementModal({
     alias: 'Sede Central'
   });
 
-  // Temporizador para desvanecer mensaje de error general (Regla de UX: 6 segundos)
+  // Temporizador para desvanecer mensaje de error general (Regla de UX: 15 segundos)
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);

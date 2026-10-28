@@ -54,7 +54,7 @@ export default function CompletarPago({ onAlerta }) {
         onAlerta(tipo, mensaje);
       } else {
         setAlertaLocal({ tipo, mensaje });
-        setTimeout(() => setAlertaLocal(null), 6000);
+        setTimeout(() => setAlertaLocal(null), 15000);
       }
     },
     [onAlerta]

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Optional
 from rest_framework import serializers
 from sales_app.models import Venta, DetalleVenta, MedioPago
 from geo_app.models import Direccion
@@ -220,6 +221,32 @@ class QuitarDelCarritoInputSerializer(serializers.Serializer):
         error_messages={
             'min_value': 'La cantidad debe ser al menos 1.',
             'invalid': 'La cantidad debe ser un entero.'
+        }
+    )
+
+
+class ActualizarCantidadCarritoInputSerializer(serializers.Serializer):
+    """
+    Aduana para fijar directamente la cantidad absoluta de un producto en el carrito.
+    Elimina por diseño cualquier condición de carrera o desincronización por clics rápidos.
+    Si cantidad <= 0, el producto se remueve del carrito.
+    """
+    id_producto = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'El identificador del producto es obligatorio.',
+            'invalid': 'El identificador del producto debe ser un número entero.',
+            'min_value': 'El identificador del producto debe ser un número positivo.'
+        }
+    )
+    cantidad = serializers.IntegerField(
+        required=True,
+        min_value=0,
+        error_messages={
+            'required': 'La cantidad a establecer es obligatoria.',
+            'invalid': 'La cantidad debe ser un número entero.',
+            'min_value': 'La cantidad no puede ser negativa.'
         }
     )
 class CarritoItemOutputSerializer(serializers.Serializer):
@@ -730,4 +757,85 @@ class FiltrarHistorialBeneficiosInputSerializer(serializers.Serializer):
 class BuscarOperacionCobroInputSerializer(serializers.Serializer):
     """Aduana para búsqueda de operación pendiente de cobro (CU-21)."""
     identificador = serializers.CharField(required=False, allow_blank=True)
+
+
+# ==============================================================================
+# MERCADO PAGO INTEGRACIÓN OFICIAL (SERIALIZADORES)
+# ==============================================================================
+
+class MercadoPagoCrearPreferenciaInputSerializer(serializers.Serializer):
+    """
+    Aduana de entrada para generar la Preferencia de Pago en Mercado Pago.
+    """
+    id_venta = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'Debe especificar el identificador de la venta.',
+            'invalid': 'El identificador de la venta debe ser un número entero válido.'
+        }
+    )
+
+
+class MercadoPagoPreferenciaOutputSerializer(serializers.Serializer):
+    """
+    Formato de salida con las URLs y datos de la pasarela de Mercado Pago.
+    """
+    preference_id = serializers.CharField(read_only=True)
+    init_point = serializers.CharField(read_only=True)
+    sandbox_init_point = serializers.CharField(read_only=True)
+    public_key = serializers.CharField(read_only=True, allow_blank=True)
+    modo_simulacion = serializers.BooleanField(read_only=True, default=False)
+    mensaje = serializers.CharField(read_only=True, required=False)
+
+
+class EstadoVentaOutputSerializer(serializers.Serializer):
+    """
+    Formato de salida para sondeo en tiempo real del estado de pago de una orden.
+    """
+    id_venta = serializers.IntegerField(read_only=True)
+    estado_venta = serializers.CharField(read_only=True)
+    codigo_sec = serializers.CharField(read_only=True, allow_null=True)
+    pagada = serializers.BooleanField(read_only=True)
+
+
+class CostoEnvioTarifasOutputSerializer(serializers.Serializer):
+    local = serializers.DecimalField(max_digits=10, decimal_places=2)
+    regional = serializers.DecimalField(max_digits=10, decimal_places=2)
+    nacional = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class CostoEnvioOutputSerializer(serializers.Serializer):
+    costo = serializers.DecimalField(max_digits=10, decimal_places=2)
+    tipo = serializers.CharField()
+    descripcion = serializers.CharField()
+    tarifas = CostoEnvioTarifasOutputSerializer()
+
+
+class ItemCompraPendienteOutputSerializer(serializers.Serializer):
+    id_producto = serializers.IntegerField()
+    producto_nombre = serializers.CharField()
+    cantidad = serializers.IntegerField()
+    precio_unitario = serializers.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class VentaPendienteDetalleOutputSerializer(serializers.Serializer):
+    id_venta = serializers.IntegerField()
+    codigo_sec = serializers.CharField()
+    estado_venta = serializers.CharField()
+    metodo_entrega = serializers.CharField()
+    monto_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+    costo_envio = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    segundos_restantes = serializers.IntegerField()
+    preference_id = serializers.CharField(allow_null=True, required=False)
+    init_point = serializers.CharField(allow_null=True, required=False)
+    detalles = ItemCompraPendienteOutputSerializer(many=True)
+
+
+class CompraPendienteActivaOutputSerializer(serializers.Serializer):
+    tiene_pendiente = serializers.BooleanField()
+    venta = VentaPendienteDetalleOutputSerializer(allow_null=True, required=False)
+    segundos_restantes = serializers.IntegerField(required=False, default=0)
 

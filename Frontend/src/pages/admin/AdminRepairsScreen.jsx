@@ -64,22 +64,22 @@ export default function AdminRepairsScreen() {
     return () => clearTimeout(handler);
   }, [filtroCodigoSec]);
 
-  // Auto-ocultar alerta de error tras 6 segundos
+  // Auto-ocultar alerta de error tras 15 segundos
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 6000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);
 
-  // Auto-ocultar toast informativo tras 4 segundos
+  // Auto-ocultar toast informativo tras 15 segundos
   useEffect(() => {
     if (toastMensaje) {
       const timer = setTimeout(() => {
         setToastMensaje(null);
-      }, 4000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [toastMensaje]);

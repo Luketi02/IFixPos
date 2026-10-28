@@ -1,5 +1,6 @@
 import os
 import uuid
+import datetime
 from decimal import Decimal
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -9,6 +10,7 @@ from django.db.models import Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from django.core.mail import EmailMultiAlternatives
 
 from sales_app.models import Venta, DetalleVenta, CarritoCompra, CarritoProducto, Pago, MedioPago
 from workshop_app.models import Reparacion, DetalleInsumoReparacion
@@ -44,6 +46,9 @@ def procesar_compra_virtual(
     4. Congela los ítems en DetalleVenta con precio unitario inmutable y descuenta el stock en MovimientoStock.
     5. Vacía el carrito, lo marca finalizado y registra la auditoría en LogSistema.
     """
+    # Liberar preventivamente cualquier reserva temporal vencida
+    limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+
     # -------------------------------------------------------------------------
     # Paso 1: Recuperar Carrito y Validar que no esté vacío
     # -------------------------------------------------------------------------
@@ -117,16 +122,13 @@ def procesar_compra_virtual(
         precio_prod = Decimal(str(item.id_producto.precio_venta))
         monto_subtotal += precio_prod * Decimal(str(item.cantidad or 1))
 
-    # Determinar costo de envío
+    # Determinar costo de envío según Configuración del Sistema (Local, Regional o Nacional)
     costo_envio = Decimal('0.00')
     if metodo_entrega == 'ENVIO':
-        config_envio = ConfiguracionSistema.objects.filter(clave='envioLocal').first()
-        if config_envio and config_envio.valor:
-            val_limpio = config_envio.valor.strip().replace(',', '.')
-            try:
-                costo_envio = Decimal(val_limpio)
-            except Exception:
-                costo_envio = Decimal('0.00')
+        from sales_app.selectors import calcular_costo_envio_sistema
+        id_dir = direccion_envio.id_direccion if direccion_envio else None
+        calculo_envio = calcular_costo_envio_sistema(id_dir)
+        costo_envio = calculo_envio['costo']
 
     codigo_seguridad = uuid.uuid4().hex[:10].upper()
 
@@ -247,7 +249,7 @@ def agregar_producto_a_carrito(
         defaults={'fecha_creacion': timezone.now().date()}
     )
 
-    item = CarritoProducto.objects.filter(
+    item = CarritoProducto.objects.select_for_update().filter(
         id_carrito=carrito,
         id_producto=producto
     ).first()
@@ -314,7 +316,7 @@ def quitar_producto_de_carrito(
     if not carrito:
         raise ValidationError("El usuario no posee un carrito de compras activo.")
 
-    item = CarritoProducto.objects.filter(
+    item = CarritoProducto.objects.select_for_update().filter(
         id_carrito=carrito,
         id_producto=producto
     ).first()
@@ -344,6 +346,99 @@ def quitar_producto_de_carrito(
         'producto_nombre': producto.nombre,
         'eliminado_completo': eliminado_completo,
         'cantidad_restante_item': cant_restante,
+        'total_articulos_carrito': total_articulos
+    }
+
+
+@transaction.atomic
+def actualizar_cantidad_producto_carrito(
+    *,
+    usuario: Usuario,
+    id_producto: int,
+    cantidad: int
+) -> Dict[str, Any]:
+    """
+    Fija de forma absoluta la cantidad de un producto en el carrito activo del usuario.
+    Si cantidad <= 0, elimina el producto del carrito.
+    Si cantidad > 0, valida stock disponible con select_for_update y actualiza la cantidad fija.
+    Garantiza sincronización total con la base de datos sin importar el orden de llegada en la red.
+    """
+    from sales_app.models import CarritoCompra, CarritoProducto
+    from catalog_app.models import Producto
+
+    try:
+        producto = Producto.objects.get(id_producto=id_producto)
+    except Producto.DoesNotExist:
+        raise ValidationError("El producto especificado no existe.")
+
+    carrito, _ = CarritoCompra.objects.get_or_create(
+        id_usuario=usuario,
+        estado='activo',
+        defaults={'fecha_creacion': timezone.now().date()}
+    )
+
+    item = CarritoProducto.objects.select_for_update().filter(
+        id_carrito=carrito,
+        id_producto=producto
+    ).first()
+
+    eliminado = False
+    cant_final = 0
+
+    if cantidad <= 0:
+        if item:
+            item.delete()
+        eliminado = True
+        cant_final = 0
+    else:
+        if not producto.estado or not producto.apto_venta:
+            raise ValidationError(f"El producto '{producto.nombre}' no se encuentra disponible para venta.")
+
+        # Verificar stock disponible en tiempo real
+        stock = Stock.objects.select_for_update().filter(id_producto=producto).first()
+        if not stock:
+            raise ValidationError(f"El producto '{producto.nombre}' no posee stock configurado.")
+
+        ingresos = MovimientoStock.objects.filter(
+            id_stock=stock,
+            tipo_movimiento__in=TIPOS_INGRESO
+        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+        egresos = MovimientoStock.objects.filter(
+            id_stock=stock,
+            tipo_movimiento__in=TIPOS_EGRESO
+        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+        stock_disponible = int(ingresos - egresos)
+
+        if cantidad > stock_disponible:
+            raise ValidationError(
+                f"Sin stock suficiente para '{producto.nombre}'. "
+                f"Disponible: {stock_disponible}, solicitas: {cantidad}."
+            )
+
+        if item:
+            item.cantidad = int(cantidad)
+            item.save(update_fields=['cantidad'])
+        else:
+            item = CarritoProducto.objects.create(
+                id_carrito=carrito,
+                id_producto=producto,
+                cantidad=int(cantidad)
+            )
+        eliminado = False
+        cant_final = item.cantidad
+
+    total_articulos = CarritoProducto.objects.filter(
+        id_carrito=carrito
+    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+    return {
+        'id_carrito': carrito.id_carrito,
+        'id_producto': producto.id_producto,
+        'producto_nombre': producto.nombre,
+        'eliminado': eliminado,
+        'cantidad': cant_final,
         'total_articulos_carrito': total_articulos
     }
 
@@ -877,7 +972,12 @@ def registrar_cobro_operacion(
             venta_asociada.save(update_fields=['estado_venta'])
 
     # Paso 6: Disparar automáticamente comprobante fiscal (CU-20)
-    generar_comprobante_fiscal(pago, operacion)
+    ruta_factura = generar_comprobante_fiscal(pago, operacion)
+    if isinstance(operacion, Venta):
+        try:
+            enviar_correo_confirmacion_compra(venta=operacion, pago=pago, ruta_pdf=ruta_factura)
+        except Exception as e:
+            print(f"[Cobro Venta] Advertencia al despachar correo de confirmación: {e}")
 
     # Auditoría en LogSistema
     tipo_op = "Venta" if isinstance(operacion, Venta) else "Reparación"
@@ -1343,6 +1443,705 @@ def generar_auditoria_logistica(
     )
 
     return resultado
+
+
+# ==============================================================================
+# INTEGRACIÓN AUTOMATIZADA MERCADO PAGO (SERVICIOS TRANSACCIONALES)
+# ==============================================================================
+
+def invalidar_preferencia_mercadopago(preference_id: str) -> bool:
+    """
+    Invalida de inmediato un link o preferencia de Mercado Pago
+    estableciendo su expiración a tiempo presente/pasado mediante la API oficial.
+    """
+    if not preference_id or str(preference_id).startswith('SIMULADO'):
+        return True
+
+    from core_app.selectors import obtener_mercadopago_access_token
+    access_token = obtener_mercadopago_access_token()
+    if not access_token or 'TU_ACCESS_TOKEN' in access_token:
+        return True
+
+    try:
+        import mercadopago
+        sdk = mercadopago.SDK(access_token)
+        ahora_utc = timezone.now().astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        sdk.preference().update(preference_id, {
+            "expires": True,
+            "expiration_date_to": ahora_utc
+        })
+        return True
+    except Exception:
+        return False
+
+
+def crear_preferencia_mercadopago(
+    *,
+    venta: Venta,
+    usuario: Usuario
+) -> Dict[str, Any]:
+    """
+    Genera una Preferencia de Pago oficial en Mercado Pago (Checkout Pro / Transferencia).
+    Devuelve los endpoints init_point y sandbox_init_point para que el cliente abone.
+    Fija expiración estricta en UTC para invalidar automáticamente el link a los 30 minutos.
+    Lee prioritariamente las credenciales configuradas en la BD (ConfiguracionSistema).
+    """
+    import mercadopago
+    from core_app.selectors import (
+        obtener_mercadopago_access_token,
+        obtener_mercadopago_public_key
+    )
+
+    access_token = obtener_mercadopago_access_token()
+    public_key = obtener_mercadopago_public_key()
+
+    # Si aún no se configuró un token real en la BD ni en el .env, retornar simulación estructurada
+    if not access_token or access_token.strip() == '' or 'TU_ACCESS_TOKEN' in access_token:
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+        return {
+            "preference_id": f"SIMULADO-VENTA-{venta.id_venta}",
+            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "public_key": public_key or "TEST-SIMULADA",
+            "modo_simulacion": True,
+            "mensaje": "Credenciales de prueba de Mercado Pago pendientes en la BD o en Backend/.env. Modo simulación activado."
+        }
+
+    ahora_dt = timezone.now()
+
+    # Calcular vencimiento exacto de los 30 minutos de reserva según la hora de creación de la venta
+    log_creacion = LogSistema.objects.filter(
+        modulo_origen='sales_app',
+        tabla_afectada='venta',
+        id_registro_afectado=str(venta.id_venta),
+        accion="Realizar Compra Virtual (CU-18)"
+    ).first()
+
+    if log_creacion and log_creacion.fecha_hora:
+        dt_creacion = datetime.datetime.combine(venta.fecha_venta, log_creacion.fecha_hora)
+        if timezone.is_naive(dt_creacion):
+            dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+        exp_dt = dt_creacion + datetime.timedelta(minutes=30)
+    else:
+        exp_dt = ahora_dt + datetime.timedelta(minutes=30)
+
+    if ahora_dt >= exp_dt:
+        raise ValidationError("El tiempo de reserva de 30 minutos para esta compra ha finalizado y el link de pago ha expirado.")
+
+    # Si ya se había generado una preferencia para esta venta y sigue vigente, reutilizarla
+    log_pref = LogSistema.objects.filter(
+        modulo_origen='sales_app',
+        tabla_afectada='venta',
+        id_registro_afectado=str(venta.id_venta),
+        accion="Preferencia Mercado Pago Creada"
+    ).first()
+
+    if log_pref and log_pref.detalle:
+        partes = log_pref.detalle.split('|')
+        if len(partes) >= 2:
+            pref_id_existente = partes[0]
+            init_point_existente = partes[1]
+            sandbox_init_point_existente = partes[2] if len(partes) > 2 else init_point_existente
+            return {
+                "preference_id": pref_id_existente,
+                "init_point": init_point_existente,
+                "sandbox_init_point": sandbox_init_point_existente,
+                "public_key": public_key,
+                "modo_simulacion": False
+            }
+
+    sdk = mercadopago.SDK(access_token)
+
+    # 1. Armar renglones de compra
+    items = []
+    detalles = venta.detalleventa_set.select_related('id_producto').all()
+    for det in detalles:
+        prod = det.id_producto
+        items.append({
+            "id": str(prod.id_producto),
+            "title": str(prod.nombre)[:250],
+            "quantity": int(det.cantidad),
+            "unit_price": float(det.precio_unitario),
+            "currency_id": "ARS",
+            "description": f"Repuesto/Accesorio IFixPos - {prod.nombre}"[:250]
+        })
+
+    # Si hay costo de envío
+    if venta.costo_envio and venta.costo_envio > Decimal('0.00'):
+        items.append({
+            "id": "ENVIO-LOGISTICO",
+            "title": "Costo de Envío Logístico a Domicilio",
+            "quantity": 1,
+            "unit_price": float(venta.costo_envio),
+            "currency_id": "ARS"
+        })
+
+    # 2. Información del Payer
+    perfil = getattr(usuario, 'perfilusuario', None)
+    if not perfil:
+        from users_app.models import PerfilUsuario
+        perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
+
+    nombre_payer = getattr(perfil, 'nombre', '') if perfil else ''
+    apellido_payer = getattr(perfil, 'apellido', '') if perfil else ''
+    payer = {
+        "name": nombre_payer or "Cliente",
+        "surname": apellido_payer or "IFixPos",
+        "email": usuario.email,
+    }
+    telefono_payer = getattr(perfil, 'telefono', None) if perfil else None
+    if telefono_payer:
+        tel_limpio = str(telefono_payer).replace('+', '').replace(' ', '')
+        if tel_limpio:
+            payer["phone"] = {"number": tel_limpio[-10:]}
+    dni_payer = getattr(perfil, 'dni', None) if perfil else None
+    if dni_payer:
+        dni_limpio = str(dni_payer).replace('.', '').replace('-', '').strip()
+        if dni_limpio:
+            payer["identification"] = {"type": "DNI", "number": dni_limpio}
+
+    # 3. URLs de Retorno y Webhook
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    backend_url = getattr(settings, 'BACKEND_URL', 'http://localhost:8000').rstrip('/')
+
+    back_urls = {
+        "success": f"{frontend_url}/tienda?mp_status=approved&venta_id={venta.id_venta}",
+        "pending": f"{frontend_url}/tienda?mp_status=pending&venta_id={venta.id_venta}",
+        "failure": f"{frontend_url}/tienda?mp_status=failure&venta_id={venta.id_venta}"
+    }
+
+    notification_url = f"{backend_url}/api/sales/mercadopago/webhook/"
+
+    ahora_utc_str = ahora_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    exp_utc_str = exp_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    preference_data = {
+        "items": items,
+        "payer": payer,
+        "back_urls": back_urls,
+        "notification_url": notification_url,
+        "external_reference": str(venta.id_venta),
+        "statement_descriptor": "IFIXPOS",
+        "binary_mode": False,
+        "expires": True,
+        "expiration_date_from": ahora_utc_str,
+        "expiration_date_to": exp_utc_str
+    }
+
+    preference_response = sdk.preference().create(preference_data)
+    response_data = preference_response.get("response", {})
+
+    pref_id = response_data.get("id")
+    init_point = response_data.get("init_point")
+    sandbox_init_point = response_data.get("sandbox_init_point", init_point)
+
+    if not pref_id:
+        error_msg = str(preference_response.get("message") or response_data)
+        raise ValidationError(f"Error al generar preferencia en Mercado Pago: {error_msg}")
+
+    # Guardar en LogSistema para auditoría y reutilización durante los 30 minutos de reserva
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Preferencia Mercado Pago Creada",
+        detalle=f"{pref_id}|{init_point}|{sandbox_init_point}",
+        tipo="MERCADOPAGO",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario
+    )
+
+    return {
+        "preference_id": pref_id,
+        "init_point": init_point,
+        "sandbox_init_point": sandbox_init_point,
+        "public_key": public_key,
+        "modo_simulacion": False
+    }
+
+
+@transaction.atomic
+def procesar_webhook_mercadopago(
+    *,
+    data: Dict[str, Any],
+    query_params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Procesa notificaciones Webhook (IPN) de Mercado Pago de forma atómica:
+    1. Extrae el id del pago (payment_id).
+    2. Consulta la API de Mercado Pago para verificar el estado real y autenticidad.
+    3. Si el estado es 'approved', acredita la venta, crea el Pago y asienta la auditoría.
+    """
+    import mercadopago
+
+    payment_id = None
+    if data.get("data") and isinstance(data["data"], dict):
+        payment_id = data["data"].get("id")
+
+    if not payment_id:
+        payment_id = query_params.get("data.id") or query_params.get("id")
+
+    if not payment_id:
+        return {"status": "ignored", "motivo": "Sin payment_id en la notificación"}
+
+    from core_app.selectors import obtener_mercadopago_access_token
+    access_token = obtener_mercadopago_access_token()
+    if not access_token or 'TU_ACCESS_TOKEN' in access_token:
+        return {"status": "ignored", "motivo": "Access token de Mercado Pago no configurado en la BD ni en el entorno"}
+
+    sdk = mercadopago.SDK(access_token)
+    try:
+        payment_info = sdk.payment().get(str(payment_id))
+        payment = payment_info.get("response", {})
+    except Exception as e:
+        return {"status": "error", "motivo": f"Fallo al consultar API de MP: {str(e)}"}
+
+    status_pago = payment.get("status")
+    external_ref = payment.get("external_reference")
+
+    if not external_ref:
+        return {"status": "ignored", "motivo": f"El pago {payment_id} no posee external_reference"}
+
+    try:
+        id_venta = int(external_ref)
+        venta = Venta.objects.select_for_update().get(id_venta=id_venta)
+    except (ValueError, Venta.DoesNotExist):
+        return {"status": "error", "motivo": f"Venta {external_ref} no encontrada"}
+
+    # Si la venta ya fue cancelada (por expiración de reserva o por el usuario), no acreditar
+    if str(venta.estado_venta or '').upper() == "CANCELADA":
+        LogSistema.objects.create(
+            fecha_hora=timezone.now().time(),
+            accion="Alerta: Pago recibido en Venta Cancelada/Expirada",
+            detalle=f"Se recibió notificación de pago #{payment_id} para la Venta #{venta.id_venta}, pero la orden ya fue cancelada y su reserva expiró.",
+            tipo="ALERTA_VENTA",
+            modulo_origen="sales_app",
+            tabla_afectada="venta",
+            id_registro_afectado=str(venta.id_venta),
+            id_usuario=venta.id_usuario
+        )
+        return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
+
+    medio_pago_mp, _ = MedioPago.objects.get_or_create(
+        nombre_medio_pago='Mercado Pago',
+        defaults={'estado': True, 'recargo': Decimal('0.00')}
+    )
+
+    if status_pago == "approved":
+        monto_pagado = Decimal(str(payment.get("transaction_amount") or (venta.monto_subtotal + venta.costo_envio)))
+        tipo_operacion = payment.get("payment_type_id") or "mercadopago"
+        medio_detalle = payment.get("payment_method_id") or "transferencia"
+
+        pago_existente = Pago.objects.filter(cod_operacion=str(payment_id)).first()
+        if not pago_existente:
+            Pago.objects.create(
+                id_venta=venta,
+                medio_pago=medio_pago_mp,
+                monto_pagado=monto_pagado,
+                fecha_pago=timezone.now().date(),
+                cod_operacion=str(payment_id),
+                detalle=f"Acreditación automática Mercado Pago - Operación #{payment_id} ({medio_detalle} - {tipo_operacion})"
+            )
+
+        if venta.estado_venta != "PAGADA":
+            venta.estado_venta = "PAGADA"
+            venta.save(update_fields=["estado_venta"])
+
+            LogSistema.objects.create(
+                fecha_hora=timezone.now().time(),
+                accion="Acreditación Mercado Pago Webhook",
+                detalle=f"Venta #{venta.id_venta} pagada con éxito vía Mercado Pago. Operación #{payment_id}, Monto: ${monto_pagado}.",
+                tipo="AUDITORIA_VENTA",
+                modulo_origen="sales_app",
+                tabla_afectada="venta",
+                id_registro_afectado=str(venta.id_venta),
+                id_usuario=venta.id_usuario
+            )
+
+            # Generar factura oficial en PDF y despachar correo electrónico con el PDF adjunto
+            try:
+                ruta_pdf = generar_comprobante_fiscal(pago, venta)
+                enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
+            except Exception as e:
+                print(f"[Webhook MP] Advertencia al generar comprobante o enviar correo: {e}")
+
+        return {"status": "approved", "venta_id": venta.id_venta, "payment_id": payment_id}
+
+    elif status_pago in ["rejected", "cancelled"]:
+        LogSistema.objects.create(
+            fecha_hora=timezone.now().time(),
+            accion="Pago Rechazado Mercado Pago",
+            detalle=f"Pago #{payment_id} para Venta #{venta.id_venta} en estado: {status_pago}.",
+            tipo="AUDITORIA_VENTA",
+            modulo_origen="sales_app",
+            tabla_afectada="venta",
+            id_registro_afectado=str(venta.id_venta),
+            id_usuario=venta.id_usuario
+        )
+        return {"status": status_pago, "venta_id": venta.id_venta}
+
+    return {"status": status_pago or "pending", "venta_id": venta.id_venta}
+
+
+@transaction.atomic
+def cancelar_venta_y_restituir_stock(
+    *,
+    id_venta: int,
+    usuario: Optional[Usuario] = None,
+    motivo: str = "Cancelación por usuario o expiración de reserva temporal"
+) -> Venta:
+    """
+    Cancela una venta virtual pendiente y restituye el stock apartado
+    mediante movimientos de tipo 'devolucion' para reponer el inventario.
+    """
+    try:
+        if usuario:
+            venta = Venta.objects.select_for_update().get(id_venta=id_venta, id_usuario=usuario)
+        else:
+            venta = Venta.objects.select_for_update().get(id_venta=id_venta)
+    except Venta.DoesNotExist:
+        raise ValidationError("La orden especificada no existe o no pertenece al usuario autenticado.")
+
+    estado_actual = str(venta.estado_venta or '').upper()
+
+    if estado_actual == 'CANCELADA':
+        return venta
+
+    if estado_actual == 'PAGADA':
+        raise ValidationError("No es posible cancelar una orden que ya ha sido pagada.")
+
+    # Restituir cada renglón de detalle
+    detalles = list(venta.detalleventa_set.select_related('id_producto').all())
+    for det in detalles:
+        prod = det.id_producto
+        cant = int(det.cantidad or 1)
+        stock = Stock.objects.select_for_update().filter(id_producto=prod).first()
+        if stock:
+            MovimientoStock.objects.create(
+                id_stock=stock,
+                tipo_movimiento='devolucion',
+                cantidad=cant,
+                fecha=timezone.now().date(),
+                motivo=f"Restitución de stock por cancelación de Venta #{venta.id_venta}",
+                uso_taller=False,
+                id_venta=venta
+            )
+
+    # Restituir los productos al carrito de compras activo del cliente
+    carrito_activo, _ = CarritoCompra.objects.get_or_create(
+        id_usuario=venta.id_usuario,
+        estado='activo',
+        defaults={'fecha_creacion': timezone.now().date()}
+    )
+    for det in detalles:
+        item_existente = CarritoProducto.objects.filter(
+            id_carrito=carrito_activo,
+            id_producto=det.id_producto
+        ).first()
+        if item_existente:
+            item_existente.cantidad += det.cantidad
+            item_existente.save(update_fields=['cantidad'])
+        else:
+            CarritoProducto.objects.create(
+                id_carrito=carrito_activo,
+                id_producto=det.id_producto,
+                cantidad=det.cantidad
+            )
+
+    venta.estado_venta = 'CANCELADA'
+    venta.save(update_fields=['estado_venta'])
+
+    # Invalidar de inmediato la preferencia en Mercado Pago para que el link expire
+    logs_pref = LogSistema.objects.filter(
+        modulo_origen='sales_app',
+        tabla_afectada='venta',
+        id_registro_afectado=str(venta.id_venta),
+        accion="Preferencia Mercado Pago Creada"
+    )
+    for lp in logs_pref:
+        if lp.detalle:
+            pref_id_cancelar = lp.detalle.split('|')[0]
+            invalidar_preferencia_mercadopago(pref_id_cancelar)
+
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Cancelación de Venta y Restitución de Stock",
+        detalle=(
+            f"Venta #{venta.id_venta} cancelada. "
+            f"Motivo: {motivo}. Link de pago invalidado y stock devuelto al inventario disponible."
+        )[:1000],
+        tipo="AUDITORIA_VENTA",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario or venta.id_usuario
+    )
+
+    return venta
+
+
+def limpiar_ventas_pendientes_expiradas(minutos_limite: int = 30) -> int:
+    """
+    Verifica ventas en estado PENDIENTE creadas hace más de `minutos_limite`.
+    Cancela y restituye automáticamente el stock apartado.
+    Retorna el número de ventas canceladas y restituidas.
+    """
+    import datetime
+    ahora = timezone.now()
+    fecha_hoy = ahora.date()
+
+    ventas_pendientes = Venta.objects.filter(estado_venta__iexact='PENDIENTE')
+    canceladas = 0
+
+    for venta in ventas_pendientes:
+        debe_cancelar = False
+
+        if venta.fecha_venta < fecha_hoy:
+            debe_cancelar = True
+        else:
+            log_creacion = LogSistema.objects.filter(
+                modulo_origen='sales_app',
+                tabla_afectada='venta',
+                id_registro_afectado=str(venta.id_venta),
+                accion="Realizar Compra Virtual (CU-18)"
+            ).first()
+
+            if log_creacion and log_creacion.fecha_hora:
+                hora_log = log_creacion.fecha_hora
+                dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
+                if timezone.is_naive(dt_creacion):
+                    dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+
+                delta = ahora - dt_creacion
+                if delta.total_seconds() > (minutos_limite * 60):
+                    debe_cancelar = True
+
+        if debe_cancelar:
+            try:
+                cancelar_venta_y_restituir_stock(
+                    id_venta=venta.id_venta,
+                    motivo=f"Expiración automática por superar {minutos_limite} minutos sin concretar pago"
+                )
+                canceladas += 1
+            except Exception:
+                pass
+
+    return canceladas
+
+
+def enviar_correo_confirmacion_compra(
+    *,
+    venta: Venta,
+    pago: Pago,
+    ruta_pdf: Optional[str] = None
+) -> None:
+    """
+    Despacha un correo electrónico formal al cliente tras la acreditación exitosa de su compra:
+    - Adjunta el comprobante / factura en PDF generado físicamente.
+    - Informa el código oficial de la orden:
+      * Si es con retiro en local: indica explícitamente que es el código para retirar en sede central.
+      * Si es con envío a domicilio: indica que es el código de seguridad y seguimiento.
+    - Persiste el aviso en el modelo Notificacion de core_app y asienta la auditoría en LogSistema.
+    """
+    from core_app.selectors import obtener_email_emisor
+    from core_app.models import Notificacion, ConfiguracionSistema
+
+    usuario = venta.id_usuario
+    if not usuario or not getattr(usuario, 'email', None):
+        return
+
+    # Extraer datos de la empresa emisora
+    configs = {
+        c.clave: c.valor
+        for c in ConfiguracionSistema.objects.filter(
+            clave__in=['nombreLocal', 'direccionLocal', 'telefonoLocal', 'emailLocal']
+        )
+    }
+    nombre_local = configs.get('nombreLocal') or 'IFixPos'
+    direccion_local = configs.get('direccionLocal') or 'Sede Central IFixPos'
+    telefono_local = configs.get('telefonoLocal') or '3794-000000'
+
+    # Nombre del cliente
+    perfil = getattr(usuario, 'perfilusuario', None)
+    nombre_cliente = f"{perfil.nombre or ''} {perfil.apellido or ''}".strip() if perfil else usuario.email
+    if not nombre_cliente:
+        nombre_cliente = usuario.email
+
+    es_retiro = (str(venta.metodo_entrega or '').upper() == 'RETIRO')
+    codigo_orden = venta.codigo_sec or f"VTA-{venta.id_venta}"
+    total_abonado = pago.monto_pagado or (venta.monto_subtotal + venta.costo_envio)
+
+    if es_retiro:
+        instruccion_codigo_html = (
+            f"<div style='background-color: #0c4a6e; border: 1px solid #0284c7; padding: 16px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
+            f"<p style='margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 1px; font-weight: bold;'>📍 Código para Retiro en Local</p>"
+            f"<p style='margin: 0; font-size: 26px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
+            f"<p style='margin: 8px 0 0 0; font-size: 13px; color: #bae6fd;'>Presenta este código en nuestra <b>Sede Central</b> ({direccion_local}) junto con tu DNI para retirar tus repuestos.</p>"
+            f"</div>"
+        )
+        instruccion_codigo_txt = (
+            f"CÓDIGO DE RETIRO EN LOCAL: {codigo_orden}\n"
+            f"Presenta este código en nuestra Sede Central ({direccion_local}) junto con tu DNI para retirar tus repuestos.\n"
+        )
+        modo_entrega_str = "Retiro en Sede Central (Mostrador)"
+    else:
+        dir_envio_txt = "Domicilio Registrado"
+        if venta.id_direccion_envio:
+            de = venta.id_direccion_envio
+            partes = [de.calle, de.numero]
+            if getattr(de, 'id_ciudad', None):
+                partes.append(de.id_ciudad.nombre_ciudad)
+            dir_envio_txt = ", ".join([p for p in partes if p])
+
+        instruccion_codigo_html = (
+            f"<div style='background-color: #1e1b4b; border: 1px solid #6366f1; padding: 16px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
+            f"<p style='margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #a5b4fc; letter-spacing: 1px; font-weight: bold;'>🛡️ Código de Seguridad y Seguimiento</p>"
+            f"<p style='margin: 0; font-size: 26px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
+            f"<p style='margin: 8px 0 0 0; font-size: 13px; color: #e0e7ff;'>Este código es exclusivo para la seguridad y gestión de tu entrega a domicilio en: <b>{dir_envio_txt}</b>.</p>"
+            f"</div>"
+        )
+        instruccion_codigo_txt = (
+            f"CÓDIGO DE SEGURIDAD Y GESTIÓN: {codigo_orden}\n"
+            f"Este código es exclusivo para la seguridad y seguimiento de tu entrega en: {dir_envio_txt}.\n"
+        )
+        modo_entrega_str = f"Envío a Domicilio ({dir_envio_txt})"
+
+    # Desglose de productos
+    detalles = venta.detalleventa_set.select_related('id_producto').all()
+    filas_html = ""
+    filas_txt = ""
+    for d in detalles:
+        nom = d.id_producto.nombre if d.id_producto else "Repuesto"
+        sub = d.subtotal
+        filas_html += (
+            f"<tr>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #334155; color: #f1f5f9;'>{nom}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #334155; color: #cbd5e1; text-align: center;'>{d.cantidad}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #334155; color: #38bdf8; text-align: right; font-family: monospace;'>${sub:,.2f}</td>"
+            f"</tr>"
+        )
+        filas_txt += f"- {nom} x{d.cantidad}: ${sub:,.2f}\n"
+
+    cuerpo_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0f19; color: #e2e8f0; margin: 0; padding: 24px;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #0f172a; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div style="background: linear-gradient(135deg, #0284c7, #6366f1); padding: 24px 32px; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">¡Tu Compra ha sido Confirmada!</h1>
+          <p style="color: #e0f2fe; margin: 6px 0 0 0; font-size: 13px;">{nombre_local} • Comprobante de Operación</p>
+        </div>
+        <div style="padding: 28px 32px;">
+          <p style="font-size: 15px; color: #f8fafc; margin-top: 0;">Hola, <b>{nombre_cliente}</b>:</p>
+          <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">
+            Tu pago por un monto total de <b style="color: #38bdf8; font-size: 15px;">${total_abonado:,.2f}</b> ha sido acreditado exitosamente. Hemos preparado tu orden y adjuntado tu factura oficial en formato PDF a este correo electrónico.
+          </p>
+
+          {instruccion_codigo_html}
+
+          <div style="margin: 24px 0;">
+            <p style="font-size: 12px; text-transform: uppercase; color: #64748b; font-weight: bold; margin-bottom: 8px; letter-spacing: 0.5px;">Resumen del Pedido</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; background-color: #1e293b; border-radius: 8px; overflow: hidden;">
+              <thead>
+                <tr style="background-color: #0f172a; border-bottom: 2px solid #334155;">
+                  <th style="padding: 8px 12px; text-align: left; color: #94a3b8; font-size: 11px;">Producto</th>
+                  <th style="padding: 8px 12px; text-align: center; color: #94a3b8; font-size: 11px;">Cant.</th>
+                  <th style="padding: 8px 12px; text-align: right; color: #94a3b8; font-size: 11px;">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas_html}
+              </tbody>
+            </table>
+          </div>
+
+          <div style="background-color: #1e293b; padding: 14px 18px; border-radius: 10px; font-size: 12px; color: #94a3b8; margin-top: 20px;">
+            <p style="margin: 0 0 4px 0;"><b>Modalidad de entrega:</b> {modo_entrega_str}</p>
+            <p style="margin: 0;"><b>Adjunto:</b> Encontrarás tu Factura / Comprobante Fiscal en formato PDF adjunta a este email para su descarga o impresión.</p>
+          </div>
+
+          <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #1e293b; text-align: center; font-size: 11px; color: #64748b;">
+            <p style="margin: 0;">{nombre_local} • Tel: {telefono_local}</p>
+            <p style="margin: 4px 0 0 0;">Mensaje generado automáticamente por el sistema IFixPos.</p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+
+    cuerpo_txt = (
+        f"¡Tu Compra ha sido Confirmada en {nombre_local}!\n\n"
+        f"Hola, {nombre_cliente}:\n"
+        f"Tu pago de ${total_abonado:,.2f} fue acreditado exitosamente.\n\n"
+        f"{instruccion_codigo_txt}\n"
+        f"Modalidad: {modo_entrega_str}\n\n"
+        f"Resumen de repuestos:\n{filas_txt}\n"
+        f"Total Abonado: ${total_abonado:,.2f}\n\n"
+        f"Tu factura oficial en formato PDF se encuentra adjunta a este mensaje.\n"
+    )
+
+    # 1. Enviar el correo electrónico con el PDF adjunto
+    asunto = f"¡Compra Confirmada! Comprobante Oficial - {nombre_local}"
+    email_emisor = obtener_email_emisor()
+    email_msg = EmailMultiAlternatives(
+        subject=asunto,
+        body=cuerpo_txt,
+        from_email=email_emisor,
+        to=[usuario.email]
+    )
+    email_msg.attach_alternative(cuerpo_html, "text/html")
+
+    # Localizar archivo físico de la factura
+    pdf_path_rel = ruta_pdf or pago.ruta_comprobante
+    if pdf_path_rel:
+        pdf_filename = os.path.basename(pdf_path_rel)
+        pdf_path_abs = os.path.join(settings.MEDIA_ROOT, 'facturas', pdf_filename)
+        if os.path.exists(pdf_path_abs):
+            try:
+                email_msg.attach_file(pdf_path_abs, 'application/pdf')
+            except Exception as e_att:
+                print(f"[Confirmación Compra] Advertencia al adjuntar archivo PDF: {e_att}")
+
+    try:
+        email_msg.send(fail_silently=False)
+    except Exception as e:
+        print(f"[Confirmación Compra] Advertencia al despachar correo a {usuario.email}: {e}")
+
+    # 2. Persistir registro en Notificacion
+    try:
+        msg_notif = (
+            f"¡Pago confirmado! Tu orden con código {codigo_orden} ha sido acreditada (${total_abonado:,.2f}). "
+            f"{'Listo para retirar en local.' if es_retiro else 'En preparación para entrega a domicilio.'}"
+        )
+        Notificacion.objects.create(
+            id_usuario=usuario,
+            mensaje=msg_notif[:1000],
+            tipo="COMPRA_VIRTUAL",
+            fecha_envio=timezone.now().date(),
+            leida=False
+        )
+    except Exception:
+        pass
+
+    # 3. Auditoría en LogSistema
+    LogSistema.objects.create(
+        fecha_hora=timezone.now().time(),
+        accion="Envío de Factura y Confirmación de Compra",
+        detalle=(
+            f"Correo de confirmación con factura PDF y código {codigo_orden} ({'Retiro' if es_retiro else 'Envío'}) "
+            f"despachado a {usuario.email} para Venta #{venta.id_venta}."
+        )[:1000],
+        tipo="NOTIFICACION_COMPRA",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario
+    )
+
+
+
 
 
 

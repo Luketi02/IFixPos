@@ -67,7 +67,7 @@ from core_app.selectors import obtener_configuracion_bool, obtener_configuracion
 def obtener_perfil_usuario(id_usuario: int) -> PerfilUsuario:
     """Busca y retorna el perfil de un usuario, o levanta ValidationError si no existe."""
     try:
-        return PerfilUsuario.objects.select_related('id_usuario', 'id_ciudad').get(id_usuario=id_usuario)
+        return PerfilUsuario.objects.select_related('id_usuario').get(id_usuario=id_usuario)
     except PerfilUsuario.DoesNotExist:
         raise ValidationError("El perfil de usuario no existe.")
 

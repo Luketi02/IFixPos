@@ -29,16 +29,16 @@ export default function TecnicoReparacionDetalle() {
   const [modalDiagnosticoAbierto, setModalDiagnosticoAbierto] = useState(false);
   const [modalEstadoAbierto, setModalEstadoAbierto] = useState(false);
 
-  // Auto-limpieza de mensajes tras 6 segundos (Regla de UX)
+  // Auto-limpieza de mensajes tras 15 segundos (Regla de UX)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 6000);
+    const t = setTimeout(() => setErrorMessage(''), 15000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
   useEffect(() => {
     if (!successMessage) return undefined;
-    const t = setTimeout(() => setSuccessMessage(''), 6000);
+    const t = setTimeout(() => setSuccessMessage(''), 15000);
     return () => clearTimeout(t);
   }, [successMessage]);
 

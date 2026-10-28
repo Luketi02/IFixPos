@@ -2266,5 +2266,104 @@ class ReporteLogisticaTestCase(TestCase):
         self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
 
 
+class ActualizarCantidadCarritoTestCase(TestCase):
+    """
+    Pruebas unitarias y de integración para la sincronización atómica
+    y actualización absoluta de cantidades en el carrito de compras.
+    """
+
+    def setUp(self):
+        from catalog_app.models import Producto, CategoriaProducto
+        from inventory_app.models import Stock, MovimientoStock
+        from sales_app.models import CarritoCompra, CarritoProducto
+        from users_app.models import Usuario, RolUsuario
+
+        self.client = APIClient()
+
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.carrito@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        self.categoria = CategoriaProducto.objects.create(
+            nombre='Repuestos',
+            descripcion='Repuestos varios',
+            estado=True
+        )
+
+        self.producto = Producto.objects.create(
+            nombre='Pantalla OLED Test',
+            descripcion='Pantalla de repuesto',
+            precio_venta=Decimal('100.00'),
+            id_categoria=self.categoria,
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False
+        )
+
+        self.stock = Stock.objects.create(
+            id_producto=self.producto,
+            stock_minimo=1
+        )
+
+        MovimientoStock.objects.create(
+            id_stock=self.stock,
+            tipo_movimiento='ingreso',
+            cantidad=10,
+            fecha=timezone.now().date(),
+            uso_taller=False
+        )
+
+        self.url_actualizar = '/api/sales/carrito/actualizar/'
+
+    def test_actualizar_cantidad_absoluta_exitoso(self):
+        """Establece directamente la cantidad en 3 unidades."""
+        self.client.force_authenticate(user=self.cliente)
+        response = self.client.post(self.url_actualizar, {
+            'id_producto': self.producto.id_producto,
+            'cantidad': 3
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['resultado']['cantidad'], 3)
+        self.assertFalse(response.data['resultado']['eliminado'])
+
+    def test_actualizar_cantidad_cero_elimina_producto(self):
+        """Si la cantidad es 0, el producto se elimina del carrito."""
+        from sales_app.services import agregar_producto_a_carrito
+        agregar_producto_a_carrito(usuario=self.cliente, id_producto=self.producto.id_producto, cantidad=2)
+
+        self.client.force_authenticate(user=self.cliente)
+        response = self.client.post(self.url_actualizar, {
+            'id_producto': self.producto.id_producto,
+            'cantidad': 0
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['resultado']['eliminado'])
+        self.assertEqual(response.data['resultado']['cantidad'], 0)
+
+    def test_actualizar_superando_stock_retorna_400(self):
+        """Si la cantidad excede el stock disponible (10 unidades), retorna error 400."""
+        self.client.force_authenticate(user=self.cliente)
+        response = self.client.post(self.url_actualizar, {
+            'id_producto': self.producto.id_producto,
+            'cantidad': 99
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Sin stock suficiente", str(response.data))
+
+
 
 

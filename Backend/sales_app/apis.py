@@ -2,7 +2,7 @@ from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError, ObjectDoesNotExist
 
@@ -152,6 +152,52 @@ class QuitarDelCarritoApi(APIView):
             f"Producto '{resultado['producto_nombre']}' eliminado del carrito."
             if resultado['eliminado_completo']
             else f"Se actualizó la cantidad de '{resultado['producto_nombre']}' en tu carrito."
+        )
+
+        return Response(
+            {
+                "mensaje": mensaje,
+                "resultado": resultado
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class ActualizarCantidadCarritoApi(APIView):
+    """
+    Endpoint para establecer directamente la cantidad absoluta de un producto en el carrito activo.
+    Elimina por completo condiciones de carrera y desincronizaciones de red.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        _exigir_rol_cliente(request.user)
+        from sales_app.serializers import ActualizarCantidadCarritoInputSerializer
+        from sales_app.services import actualizar_cantidad_producto_carrito
+
+        serializer = ActualizarCantidadCarritoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        id_producto = serializer.validated_data['id_producto']
+        cantidad = serializer.validated_data['cantidad']
+
+        try:
+            resultado = actualizar_cantidad_producto_carrito(
+                usuario=request.user,
+                id_producto=id_producto,
+                cantidad=cantidad
+            )
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        mensaje = (
+            f"Producto '{resultado['producto_nombre']}' eliminado del carrito."
+            if resultado['eliminado']
+            else f"Cantidad de '{resultado['producto_nombre']}' actualizada a {resultado['cantidad']}."
         )
 
         return Response(
@@ -438,11 +484,13 @@ class FiltrarBeneficiosOtorgadosApi(APIView):
 
 from sales_app.serializers import RegistrarMedioPagoInputSerializer, MedioPagoOutputSerializer
 from sales_app.services import registrar_o_reactivar_medio_pago
+from sales_app.selectors import obtener_medios_pago
 
 class RegistrarMedioPagoApi(APIView):
     """
-    CU-82: Registrar medio de pago.
-    Permite al Administrador dar de alta un nuevo canal de cobro o reactivar uno existente.
+    CU-82: Registrar medio de pago y consulta de medios de pago disponibles (CU-18).
+    Permite al Administrador dar de alta un nuevo canal de cobro o reactivar uno existente,
+    y a los clientes autenticados consultar los canales de cobro activos para abonar su compra.
     """
     permission_classes = [IsAuthenticated]
 
@@ -451,6 +499,17 @@ class RegistrarMedioPagoApi(APIView):
         codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
         nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
         return codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
+
+    def get(self, request):
+        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        es_admin = codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
+        
+        ver_todos = es_admin and request.query_params.get('todos', '').lower() == 'true'
+        medios = obtener_medios_pago(solo_activos=not ver_todos)
+        serializer = MedioPagoOutputSerializer(medios, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
         if not self._verificar_admin(request.user):
@@ -481,6 +540,7 @@ class RegistrarMedioPagoApi(APIView):
             },
             status=status.HTTP_201_CREATED
         )
+
 
 
 # ==============================================================================
@@ -779,6 +839,255 @@ class ReporteLogisticaApi(APIView):
 
         output_serializer = ReporteLogisticaItemOutputSerializer(resultado, many=True)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# MERCADO PAGO INTEGRACIÓN OFICIAL (APIS HTTP)
+# ==============================================================================
+
+class MercadoPagoCrearPreferenciaApi(APIView):
+    """
+    Endpoint para generar una Preferencia de Pago en Mercado Pago asociada a una Venta Virtual.
+    - POST: Valida id_venta, comprueba titularidad y llama al servicio crear_preferencia_mercadopago.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from sales_app.serializers import (
+            MercadoPagoCrearPreferenciaInputSerializer,
+            MercadoPagoPreferenciaOutputSerializer
+        )
+        from sales_app.selectors import obtener_venta_por_id
+        from sales_app.services import crear_preferencia_mercadopago
+
+        input_serializer = MercadoPagoCrearPreferenciaInputSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        id_venta = input_serializer.validated_data['id_venta']
+
+        venta = obtener_venta_por_id(id_venta)
+        if not venta:
+            return Response(
+                {"error": "La orden de venta solicitada no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validar que la venta pertenezca al usuario o que sea admin
+        id_user_venta = getattr(venta.id_usuario, 'id_usuario', getattr(venta.id_usuario, 'pk', None))
+        id_user_req = getattr(request.user, 'id_usuario', getattr(request.user, 'pk', None))
+        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+        es_admin = (getattr(rol, 'codigo', '') or '').upper() == 'ADMIN'
+
+        if id_user_venta != id_user_req and not es_admin:
+            return Response(
+                {"error": "No posee autorización para generar pagos sobre esta orden de compra."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            preferencia = crear_preferencia_mercadopago(venta=venta, usuario=request.user)
+        except Exception as e:
+            return Response(
+                {"error": f"Inconveniente con la pasarela de pagos: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output_serializer = MercadoPagoPreferenciaOutputSerializer(preferencia)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class MercadoPagoWebhookApi(APIView):
+    """
+    Endpoint público para recepción de notificaciones Webhook (IPN) de Mercado Pago.
+    Permiso: AllowAny. Valida y acredita el pago en tiempo real de forma inmutable.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from sales_app.services import procesar_webhook_mercadopago
+
+        resultado = procesar_webhook_mercadopago(
+            data=request.data if isinstance(request.data, dict) else {},
+            query_params=request.query_params.dict()
+        )
+        return Response(resultado, status=status.HTTP_200_OK)
+
+
+class MercadoPagoConfigPublicaApi(APIView):
+    """
+    Expone la clave pública (Public Key) de Mercado Pago para inicializar pasarelas en el frontend.
+    Lee prioritariamente desde ConfiguracionSistema (BD) con fallback seguro al entorno.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from core_app.selectors import (
+            obtener_mercadopago_access_token,
+            obtener_mercadopago_public_key
+        )
+        access_token = obtener_mercadopago_access_token()
+        public_key = obtener_mercadopago_public_key()
+
+        return Response(
+            {
+                "public_key": public_key,
+                "habilitado": bool(access_token and 'TU_ACCESS_TOKEN' not in access_token)
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class ConsultarEstadoVentaApi(APIView):
+    """
+    Permite al frontend consultar en tiempo real si una venta fue acreditada y pagada.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id_venta: int):
+        from sales_app.selectors import obtener_venta_por_id
+        from sales_app.serializers import EstadoVentaOutputSerializer
+
+        venta = obtener_venta_por_id(id_venta)
+        if not venta:
+            return Response(
+                {"error": "La orden de compra no fue encontrada."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        id_user_venta = getattr(venta.id_usuario, 'id_usuario', getattr(venta.id_usuario, 'pk', None))
+        id_user_req = getattr(request.user, 'id_usuario', getattr(request.user, 'pk', None))
+        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+        es_admin = (getattr(rol, 'codigo', '') or '').upper() == 'ADMIN'
+
+        if id_user_venta != id_user_req and not es_admin:
+            return Response(
+                {"error": "No posee autorización para consultar esta venta."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        data = {
+            "id_venta": venta.id_venta,
+            "estado_venta": venta.estado_venta,
+            "codigo_sec": venta.codigo_sec,
+            "pagada": venta.estado_venta == "PAGADA"
+        }
+        output_serializer = EstadoVentaOutputSerializer(data)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
+class CancelarVentaVirtualApi(APIView):
+    """
+    Permite cancelar una venta virtual pendiente y restituir inmediatamente
+    el stock apartado al catálogo público disponible.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id_venta: int):
+        from sales_app.services import cancelar_venta_y_restituir_stock
+        try:
+            venta = cancelar_venta_y_restituir_stock(
+                id_venta=id_venta,
+                usuario=request.user,
+                motivo="Cancelación voluntaria por el cliente desde el modal de checkout"
+            )
+            return Response(
+                {
+                    "mensaje": "La orden fue cancelada exitosamente y los repuestos fueron devueltos al catálogo.",
+                    "id_venta": venta.id_venta,
+                    "estado_venta": venta.estado_venta
+                },
+                status=status.HTTP_200_OK
+            )
+        except ValidationError as e:
+            return Response(
+                {"error": e.messages if hasattr(e, 'messages') else str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ConsultarCostoEnvioApi(APIView):
+    """
+    Endpoint para cotizar en tiempo real el costo de flete/envío según la configuración del sistema
+    y la dirección de entrega seleccionada (Local, Regional o Nacional).
+    Permiso: AllowAny (accesible para clientes antes y durante el checkout).
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from sales_app.selectors import calcular_costo_envio_sistema
+        from sales_app.serializers import CostoEnvioOutputSerializer
+
+        id_dir_raw = request.query_params.get('id_direccion')
+        id_dir = int(id_dir_raw) if id_dir_raw and id_dir_raw.isdigit() else None
+
+        resultado = calcular_costo_envio_sistema(id_dir)
+        serializer = CostoEnvioOutputSerializer(resultado)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ConsultarCompraPendienteActivaApi(APIView):
+    """
+    Permite al cliente consultar si tiene una orden en estado PENDIENTE con reserva temporal
+    de stock activa (menos de 30 minutos). Permite retomar el flujo de pago sin perder su selección.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from sales_app.selectors import obtener_venta_pendiente_activa
+        from sales_app.serializers import CompraPendienteActivaOutputSerializer
+
+        datos = obtener_venta_pendiente_activa(request.user)
+        if datos:
+            payload = {
+                "tiene_pendiente": True,
+                "venta": datos,
+                "segundos_restantes": datos["segundos_restantes"]
+            }
+        else:
+            payload = {
+                "tiene_pendiente": False,
+                "venta": None,
+                "segundos_restantes": 0
+            }
+
+        serializer = CompraPendienteActivaOutputSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DescargarFacturaVentaApi(APIView):
+    """
+    CU-20: Visualización y Descarga de Factura / Comprobante Fiscal en PDF.
+    Permite al cliente obtener el documento PDF oficial emitido tras la acreditación
+    de su compra virtual.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id_venta: int):
+        from sales_app.selectors import obtener_factura_pdf_venta
+        from django.http import FileResponse
+        from django.core.exceptions import ValidationError
+
+        try:
+            ruta_abs, nombre_descarga = obtener_factura_pdf_venta(
+                id_venta=id_venta,
+                usuario=request.user
+            )
+            archivo = open(ruta_abs, 'rb')
+            response = FileResponse(archivo, content_type='application/pdf')
+            response['Content-Disposition'] = f'inline; filename="{nombre_descarga}"'
+            return response
+        except ValidationError as ve:
+            return Response(
+                {"error": str(ve.detail if hasattr(ve, 'detail') else ve)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Inconveniente al recuperar factura PDF: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
 
 
 

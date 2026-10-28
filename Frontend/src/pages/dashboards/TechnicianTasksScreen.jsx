@@ -9,7 +9,7 @@ const MOCK_REPARACIONES = [
   {
     id: 'OT-2026-001',
     dispositivo: 'iPhone 13 Pro Max',
-    cliente: 'Lucas Miño',
+    cliente: 'Juan Rodriguez',
     falla: 'Cambio de módulo OLED y calibración de FaceID',
     prioridad: 'Alta',
     estado: 'En Proceso',

@@ -47,6 +47,36 @@ def obtener_url_frontend() -> str:
     url = obtener_configuracion_texto('urlFrontend', fallback=fallback)
     return str(url).rstrip('/')
 
+def obtener_mercadopago_access_token() -> str:
+    """
+    Obtiene el Access Token de Mercado Pago configurado en la base de datos (ConfiguracionSistema).
+    Si no está configurado o está vacío/'S/N', hace fallback seguro a settings.MERCADOPAGO_ACCESS_TOKEN.
+    """
+    from django.conf import settings
+    fallback = getattr(settings, 'MERCADOPAGO_ACCESS_TOKEN', '') or ''
+    token = obtener_configuracion_texto('mpAccessToken', fallback=fallback)
+    return token if token and token != 'S/N' else fallback
+
+def obtener_mercadopago_public_key() -> str:
+    """
+    Obtiene la Public Key de Mercado Pago configurada en la base de datos (ConfiguracionSistema).
+    Si no está configurada o está vacía/'S/N', hace fallback a settings.MERCADOPAGO_PUBLIC_KEY.
+    """
+    from django.conf import settings
+    fallback = getattr(settings, 'MERCADOPAGO_PUBLIC_KEY', '') or ''
+    key = obtener_configuracion_texto('mpPublicKey', fallback=fallback)
+    return key if key and key != 'S/N' else fallback
+
+def obtener_mercadopago_webhook_secret() -> str:
+    """
+    Obtiene el Webhook Secret de Mercado Pago configurado en la base de datos.
+    Fallback a settings.MERCADOPAGO_WEBHOOK_SECRET.
+    """
+    from django.conf import settings
+    fallback = getattr(settings, 'MERCADOPAGO_WEBHOOK_SECRET', '') or ''
+    secret = obtener_configuracion_texto('mpWebhookSecret', fallback=fallback)
+    return secret if secret and secret != 'S/N' else fallback
+
 # Tipos de notificaciones que se envían por correo para códigos o verificaciones
 # y que no deben aparecer en la campanita del sistema
 TIPOS_EXCLUIDOS_CAMPANITA = [
@@ -127,13 +157,23 @@ def obtener_todas_las_configuraciones() -> dict:
     """
     Consulta todos los registros de ConfiguracionSistema y
     retorna un diccionario simple: {clave: valor} para poblar el frontend.
+    Incluye fallback a settings para llaves de pasarela si no estuviesen presentes.
     """
+    from django.conf import settings
     configuraciones = ConfiguracionSistema.objects.all()
-    return {
+    res = {
         config.clave: config.valor
         for config in configuraciones
         if config.clave is not None
     }
+    if 'mpPublicKey' not in res or not res['mpPublicKey'] or res['mpPublicKey'] == 'S/N':
+        res['mpPublicKey'] = getattr(settings, 'MERCADOPAGO_PUBLIC_KEY', '') or 'S/N'
+    if 'mpAccessToken' not in res or not res['mpAccessToken'] or res['mpAccessToken'] == 'S/N':
+        res['mpAccessToken'] = getattr(settings, 'MERCADOPAGO_ACCESS_TOKEN', '') or 'S/N'
+    if 'mpWebhookSecret' not in res or not res['mpWebhookSecret'] or res['mpWebhookSecret'] == 'S/N':
+        res['mpWebhookSecret'] = getattr(settings, 'MERCADOPAGO_WEBHOOK_SECRET', '') or 'S/N'
+
+    return res
 
 
 # ==============================================================================
