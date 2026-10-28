@@ -1583,15 +1583,42 @@ def generar_y_enviar_comprobante_entrega(reparacion: Reparacion):
     if email_cliente:
         try:
             from core_app.services import registrar_y_enviar_notificacion_correo
+            from core_app.selectors import obtener_url_frontend
+
+            url_frontend = obtener_url_frontend()
+            url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
+
+            cuerpo_texto = (
+                f"Hola. Confirmamos la entrega física de tu dispositivo ({disp_nombre}).\n\n"
+                f"Orden #{reparacion.id_reparacion} cerrada con éxito. Tu servicio cuenta con garantía legal de reparación.\n\n"
+                f"¡Valora la reparación, te lo agradeceremos mucho! Tu opinión nos ayuda a seguir mejorando nuestro servicio técnico.\n"
+                f"Puedes calificar tu experiencia aquí: {url_reparacion}\n\n"
+                f"IFixPos - Taller de Reparaciones"
+            )
+
+            cuerpo_html = (
+                f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
+                f"<h2 style='color: #06b6d4;'>IFixPos - ¡Dispositivo Entregado!</h2>"
+                f"<p>Confirmamos la entrega física de tu dispositivo <strong>{disp_nombre}</strong> correspondiente a la <strong>Orden #{reparacion.id_reparacion}</strong>.</p>"
+                f"<p>Tu servicio cuenta con garantía oficial de reparación.</p>"
+                f"<div style='margin: 24px 0; padding: 16px; background-color: #0f172a; border: 1px solid #06b6d4; border-radius: 8px; text-align: center; color: #f8fafc;'>"
+                f"<p style='font-size: 15px; margin: 0 0 12px 0; color: #38bdf8; font-weight: bold;'>⭐ ¡Valora la reparación, te lo agradeceremos mucho!</p>"
+                f"<p style='font-size: 13px; margin: 0 0 16px 0; color: #cbd5e1;'>Tu opinión nos ayuda a evaluar la calidad de nuestros técnicos y brindarte un mejor servicio cada día.</p>"
+                f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Calificar Servicio Técnico</a>"
+                f"</div>"
+                f"<p style='color: #64748b; font-size: 12px; text-align: center;'>Enlace directo: <a href='{url_reparacion}' style='color: #06b6d4;'>{url_reparacion}</a></p>"
+                f"</div>"
+            )
+
             registrar_y_enviar_notificacion_correo(
                 usuario=cliente,
-                asunto=f"¡Tu {disp_nombre} fue entregado con éxito! - Garantía IFixPos",
-                cuerpo_texto=(
-                    f"Hola. Confirmamos la entrega física de tu dispositivo ({disp_nombre}). "
-                    f"Orden #{reparacion.id_reparacion} cerrada. Tu servicio cuenta con garantía legal de reparación."
-                ),
+                asunto=f"¡Tu {disp_nombre} fue entregado con éxito! - Valora tu servicio (IFixPos)",
+                cuerpo_texto=cuerpo_texto,
                 tipo_notificacion="ENTREGA_DISPOSITIVO",
-                dispositivo=reparacion.id_dispositivo
+                cuerpo_html=cuerpo_html,
+                mensaje_notificacion=f"¡Tu equipo ({disp_nombre}) fue entregado! ¡Valora la reparación, te lo agradeceremos mucho!",
+                dispositivo=reparacion.id_dispositivo,
+                adjuntar_logo=True
             )
         except Exception:
             # Fallback seguro para no romper la transacción si el mail falla

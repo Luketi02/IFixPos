@@ -445,7 +445,45 @@ export default function TecnicoReparacionDetalle() {
             )}
           </div>
 
-          {/* 4. Sección: Bitácora Completa de Cambios (Timeline) */}
+          {/* 4. Sección: Calificación del Cliente (CU-51) */}
+          {reparacion?.calificacion && (
+            <div className="bg-[#1E293B] border border-amber-500/40 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 text-sm">
+                    ⭐
+                  </span>
+                  <div>
+                    <h3 className="text-base font-bold text-white tracking-wide">
+                      Calificación y Opinión del Cliente
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Evaluación cualitativa y cuantitativa registrada por el usuario
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs font-mono text-slate-400">
+                  {formatearFecha(reparacion.calificacion.fecha)}
+                </span>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                <div className="flex items-center gap-2 text-lg text-amber-400">
+                  <span>{'★'.repeat(reparacion.calificacion.puntuacion || 0)}</span>
+                  <span className="text-sm font-mono text-slate-200 font-bold">
+                    {reparacion.calificacion.puntuacion} / 5
+                  </span>
+                </div>
+                {reparacion.calificacion.comentario && (
+                  <p className="text-xs sm:text-sm text-slate-200 italic bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+                    &ldquo;{reparacion.calificacion.comentario}&rdquo;
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 5. Sección: Bitácora Completa de Cambios (Timeline) */}
           <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl space-y-5">
             <div className="border-b border-slate-800 pb-4">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">

@@ -1973,15 +1973,17 @@ def enviar_correo_confirmacion_compra(
 
     if es_retiro:
         instruccion_codigo_html = (
-            f"<div style='background-color: #0c4a6e; border: 1px solid #0284c7; padding: 16px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
-            f"<p style='margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 1px; font-weight: bold;'>📍 Código para Retiro en Local</p>"
-            f"<p style='margin: 0; font-size: 26px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
-            f"<p style='margin: 8px 0 0 0; font-size: 13px; color: #bae6fd;'>Presenta este código en nuestra <b>Sede Central</b> ({direccion_local}) junto con tu DNI para retirar tus repuestos.</p>"
+            f"<div style='background-color: #0c4a6e; border: 1px solid #0284c7; padding: 18px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
+            f"<p style='margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 1px; font-weight: bold;'>📍 Código de Retiro en Local</p>"
+            f"<p style='margin: 0; font-size: 28px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
+            f"<p style='margin: 10px 0 0 0; font-size: 13px; color: #bae6fd; line-height: 1.5;'>"
+            f"<b>Guarda este código de seguridad</b>, ya que lo vas a necesitar al momento de retirar tus productos en nuestra <b>Sede Central</b> ({direccion_local}) junto con tu DNI."
+            f"</p>"
             f"</div>"
         )
         instruccion_codigo_txt = (
             f"CÓDIGO DE RETIRO EN LOCAL: {codigo_orden}\n"
-            f"Presenta este código en nuestra Sede Central ({direccion_local}) junto con tu DNI para retirar tus repuestos.\n"
+            f"Por favor guarda este código de seguridad; lo necesitarás al momento de retirar tus productos en nuestra Sede Central ({direccion_local}) junto con tu DNI.\n"
         )
         modo_entrega_str = "Retiro en Sede Central (Mostrador)"
     else:
@@ -1994,15 +1996,19 @@ def enviar_correo_confirmacion_compra(
             dir_envio_txt = ", ".join([p for p in partes if p])
 
         instruccion_codigo_html = (
-            f"<div style='background-color: #1e1b4b; border: 1px solid #6366f1; padding: 16px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
+            f"<div style='background-color: #1e1b4b; border: 1px solid #6366f1; padding: 18px; border-radius: 12px; margin: 20px 0; text-align: center;'>"
             f"<p style='margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #a5b4fc; letter-spacing: 1px; font-weight: bold;'>🛡️ Código de Seguridad y Seguimiento</p>"
-            f"<p style='margin: 0; font-size: 26px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
-            f"<p style='margin: 8px 0 0 0; font-size: 13px; color: #e0e7ff;'>Este código es exclusivo para la seguridad y gestión de tu entrega a domicilio en: <b>{dir_envio_txt}</b>.</p>"
+            f"<p style='margin: 0; font-size: 28px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;'>{codigo_orden}</p>"
+            f"<p style='margin: 10px 0 0 0; font-size: 13px; color: #e0e7ff; line-height: 1.5;'>"
+            f"<b>Guarda este código de seguridad</b>: te servirá como comprobante para cualquier consulta o reclamo en caso de que tus productos no lleguen a tu ubicación.<br/>"
+            f"<span style='color: #c7d2fe; font-weight: 600; display: inline-block; margin-top: 6px;'>📦 Por favor está atento durante los próximos días hábiles, tu compra llegará pronto al destino seleccionado ({dir_envio_txt}).</span>"
+            f"</p>"
             f"</div>"
         )
         instruccion_codigo_txt = (
-            f"CÓDIGO DE SEGURIDAD Y GESTIÓN: {codigo_orden}\n"
-            f"Este código es exclusivo para la seguridad y seguimiento de tu entrega en: {dir_envio_txt}.\n"
+            f"CÓDIGO DE SEGURIDAD Y SEGUIMIENTO: {codigo_orden}\n"
+            f"Guarda este código de seguridad: te servirá para reclamos o consultas en caso de que tus productos no lleguen a tu ubicación.\n"
+            f"Por favor está atento durante los próximos días hábiles: tu compra llegará pronto a tu destino seleccionado ({dir_envio_txt}).\n"
         )
         modo_entrega_str = f"Envío a Domicilio ({dir_envio_txt})"
 
@@ -2061,6 +2067,15 @@ def enviar_correo_confirmacion_compra(
             <p style="margin: 0;"><b>Adjunto:</b> Encontrarás tu Factura / Comprobante Fiscal en formato PDF adjunta a este email para su descarga o impresión.</p>
           </div>
 
+          <div style="margin-top: 24px; padding: 16px; background-color: #0c1a2e; border: 1px solid #0284c7; border-radius: 12px; text-align: center;">
+            <p style="margin: 0; font-size: 14px; color: #38bdf8; font-weight: bold;">
+              ¡Muchas gracias por comprar en nuestra tienda virtual!
+            </p>
+            <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">
+              Apreciamos tu confianza en {nombre_local}.
+            </p>
+          </div>
+
           <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #1e293b; text-align: center; font-size: 11px; color: #64748b;">
             <p style="margin: 0;">{nombre_local} • Tel: {telefono_local}</p>
             <p style="margin: 4px 0 0 0;">Mensaje generado automáticamente por el sistema IFixPos.</p>
@@ -2079,7 +2094,8 @@ def enviar_correo_confirmacion_compra(
         f"Modalidad: {modo_entrega_str}\n\n"
         f"Resumen de repuestos:\n{filas_txt}\n"
         f"Total Abonado: ${total_abonado:,.2f}\n\n"
-        f"Tu factura oficial en formato PDF se encuentra adjunta a este mensaje.\n"
+        f"Tu factura oficial en formato PDF se encuentra adjunta a este mensaje.\n\n"
+        f"¡Muchas gracias por comprar en nuestra tienda virtual! Apreciamos tu confianza en {nombre_local}.\n"
     )
 
     # 1. Enviar el correo electrónico con el PDF adjunto
@@ -2111,10 +2127,16 @@ def enviar_correo_confirmacion_compra(
 
     # 2. Persistir registro en Notificacion
     try:
-        msg_notif = (
-            f"¡Pago confirmado! Tu orden con código {codigo_orden} ha sido acreditada (${total_abonado:,.2f}). "
-            f"{'Listo para retirar en local.' if es_retiro else 'En preparación para entrega a domicilio.'}"
-        )
+        if es_retiro:
+            msg_notif = (
+                f"¡Pago confirmado! Tu orden ({codigo_orden}) fue acreditada (${total_abonado:,.2f}). "
+                f"Guarda este código para retirar en nuestra Sede Central junto con tu DNI. ¡Gracias por tu compra!"
+            )
+        else:
+            msg_notif = (
+                f"¡Pago confirmado! Tu orden ({codigo_orden}) fue acreditada (${total_abonado:,.2f}). "
+                f"Guarda tu código para seguimiento o reclamos. Está atento en los próximos días hábiles a la llegada de tu paquete. ¡Gracias por tu compra!"
+            )
         Notificacion.objects.create(
             id_usuario=usuario,
             mensaje=msg_notif[:1000],

@@ -38,6 +38,8 @@ export default function AdminDashboardScreen() {
             navigate('/admin/configuracion');
           } else if (val === 'config-zones') {
             navigate('/admin/zonas-cobertura');
+          } else if (val === 'sales-payments') {
+            navigate('/admin/medios-pago');
           } else {
             setActiveMenu(val);
           }

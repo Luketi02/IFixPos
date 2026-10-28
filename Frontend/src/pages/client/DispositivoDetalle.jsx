@@ -9,6 +9,7 @@ import { resolverUrlImagen } from '../../utils/imagenes';
 import { formatearFecha } from '../../utils/fechas';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 import IniciarReparacionModal from '../../components/devices/IniciarReparacionModal';
+import CalificarServicioModal from '../../components/workshop/CalificarServicioModal';
 import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
@@ -25,6 +26,8 @@ export default function DispositivoDetalle() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [modalReparacionAbierto, setModalReparacionAbierto] = useState(false);
+  const [modalCalificarAbierto, setModalCalificarAbierto] = useState(false);
+  const [reparacionACalificar, setReparacionACalificar] = useState(null);
   const [bitacoraActivaAbierta, setBitacoraActivaAbierta] = useState(true);
   const [reparacionHistorialBitacoraAbierta, setReparacionHistorialBitacoraAbierta] = useState({});
 
@@ -463,11 +466,34 @@ export default function DispositivoDetalle() {
                           )}
                         </div>
 
-                        <div className="pt-2 border-t border-slate-800/80 flex justify-end">
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                          {/* CU-19: Botón Calificar si está entregado y sin calificación */}
+                          {rep.etapa === 'ENTREGADO' && !rep.calificacion ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReparacionACalificar({
+                                  ...rep,
+                                  dispositivo: {
+                                    marca: dispositivo.marca,
+                                    modelo: dispositivo.modelo
+                                  }
+                                });
+                                setModalCalificarAbierto(true);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-bold border border-amber-500/40 transition-all flex items-center gap-1.5 cursor-pointer shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                            >
+                              <span>⭐</span>
+                              <span>Calificar Servicio</span>
+                            </button>
+                          ) : (
+                            <div />
+                          )}
+
                           <button
                             type="button"
                             onClick={() => navigate(`/cliente/reparaciones/${rep.id_reparacion}`)}
-                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-[#8B5CF6]/20 text-slate-300 hover:text-[#C4B5FD] text-xs font-semibold border border-slate-700 hover:border-[#8B5CF6]/50 transition-all flex items-center gap-1"
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-[#8B5CF6]/20 text-slate-300 hover:text-[#C4B5FD] text-xs font-semibold border border-slate-700 hover:border-[#8B5CF6]/50 transition-all flex items-center gap-1 cursor-pointer"
                           >
                             <span>Ver Historial</span>
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -494,6 +520,20 @@ export default function DispositivoDetalle() {
           setSuccessMessage(
             `¡Reparación iniciada con éxito! Su solicitud para ${dispositivo?.marca || ''} ${dispositivo?.modelo || ''} ha sido registrada. Código para presentar en mostrador: ${resultado?.codigo_seguridad}`
           );
+          setRecarga((n) => n + 1);
+        }}
+      />
+
+      {/* Modal Calificar Servicio Técnico (CU-19) */}
+      <CalificarServicioModal
+        isOpen={modalCalificarAbierto}
+        onClose={() => {
+          setModalCalificarAbierto(false);
+          setReparacionACalificar(null);
+        }}
+        reparacion={reparacionACalificar}
+        onSuccess={() => {
+          setSuccessMessage('¡Muchas gracias por su calificación y retroalimentación!');
           setRecarga((n) => n + 1);
         }}
       />

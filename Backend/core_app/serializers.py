@@ -4,7 +4,7 @@ from core_app.models import ConfiguracionSistema, Notificacion
 
 class ConfiguracionUpdateInputSerializer(serializers.Serializer):
     """
-    Serializador de entrada (La Aduana) para validar la actualización
+    Serializador de entrada para validar la actualización
     de parámetros globales del sistema (CU-42).
     """
 
@@ -162,7 +162,7 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
 
 class NotificacionOutputSerializer(serializers.ModelSerializer):
     """
-    Serializador de salida (La Aduana) para el centro de notificaciones.
+    Serializador de salida para el centro de notificaciones.
     Expone los campos clave de la alerta para su consumo seguro en el frontend,
     incluyendo metadatos del equipo y enlace directo a la reparación.
     """
@@ -239,7 +239,7 @@ class NotificacionOutputSerializer(serializers.ModelSerializer):
 # ==============================================================================
 
 class FiltrarLogsAuditoriaInputSerializer(serializers.Serializer):
-    """La Aduana (CU-40): Valida parámetros de consulta para logs de auditoría."""
+    """ (CU-40): Valida parámetros de consulta para logs de auditoría."""
     buscar = serializers.CharField(required=False, allow_blank=True, max_length=255)
     texto_busqueda = serializers.CharField(required=False, allow_blank=True, max_length=255)
     tipo = serializers.CharField(required=False, allow_blank=True, max_length=50)
@@ -336,7 +336,7 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
 
 class RestaurarBackupInputSerializer(serializers.Serializer):
     """
-    La Aduana de Seguridad (CU-23): Valida las credenciales y el token OTP
+    (CU-23): Valida las credenciales y el token OTP
     exigidos de forma estricta para autorizar la restauración del sistema.
     """
     password = serializers.CharField(

@@ -9,6 +9,7 @@ import { resolverUrlImagen } from '../../utils/imagenes';
 import { formatearFecha } from '../../utils/fechas';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
+import CalificarServicioModal from '../../components/workshop/CalificarServicioModal';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -30,6 +31,9 @@ export default function ReparacionDetalle() {
   const [metodoPago, setMetodoPago] = useState('EFECTIVO');
   const [comentariosCliente, setComentariosCliente] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Estado local para Modal de Calificación (CU-19)
+  const [modalCalificarAbierto, setModalCalificarAbierto] = useState(false);
 
   // Regla de negocio: Si se selecciona envío a domicilio, no se permite efectivo en mostrador
   useEffect(() => {
@@ -791,9 +795,9 @@ export default function ReparacionDetalle() {
                     </motion.div>
                   )}
 
-                  {/* Tarjeta 3: Calificación (Solo si existe) */}
-                  {reparacion.calificacion && (
-                    <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl space-y-3">
+                  {/* Tarjeta 3: Calificación (CU-19 y CU-51) */}
+                  {reparacion.calificacion ? (
+                    <div className="bg-[#1E293B] border border-amber-500/30 rounded-2xl p-6 shadow-xl space-y-3">
                       <div className="border-b border-slate-700/60 pb-3 flex items-center justify-between">
                         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full bg-amber-400" />
@@ -817,6 +821,40 @@ export default function ReparacionDetalle() {
                         </p>
                       )}
                     </div>
+                  ) : (
+                    /* Si la reparación está en estado ENTREGADO y aún no tiene calificación, permitir calificar */
+                    reparacion.etapa === 'ENTREGADO' && !esPersonalTecnico && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-gradient-to-r from-amber-950/30 via-[#1E293B] to-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-xl space-y-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 text-lg">
+                            ⭐
+                          </div>
+                          <div>
+                            <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono">
+                              ¿Qué te pareció el servicio técnico?
+                            </h2>
+                            <p className="text-xs text-slate-300">
+                              Tu equipo ya ha sido entregado. Valora la reparación, ¡te lo agradeceremos mucho!
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setModalCalificarAbierto(true)}
+                            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-bold text-xs font-mono tracking-wider uppercase transition-all shadow-[0_0_20px_rgba(245,158,11,0.35)] flex items-center gap-2 cursor-pointer"
+                          >
+                            <span>Calificar Servicio</span>
+                            <span>⭐</span>
+                          </button>
+                        </div>
+                      </motion.div>
+                    )
                   )}
 
                 </div>
@@ -909,6 +947,17 @@ export default function ReparacionDetalle() {
           )}
         </main>
       </div>
+
+      {/* Modal Calificar Servicio Técnico (CU-19) */}
+      <CalificarServicioModal
+        isOpen={modalCalificarAbierto}
+        onClose={() => setModalCalificarAbierto(false)}
+        reparacion={reparacion}
+        onSuccess={(nuevaCalificacion) => {
+          setSuccessMessage('¡Muchas gracias por su calificación y retroalimentación!');
+          setReparacion((prev) => (prev ? { ...prev, calificacion: nuevaCalificacion } : prev));
+        }}
+      />
     </div>
   );
 }

@@ -111,7 +111,7 @@ class SubirLogoEmpresaApi(APIView):
 
 
 # ==============================================================================
-# GESTIÓN DE NOTIFICACIONES (LA CAMPANITA)
+# GESTIÓN DE NOTIFICACIONES 
 # ==============================================================================
 
 class ListarNotificacionesApi(APIView):

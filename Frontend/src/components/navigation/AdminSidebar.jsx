@@ -79,7 +79,7 @@ export const ADMIN_MENU_ITEMS = [
     children: [
       { value: 'sales-pos', label: 'Punto de Venta (POS)', icon: ShoppingBag01Icon },
       { value: 'sales-history', label: 'Historial de Ventas', icon: ShoppingBag01Icon },
-      { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon }
+      { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon, route: '/admin/medios-pago' }
     ]
   },
   {
@@ -300,6 +300,8 @@ export default function AdminSidebar({
       navigate('/admin/catalogos/categorias-reparacion');
     } else if (val === 'admin-repairs') {
       navigate('/admin/reparaciones');
+    } else if (val === 'sales-payments') {
+      navigate('/admin/medios-pago');
     } else {
       if (effectiveRole === 'cliente') {
         navigate('/tienda');

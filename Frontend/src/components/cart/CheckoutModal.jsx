@@ -1949,8 +1949,8 @@ export default function CheckoutModal({
                 </div>
                 <p className="text-[11px] text-slate-400">
                   {metodoEntrega === 'RETIRO'
-                    ? 'Presenta este código en nuestra sede central junto con tu DNI para retirar tus repuestos.'
-                    : 'Conserva este código como constancia de seguridad y gestión para la recepción en tu domicilio.'}
+                    ? 'Guarda este código de seguridad; lo vas a necesitar al momento de retirar tus productos en nuestra sede central junto con tu DNI.'
+                    : 'Guarda este código de seguridad; te servirá para reclamos o consultas en caso de que tus productos no lleguen a tu ubicación.'}
                 </p>
               </div>
 
@@ -1979,24 +1979,29 @@ export default function CheckoutModal({
               </div>
 
               {/* Instrucciones según Modalidad y Confirmación por Correo */}
-              <div className="max-w-md mx-auto text-left p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs space-y-2 text-slate-300">
+              <div className="max-w-md mx-auto text-left p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs space-y-2.5 text-slate-300">
                 <p className="font-bold text-white flex items-center gap-1.5">
                   <span>📦</span>
                   <span>Próximos Pasos:</span>
                 </p>
                 {metodoEntrega === 'RETIRO' ? (
                   <p className="text-slate-400 leading-relaxed text-[11px]">
-                    Tus repuestos te esperan en nuestra Sede Central. Puedes acercarte en los horarios comerciales habituales con tu DNI y el código indicado.
+                    Tus repuestos te esperan en nuestra Sede Central. Recuerda guardar tu código de seguridad y presentarlo en mostrador junto con tu DNI para retirar.
                   </p>
                 ) : (
                   <p className="text-slate-400 leading-relaxed text-[11px]">
-                    Tus repuestos serán empaquetados y despachados con seguro de logística a la dirección registrada. Nos contactaremos ante cualquier eventualidad.
+                    Por favor mantente atento durante los próximos días hábiles: tu compra llegará pronto al destino seleccionado. Conserva tu código de seguridad para cualquier seguimiento o reclamo.
                   </p>
                 )}
                 <p className="text-[11px] text-cyan-400 pt-1 flex items-center gap-1.5 font-medium">
                   <span>✉️</span>
-                  <span>Te enviamos un correo electrónico a <b>{facturacion.email || user?.email}</b> con este código y tu Factura PDF adjunta.</span>
+                  <span>Te enviamos un correo electrónico a <b>{facturacion.email || user?.email}</b> con los detalles, este código y tu Factura PDF adjunta.</span>
                 </p>
+                <div className="pt-2 border-t border-slate-800 text-center">
+                  <p className="text-xs text-amber-300 font-semibold">
+                    ¡Muchas gracias por comprar en nuestra tienda virtual!
+                  </p>
+                </div>
               </div>
             </motion.div>
           )}
@@ -2018,7 +2023,7 @@ export default function CheckoutModal({
               onClick={onClose}
               className="w-full py-3 px-6 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-extrabold text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-[0.98] transition-all"
             >
-              Volver a la Tienda Oficial
+              Volver al inicio
             </button>
           ) : (
             <>
