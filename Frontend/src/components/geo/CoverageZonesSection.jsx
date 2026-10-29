@@ -401,7 +401,7 @@ export default function CoverageZonesSection({ token }) {
             <button
               type="submit"
               disabled={isBotonFiltrarDeshabilitado()}
-              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] hover:opacity-90 text-white font-semibold text-xs transition-all shadow-md shadow-cyan-500/20 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               {isLoading ? (
                 <>
@@ -591,7 +591,7 @@ export default function CoverageZonesSection({ token }) {
                     type="button"
                     onClick={handleGuardarCambios}
                     disabled={isSaving}
-                    className="px-6 py-2 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] hover:opacity-90 text-white font-semibold text-xs transition-opacity shadow-lg shadow-cyan-500/20 flex items-center gap-2 disabled:opacity-50"
+                    className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
                   >
                     {isSaving ? (
                       <>

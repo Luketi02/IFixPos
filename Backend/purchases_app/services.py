@@ -79,7 +79,7 @@ def registrar_proveedor(
         is_active=True
     )
 
-    # Paso 7.2: Instanciar Proveedor en estado Activo
+    # Paso 7.2: Instanciar Proveedor en estado Activo (Confiabilidad 60% por defecto hasta concretar 5 OC, Entrega promedio 0 calculada por el sistema)
     proveedor = Proveedor.objects.create(
         cuit_prov=cuit,
         nombre_proveedor=nombre,
@@ -87,8 +87,8 @@ def registrar_proveedor(
         telefono=telefono,
         estado=True,
         ofrece_envio=datos_validados.get('ofrece_envio', True),
-        indice_confiabilidad=datos_validados.get('indice_confiabilidad', Decimal('10.00')),
-        tiempo_promedio_entrega=datos_validados.get('tiempo_promedio_entrega', 3),
+        indice_confiabilidad=datos_validados.get('indice_confiabilidad', Decimal('60.00')),
+        tiempo_promedio_entrega=datos_validados.get('tiempo_promedio_entrega', 0),
         nivel=datos_validados.get('nivel', 'Estándar'),
         id_direccion=direccion
     )
@@ -928,6 +928,47 @@ def recepcionar_orden_compra(
     else:
         orden.estado_orden = OrdenCompra.ESTADO_ENTREGADA
     orden.save()
+
+    # Recalcular parámetros automáticos del Proveedor (Entrega Promedio y Confiabilidad)
+    proveedor_oc = orden.cuit_prov
+    if proveedor_oc:
+        plazo_previo = proveedor_oc.tiempo_promedio_entrega if (proveedor_oc.tiempo_promedio_entrega and proveedor_oc.tiempo_promedio_entrega > 0) else 5
+        dias_orden_actual = max(0, (fecha_hoy - orden.fecha_emision).days) if orden.fecha_emision else 0
+
+        ordenes_concretadas = list(
+            OrdenCompra.objects.filter(
+                cuit_prov=proveedor_oc,
+                estado_orden__in=[
+                    OrdenCompra.ESTADO_ENTREGADA,
+                    OrdenCompra.ESTADO_ENTREGADA_PARCIALMENTE
+                ],
+                fecha_recepcion__isnull=False
+            )
+        )
+        total_concretadas = len(ordenes_concretadas)
+        if total_concretadas > 0:
+            suma_dias = sum(
+                max(0, (o.fecha_recepcion - o.fecha_emision).days)
+                for o in ordenes_concretadas
+                if o.fecha_recepcion and o.fecha_emision
+            )
+            proveedor_oc.tiempo_promedio_entrega = int(round(suma_dias / total_concretadas))
+
+        # Confiabilidad: Por defecto 60% hasta concretar como mínimo 5 órdenes de compra.
+        # A partir de la 5ta orden, sube si entrega en tiempo y forma, y baja si se atrasa o entrega incompleto.
+        if total_concretadas < 5:
+            proveedor_oc.indice_confiabilidad = Decimal('60.00')
+        else:
+            base_conf = proveedor_oc.indice_confiabilidad
+            if base_conf is None or base_conf <= Decimal('10.00'):
+                base_conf = Decimal('60.00')
+            entrega_en_tiempo_y_forma = (not es_entrega_parcial) and (dias_orden_actual <= plazo_previo)
+            if entrega_en_tiempo_y_forma:
+                proveedor_oc.indice_confiabilidad = min(Decimal('100.00'), base_conf + Decimal('5.00'))
+            else:
+                proveedor_oc.indice_confiabilidad = max(Decimal('0.00'), base_conf - Decimal('5.00'))
+
+        proveedor_oc.save(update_fields=['tiempo_promedio_entrega', 'indice_confiabilidad'])
 
     # Paso 9: Reactividad Técnica (Lógica FIFO para reactivación de reparaciones)
     reparaciones_reactivadas: List[int] = []

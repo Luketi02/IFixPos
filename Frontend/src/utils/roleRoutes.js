@@ -30,7 +30,7 @@ export const getDashboardPath = (role) => {
     case 'admin':
       return '/admin/dashboard';
     case 'tecnico':
-      return '/tareas-tecnico';
+      return '/tecnico/dispositivos/en-curso';
     case 'cliente':
     default:
       return '/tienda';

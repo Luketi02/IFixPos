@@ -37,25 +37,27 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Inicio & Métricas',
     children: [
-      { value: 'overview', label: 'Panel Principal', icon: Home01Icon, route: '/admin/dashboard' },
-      { value: 'kpis', label: 'Métricas Globales', icon: DashboardSquare01Icon },
-      { value: 'quick-actions', label: 'Acciones Rápidas', icon: Rocket01Icon }
+      { value: 'overview', label: 'Panel Principal', icon: Home01Icon, route: '/admin/dashboard' }
     ]
   },
   {
-    label: 'Gestión de Usuarios',
+    label: 'Gestión de Roles',
     children: [
-      { value: 'users-list', label: 'Usuarios y Roles', icon: UserGroupIcon },
-      { value: 'users-clients', label: 'Cartera de Clientes', icon: UserGroupIcon },
-      { value: 'users-techs', label: 'Personal Técnico', icon: UserGroupIcon }
+      { value: 'admin-users', label: 'Usuarios', icon: UserGroupIcon, route: '/admin/usuarios' },
+      { value: 'admin-roles', label: 'Roles', icon: Layers01Icon, route: '/admin/roles' }
+    ]
+  },
+  {
+    label: 'Compras & Abastecimiento',
+    children: [
+      { value: 'purchases-suppliers', label: 'Gestión de Proveedores', icon: PackageReceiveIcon, route: '/admin/proveedores' },
+      { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' }
     ]
   },
   {
     label: 'Catálogo & Inventario',
     children: [
-      { value: 'admin-inventory', label: 'Catálogo e Inventario', icon: PackageIcon, route: '/admin/inventario' },
-      { value: 'catalog-categories', label: 'Categorías y Familias', icon: Layers01Icon, route: '/admin/inventario' },
-      { value: 'inventory-stock', label: 'Control de Stock', icon: PackageIcon, route: '/admin/inventario' }
+      { value: 'admin-inventory', label: 'Catálogo e Inventario', icon: PackageIcon, route: '/admin/inventario' }
     ]
   },
   {
@@ -77,8 +79,6 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Ventas & Facturación',
     children: [
-      { value: 'sales-pos', label: 'Punto de Venta (POS)', icon: ShoppingBag01Icon },
-      { value: 'sales-history', label: 'Historial de Ventas', icon: ShoppingBag01Icon },
       { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon, route: '/admin/medios-pago' }
     ]
   },
@@ -86,9 +86,7 @@ export const ADMIN_MENU_ITEMS = [
     label: 'Configuración del Sistema',
     children: [
       { value: 'config-general', label: 'Parámetros Globales', icon: Settings02Icon, route: '/admin/configuracion' },
-      { value: 'config-zones', label: 'Zonas de Cobertura', icon: Layers01Icon, route: '/admin/zonas-cobertura' },
-      { value: 'config-notifications', label: 'Notificaciones & Correo', icon: Notification03Icon, route: '/admin/configuracion' },
-      { value: 'config-audit', label: 'Auditoría & Logs', icon: Layers01Icon, route: '/admin/configuracion' }
+      { value: 'config-zones', label: 'Zonas de Cobertura', icon: Layers01Icon, route: '/admin/zonas-cobertura' }
     ]
   }
 ];
@@ -107,12 +105,6 @@ export const CLIENT_MENU_ITEMS = [
     label: 'Mis Dispositivos',
     children: [
       { value: 'client-devices-list', label: 'Mis Dispositivos', icon: SmartPhone01Icon, route: '/cliente/dispositivos' }
-    ]
-  },
-  {
-    label: 'Servicios Técnicos',
-    children: [
-      { value: 'client-repairs', label: 'Estado de Reparaciones', icon: Settings02Icon, route: '/tienda' }
     ]
   }
 ];
@@ -136,12 +128,6 @@ export const TECH_MENU_ITEMS = [
         label: 'Reparaciones en curso',
         icon: Clock01Icon,
         route: '/tecnico/dispositivos/en-curso'
-      },
-      {
-        value: 'tech-repairs-finished',
-        label: 'Reparaciones finalizadas',
-        icon: CheckmarkCircle01Icon,
-        route: '/tecnico/dispositivos/finalizadas'
       }
     ]
   },
@@ -155,12 +141,6 @@ export const TECH_MENU_ITEMS = [
         route: '/tecnico/caja/cobros'
       },
       {
-        value: 'tech-cash-purchase',
-        label: 'Registrar compra',
-        icon: Coins01Icon,
-        route: '/tecnico/caja/registrar-compra'
-      },
-      {
         value: 'tech-cash-receive-device',
         label: 'Recepcionar dispositivo',
         icon: SmartPhone01Icon,
@@ -171,30 +151,6 @@ export const TECH_MENU_ITEMS = [
         label: 'Entregar Dispositivo',
         icon: CheckmarkCircle01Icon,
         route: '/tecnico/caja/entregar-dispositivo'
-      }
-    ]
-  },
-
-
-  {
-    label: '📦 Insumos',
-    children: [
-      {
-        value: 'tech-supplies-receive',
-        label: 'Recepcionar compra',
-        icon: PackageReceiveIcon,
-        route: '/tecnico/insumos/recepcionar-compra'
-      }
-    ]
-  },
-  {
-    label: '⚡ Taller & Tareas',
-    children: [
-      {
-        value: 'tech-tasks',
-        label: 'Resumen y Tareas del Día',
-        icon: Settings02Icon,
-        route: '/tareas-tecnico'
       }
     ]
   }
@@ -302,11 +258,17 @@ export default function AdminSidebar({
       navigate('/admin/reparaciones');
     } else if (val === 'sales-payments') {
       navigate('/admin/medios-pago');
+    } else if (val === 'admin-users') {
+      navigate('/admin/usuarios');
+    } else if (val === 'admin-roles') {
+      navigate('/admin/roles');
+    } else if (val === 'purchases-suppliers') {
+      navigate('/admin/proveedores');
     } else {
       if (effectiveRole === 'cliente') {
         navigate('/tienda');
       } else if (effectiveRole === 'tecnico') {
-        navigate('/tareas-tecnico');
+        navigate('/tecnico/dispositivos/en-curso');
       } else {
         navigate('/admin/dashboard', { state: { activeMenu: val } });
       }

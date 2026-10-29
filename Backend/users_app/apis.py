@@ -392,6 +392,30 @@ class ModificarUsuarioAdminApi(APIView):
 
 from users_app.serializers import ModificarRolInputSerializer, RolUsuarioOutputSerializer
 from users_app.services import modificar_rol_sistema
+from users_app.selectors import obtener_roles_sistema
+
+
+class ListarRolesApi(APIView):
+    """
+    Endpoint de solo lectura para listar todos los roles del sistema.
+    Accesible para Administradores y Técnicos (para filtros CU-32 y gestión CU-84).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rol_codigo = getattr(getattr(request.user, 'id_rol', None), 'codigo', '')
+        rol_nombre = getattr(getattr(request.user, 'id_rol', None), 'nombre_rol', '')
+        es_autorizado = rol_codigo in ['ADMIN', 'TECNICO'] or rol_nombre in ['Administrador', 'Técnico']
+        if not es_autorizado:
+            return Response(
+                {"error": "No posee permisos para consultar los roles del sistema."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        roles = obtener_roles_sistema()
+        serializer = RolUsuarioOutputSerializer(roles, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class ModificarRolApi(APIView):
     """

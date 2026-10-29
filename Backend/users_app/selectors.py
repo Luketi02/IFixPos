@@ -99,13 +99,21 @@ def filtrar_usuarios(
     id_ciudad: int = None
 ) -> QuerySet[Usuario]:
     """CU-32: Filtro de usuarios. Retorna un QuerySet de Usuario optimizado."""
+    from django.db.models import Prefetch
+    from geo_app.models import Direccion
+
+    qs = Usuario.objects.select_related('perfilusuario', 'id_rol').prefetch_related(
+        Prefetch(
+            'direccion_set',
+            queryset=Direccion.objects.filter(is_active=True).select_related('id_ciudad__id_provincia__id_pais'),
+            to_attr='direcciones_activas_prefetch'
+        )
+    )
     
-    qs = Usuario.objects.select_related('perfilusuario', 'id_rol')
-    
-    if email:
-        qs = qs.filter(email=email)
-    if dni:
-        qs = qs.filter(perfilusuario__dni=dni)
+    if email and email.strip():
+        qs = qs.filter(email__icontains=email.strip())
+    if dni and dni.strip():
+        qs = qs.filter(perfilusuario__dni__icontains=dni.strip())
     if id_rol is not None:
         qs = qs.filter(id_rol=id_rol)
     
@@ -113,13 +121,24 @@ def filtrar_usuarios(
         qs = qs.filter(is_active=activo)
         
     if id_ciudad is not None:
-        qs = qs.filter(direccion__id_ciudad=id_ciudad)
+        qs = qs.filter(direccion__id_ciudad=id_ciudad, direccion__is_active=True)
     elif id_provincia is not None:
-        qs = qs.filter(direccion__id_ciudad__id_provincia=id_provincia)
+        qs = qs.filter(direccion__id_ciudad__id_provincia=id_provincia, direccion__is_active=True)
     elif id_pais is not None:
-        qs = qs.filter(direccion__id_ciudad__id_provincia__id_pais=id_pais)
+        qs = qs.filter(direccion__id_ciudad__id_provincia__id_pais=id_pais, direccion__is_active=True)
         
-    return qs.distinct()
+    return qs.distinct().order_by('-id_usuario')
+
+
+def obtener_roles_sistema() -> QuerySet[RolUsuario]:
+    """
+    CU-84 / CU-32: Retorna todos los roles del sistema ordenados por su identificador,
+    incluyendo el conteo de usuarios asociados a cada rol.
+    """
+    from django.db.models import Count
+    return RolUsuario.objects.annotate(
+        usuarios_count=Count('usuario')
+    ).order_by('id_rol')
 
 
 def obtener_usuario_completo(id_usuario: int) -> Usuario:

@@ -16,6 +16,7 @@ from purchases_app.selectors import (
     filtrar_ordenes_compra,
     filtrar_solicitudes_cotizacion,
     filtrar_cotizaciones,
+    obtener_proveedor_completo,
     listar_solicitudes_cotizacion,
     obtener_detalle_solicitud,
     obtener_invitacion_por_token,
@@ -23,7 +24,8 @@ from purchases_app.selectors import (
     obtener_detalle_cotizacion,
     calcular_mejores_ofertas,
     obtener_orden_esperando_entrega,
-    obtener_detalle_orden_compra
+    obtener_detalle_orden_compra,
+    listar_compras_directas
 )
 from purchases_app.serializers import (
     FiltrarProveedoresInputSerializer,
@@ -278,6 +280,23 @@ class ModificarProveedorApi(APIView):
 
     def put(self, request, id_proveedor: str):
         return self.patch(request, id_proveedor)
+
+    def get(self, request, id_proveedor: str):
+        if str(id_proveedor).strip().lower() == 'filtrar':
+            return FiltrarProveedoresApi().get(request)
+
+        _exigir_rol_admin(request.user)
+
+        try:
+            proveedor = obtener_proveedor_completo(id_proveedor)
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        output = ProveedorDetalleOutputSerializer(proveedor)
+        return Response(output.data, status=status.HTTP_200_OK)
 
 
 # ==============================================================================
@@ -941,6 +960,27 @@ class RegistrarCompraDirectaApi(APIView):
     en mostrador o insumos urgentes), garantizando la trazabilidad del gasto.
     """
     permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        buscar = (request.query_params.get('buscar') or '').strip()
+        impacto_raw = request.query_params.get('impacto_stock')
+        impacto_stock = None
+        if impacto_raw is not None and str(impacto_raw).strip() != '':
+            val_low = str(impacto_raw).strip().lower()
+            if val_low in ('true', '1', 'si', 'sí'):
+                impacto_stock = True
+            elif val_low in ('false', '0', 'no'):
+                impacto_stock = False
+
+        compras = listar_compras_directas(
+            usuario_ejecutor=request.user,
+            buscar=buscar,
+            impacto_stock=impacto_stock
+        )
+        output = RegistroCompraOutputSerializer(compras, many=True)
+        return Response(output.data, status=status.HTTP_200_OK)
 
     def post(self, request):
         _exigir_rol_admin(request.user)

@@ -446,7 +446,7 @@ export default function CompletarPago({ onAlerta }) {
               <button
                 type="button"
                 onClick={handleDescargarFactura}
-                className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-sm font-bold shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span className="text-lg">📄</span>
                 <span>Descargar Factura PDF</span>
@@ -657,7 +657,7 @@ export default function CompletarPago({ onAlerta }) {
                 <button
                   type="submit"
                   disabled={!esFormularioValido || procesandoPago}
-                  className="w-full py-4 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-sm font-bold shadow-xl shadow-cyan-500/20 hover:shadow-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer mt-4"
+                  className="w-full py-3.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer mt-4"
                 >
                   {procesandoPago ? (
                     <>
@@ -792,7 +792,7 @@ export default function CompletarPago({ onAlerta }) {
                   <button
                     type="submit"
                     disabled={cargandoLista}
-                    className="px-7 py-3 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-xs font-bold shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 disabled:opacity-50 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center gap-2 cursor-pointer"
+                    className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-50 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
                   >
                     {cargandoLista ? (
                       <>
@@ -937,7 +937,7 @@ export default function CompletarPago({ onAlerta }) {
                             <button
                               type="button"
                               onClick={() => handleSeleccionarOperacion(t)}
-                              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-xs font-bold shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-1.5 cursor-pointer"
+                              className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
                             >
                               <span>💳</span>
                               <span>Cobrar en Caja</span>

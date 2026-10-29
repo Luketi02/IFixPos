@@ -1062,7 +1062,7 @@ export default function AdminConfigScreen() {
                     <button
                       type="button"
                       onClick={() => navigate('/admin/zonas-cobertura')}
-                      className="px-5 py-3 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] hover:opacity-95 text-white font-semibold text-xs tracking-wide transition-all shadow-md shadow-cyan-500/20 flex items-center justify-center gap-2.5 shrink-0 group hover:scale-[1.02] active:scale-95 cursor-pointer"
+                      className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2.5 shrink-0 group cursor-pointer"
                     >
                       <span>Administrar Zonas de Cobertura</span>
                       <svg className="w-4 h-4 text-white group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1317,7 +1317,7 @@ export default function AdminConfigScreen() {
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploadingLogo}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] hover:opacity-90 text-white font-semibold text-xs transition-all shadow-md shadow-cyan-500/20 flex items-center gap-2 shrink-0 disabled:opacity-50"
+                        className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 disabled:opacity-50 cursor-pointer"
                       >
                         {isUploadingLogo ? (
                           <>
@@ -1489,7 +1489,7 @@ export default function AdminConfigScreen() {
                             setAddressModalMode('new');
                             setIsAddressModalOpen(true);
                           }}
-                          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] hover:opacity-90 text-white font-semibold text-xs transition-all shadow-md shadow-cyan-500/20 flex items-center gap-2 shrink-0"
+                          className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
                         >
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

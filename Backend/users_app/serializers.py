@@ -179,32 +179,69 @@ class PerfilOutputSerializer(serializers.Serializer):
 
 
 class PerfilUsuarioAnidadoSerializer(serializers.Serializer):
-    dni = serializers.CharField()
-    nombre = serializers.CharField()
-    apellido = serializers.CharField()
+    dni = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    nombre = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    apellido = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    telefono = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    telefono_alt = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    foto_perfil = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+
 
 class RolUsuarioAnidadoSerializer(serializers.Serializer):
+    id_rol = serializers.IntegerField(required=False)
+    codigo = serializers.CharField(required=False)
     nombre_rol = serializers.CharField()
+
 
 class UsuarioFiltradoOutputSerializer(serializers.Serializer):
     id_usuario = serializers.IntegerField()
     email = serializers.EmailField()
     fecha_registro = serializers.DateField()
+    is_active = serializers.BooleanField()
     rol = RolUsuarioAnidadoSerializer(source='id_rol', read_only=True)
     perfil = PerfilUsuarioAnidadoSerializer(source='perfilusuario', read_only=True)
+    ubicacion = serializers.SerializerMethodField()
+
+    def get_ubicacion(self, obj):
+        direcciones = getattr(obj, 'direcciones_activas_prefetch', None)
+        if direcciones is None:
+            direcciones = list(
+                obj.direccion_set.filter(is_active=True).select_related('id_ciudad__id_provincia__id_pais')[:1]
+            )
+        primera = direcciones[0] if direcciones else None
+        if primera and primera.id_ciudad:
+            ciudad = primera.id_ciudad
+            provincia = ciudad.id_provincia
+            pais = provincia.id_pais if provincia else None
+            return {
+                "id_ciudad": ciudad.id_ciudad,
+                "ciudad": ciudad.nombre_ciudad,
+                "id_provincia": provincia.id_provincia if provincia else None,
+                "provincia": provincia.nombre_provincia if provincia else "",
+                "id_pais": pais.id_pais if pais else None,
+                "pais": pais.nombre_pais if pais else ""
+            }
+        return None
 
 
 class FiltrarUsuariosInputSerializer(serializers.Serializer):
     """
     CU-32: Aduana de validación para parámetros de filtrado y búsqueda de usuarios.
     """
-    dni = serializers.CharField(required=False, allow_blank=True, validators=[dni_validator])
+    dni = serializers.CharField(required=False, allow_blank=True)
     email = serializers.CharField(required=False, allow_blank=True)
     id_rol = serializers.IntegerField(required=False, min_value=1)
-    activo = serializers.BooleanField(required=False)
+    activo = serializers.BooleanField(required=False, allow_null=True, default=None)
     id_pais = serializers.IntegerField(required=False, min_value=1)
     id_provincia = serializers.IntegerField(required=False, min_value=1)
     id_ciudad = serializers.IntegerField(required=False, min_value=1)
+
+    def validate_dni(self, value):
+        if value and value.strip():
+            clean = value.strip()
+            dni_validator(clean)
+            return clean
+        return ""
 
 
 class ModificarUsuarioAdminInputSerializer(serializers.Serializer):
@@ -233,6 +270,20 @@ class ModificarUsuarioAdminInputSerializer(serializers.Serializer):
             clean_value = value.strip().replace(" ", "")
             telefono_validator(clean_value)
             return clean_value
+        return ""
+
+    def validate_forzar_contrasena(self, value):
+        if value and value.strip():
+            clave = value.strip()
+            if len(clave) < 6:
+                raise serializers.ValidationError("La nueva contraseña debe tener como mínimo 6 caracteres.")
+            import re
+            if not re.search(r'[A-ZÁÉÍÓÚÑÜ]', clave):
+                raise serializers.ValidationError("La nueva contraseña debe contener al menos 1 letra mayúscula.")
+            digitos = re.findall(r'\d', clave)
+            if len(digitos) < 2:
+                raise serializers.ValidationError("La nueva contraseña debe contener mínimamente 2 caracteres numéricos.")
+            return clave
         return ""
 
     def validate(self, attrs):
@@ -307,3 +358,4 @@ class RolUsuarioOutputSerializer(serializers.Serializer):
     codigo = serializers.CharField()
     nombre_rol = serializers.CharField()
     descripcion = serializers.CharField(allow_null=True)
+    usuarios_count = serializers.IntegerField(required=False, default=0)

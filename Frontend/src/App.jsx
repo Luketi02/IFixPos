@@ -23,6 +23,10 @@ import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
 import AdminInventoryScreen from './pages/admin/AdminInventoryScreen';
 import AdminRepairsScreen from './pages/admin/AdminRepairsScreen';
 import MediosPagoScreen from './pages/admin/MediosPagoScreen';
+import AdminUsersScreen from './pages/admin/AdminUsersScreen';
+import AdminRolesScreen from './pages/admin/AdminRolesScreen';
+import AdminSuppliersScreen from './pages/admin/AdminSuppliersScreen';
+import AdminDirectPurchasesScreen from './pages/admin/AdminDirectPurchasesScreen';
 import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
 import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
 import TiposDispositivoScreen from './pages/admin/catalogs/TiposDispositivoScreen';
@@ -92,6 +96,10 @@ function App() {
               {/* Vistas de Administrador: Exclusivo Administradores */}
               <Route element={<RoleRoute allowedRoles={['admin']} />}>
                 <Route path="/admin/dashboard" element={<AdminDashboardScreen />} />
+                <Route path="/admin/usuarios" element={<AdminUsersScreen />} />
+                <Route path="/admin/roles" element={<AdminRolesScreen />} />
+                <Route path="/admin/proveedores" element={<AdminSuppliersScreen />} />
+                <Route path="/admin/recepcion-compras" element={<AdminDirectPurchasesScreen />} />
                 <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
                 <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
                 <Route path="/admin/inventario" element={<AdminInventoryScreen />} />

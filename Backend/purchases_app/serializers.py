@@ -13,8 +13,18 @@ class FiltrarProveedoresInputSerializer(serializers.Serializer):
     buscar = serializers.CharField(required=False, allow_blank=True, max_length=255)
     texto_busqueda = serializers.CharField(required=False, allow_blank=True, max_length=255)
     cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=20)
-    ofrece_envio = serializers.BooleanField(required=False, allow_null=True)
+    estado = serializers.BooleanField(required=False, allow_null=True, default=None)
+    ofrece_envio = serializers.BooleanField(required=False, allow_null=True, default=None)
     nivel = serializers.CharField(required=False, allow_blank=True, max_length=50)
+
+    def validate_cuit_prov(self, value):
+        if value and value.strip():
+            limpio = value.strip()
+            sin_guiones = limpio.replace('-', '').replace(' ', '')
+            if not sin_guiones.isdigit():
+                raise serializers.ValidationError("El CUIT de búsqueda debe contener únicamente caracteres numéricos.")
+            return limpio
+        return ""
 
 
 class ProveedorOutputSerializer(serializers.Serializer):
@@ -23,11 +33,18 @@ class ProveedorOutputSerializer(serializers.Serializer):
     nombre_proveedor = serializers.CharField(read_only=True)
     correo = serializers.CharField(read_only=True, allow_null=True)
     telefono = serializers.CharField(read_only=True, allow_null=True)
+    estado = serializers.BooleanField(read_only=True)
     ofrece_envio = serializers.BooleanField(read_only=True)
     indice_confiabilidad = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     tiempo_promedio_entrega = serializers.IntegerField(read_only=True)
     nivel = serializers.CharField(read_only=True)
     id_direccion = serializers.IntegerField(source='id_direccion_id', read_only=True, allow_null=True)
+    direccion = serializers.SerializerMethodField()
+
+    def get_direccion(self, obj):
+        if obj.id_direccion:
+            return DireccionDetalleOutputSerializer(obj.id_direccion).data
+        return None
 
 
 # ==============================================================================
@@ -283,11 +300,11 @@ class RegistrarProveedorInputSerializer(serializers.Serializer):
         max_digits=10,
         decimal_places=2,
         required=False,
-        default=Decimal('10.00')
+        default=Decimal('60.00')
     )
     tiempo_promedio_entrega = serializers.IntegerField(
         required=False,
-        default=3,
+        default=0,
         min_value=0
     )
     nivel = serializers.CharField(
@@ -375,9 +392,21 @@ class DireccionDetalleOutputSerializer(serializers.Serializer):
     nro_dpto = serializers.CharField(read_only=True, allow_null=True)
     alias = serializers.CharField(read_only=True, allow_null=True)
     id_ciudad = serializers.IntegerField(source='id_ciudad_id', read_only=True, allow_null=True)
+    id_provincia = serializers.SerializerMethodField()
+    id_pais = serializers.SerializerMethodField()
     ciudad = serializers.SerializerMethodField()
     provincia = serializers.SerializerMethodField()
     pais = serializers.SerializerMethodField()
+
+    def get_id_provincia(self, obj):
+        if obj.id_ciudad and obj.id_ciudad.id_provincia_id:
+            return obj.id_ciudad.id_provincia_id
+        return None
+
+    def get_id_pais(self, obj):
+        if obj.id_ciudad and obj.id_ciudad.id_provincia and obj.id_ciudad.id_provincia.id_pais_id:
+            return obj.id_ciudad.id_provincia.id_pais_id
+        return None
 
     def get_ciudad(self, obj):
         return obj.id_ciudad.nombre_ciudad if obj.id_ciudad else ""

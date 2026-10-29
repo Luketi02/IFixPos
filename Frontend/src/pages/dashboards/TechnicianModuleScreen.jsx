@@ -280,7 +280,7 @@ export default function TechnicianModuleScreen({ forcedModule }) {
                     dispararAlerta('success', `Compra por $${formCaja.monto} asentada correctamente en caja.`);
                     setFormCaja({ concepto: 'Compra de Repuestos / Insumos', monto: '', metodoPago: 'Efectivo', proveedor: '', nroComprobante: '' });
                   }}
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-xs font-bold shadow-lg hover:opacity-95 transition-all mt-4"
+                  className="w-full py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all mt-4 cursor-pointer"
                 >
                   Confirmar y Asentar en Caja
                 </button>

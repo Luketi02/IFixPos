@@ -483,7 +483,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                 <button
                   type="button"
                   onClick={handleRecepcionarOtro}
-                  className="w-full sm:w-auto px-8 py-3 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-slate-950 font-black text-xs sm:text-sm shadow-lg shadow-cyan-500/25 hover:opacity-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>✨</span>
                   <span>Recepcionar Otro Equipo</span>
@@ -548,7 +548,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
             <button
               type="submit"
               disabled={cargandoBusqueda}
-              className="px-6 py-3.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#06B6D4] text-white text-xs sm:text-sm font-bold shadow-lg shadow-purple-500/20 hover:opacity-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               <span>{cargandoBusqueda ? 'Buscando...' : 'Buscar Orden'}</span>
               <span>🔍</span>
@@ -1015,7 +1015,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                     disabled={!esFormularioValido || enviando}
                     className={`w-full sm:w-auto px-8 py-3.5 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all flex items-center justify-center gap-2 ${
                       esFormularioValido && !enviando
-                        ? 'bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-slate-950 shadow-xl shadow-cyan-500/25 hover:opacity-95 hover:shadow-cyan-500/35 cursor-pointer active:scale-[0.99]'
+                        ? 'bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer'
                         : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed opacity-60'
                     }`}
                   >

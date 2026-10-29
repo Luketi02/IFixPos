@@ -649,6 +649,36 @@ class ModificarUsuarioAdminTestCase(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_modificar_usuario_forzar_contrasena_validaciones_estrictas(self):
+        """Valida que la contraseña forzada requiera mín. 6 caracteres, 1 mayúscula y mín. 2 números."""
+        self.client.force_authenticate(user=self.admin_user)
+        url = f"/api/users/{self.target_user.id_usuario}/admin-edit/"
+        base_payload = {
+            "nombre": "Carlos",
+            "apellido": "Gómez",
+            "email": "tecnico.objetivo@ifixpos.com",
+            "rol_codigo": "TECNICO"
+        }
+
+        # 1. Menos de 6 caracteres
+        res1 = self.client.put(url, data={**base_payload, "forzar_contrasena": "Ab12"}, format='json')
+        self.assertEqual(res1.status_code, 400)
+        self.assertIn("6 caracteres", str(res1.data))
+
+        # 2. Sin mayúscula
+        res2 = self.client.put(url, data={**base_payload, "forzar_contrasena": "clave123"}, format='json')
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn("mayúscula", str(res2.data))
+
+        # 3. Con menos de 2 números (solo 1 número)
+        res3 = self.client.put(url, data={**base_payload, "forzar_contrasena": "Clavesegura1"}, format='json')
+        self.assertEqual(res3.status_code, 400)
+        self.assertIn("2 caracteres numéricos", str(res3.data))
+
+        # 4. Cumple todos los requisitos: >=6 caracteres, mayúscula y >=2 números
+        res4 = self.client.put(url, data={**base_payload, "forzar_contrasena": "ClaveSegura12"}, format='json')
+        self.assertEqual(res4.status_code, 200)
+
 
 class ModificarRolTestCase(TestCase):
     """Pruebas unitarias e integración para el CU-84: Modificar Rol."""
@@ -765,6 +795,45 @@ class ModificarRolTestCase(TestCase):
         response = self.client.patch(url, data=payload, format='json')
 
         self.assertEqual(response.status_code, 403)
+
+    def test_listar_roles_sistema_admin_exitoso(self):
+        """Un administrador puede listar todos los roles del sistema con el conteo de usuarios."""
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get("/api/users/roles/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(isinstance(response.data, list))
+        self.assertGreaterEqual(len(response.data), 3)
+
+    def test_filtrar_usuarios_combinado_sin_activo_por_defecto_retorna_todos(self):
+        """Consultar /api/users/filtrar/ sin parámetros retorna usuarios activos e inactivos."""
+        inactivo = Usuario.objects.create(
+            email='inactivo.filtro@ifixpos.com',
+            contrasena='hash',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_cliente,
+            is_active=False
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=inactivo,
+            nombre='Pedro',
+            apellido='Inactivo',
+            dni='55667788',
+            telefono='+5491166778899'
+        )
+        self.client.force_authenticate(user=self.admin_user)
+        res_todos = self.client.get("/api/users/filtrar/")
+        self.assertEqual(res_todos.status_code, 200)
+        emails = [u['email'] for u in res_todos.data]
+        self.assertIn('inactivo.filtro@ifixpos.com', emails)
+        self.assertIn('admin.roles@ifixpos.com', emails)
+
+        # Filtrar específicamente inactivos
+        res_inactivos = self.client.get("/api/users/filtrar/?activo=false&dni=55667788")
+        self.assertEqual(res_inactivos.status_code, 200)
+        self.assertEqual(len(res_inactivos.data), 1)
+        self.assertEqual(res_inactivos.data[0]['email'], 'inactivo.filtro@ifixpos.com')
+        self.assertFalse(res_inactivos.data[0]['is_active'])
+
 
 
 

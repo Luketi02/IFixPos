@@ -15,6 +15,7 @@ from users_app.apis import (
     VerificarCorreoApi,
     CambiarSesionDevApi,
     ModificarUsuarioAdminApi,
+    ListarRolesApi,
     ModificarRolApi
 )
 
@@ -37,7 +38,8 @@ urlpatterns = [
     # CU-44: Modificar Usuario por Administrador
     path('<int:id_usuario>/admin-edit/', ModificarUsuarioAdminApi.as_view(), name='api_admin_modificar_usuario'),
     path('modificar/<int:id_usuario>/', ModificarUsuarioAdminApi.as_view(), name='api_modificar_usuario_admin'),
-    # CU-84: Modificar Rol
+    # CU-84: Listar y Modificar Rol
+    path('roles/', ListarRolesApi.as_view(), name='api_listar_roles'),
     path('roles/<int:id_rol>/editar/', ModificarRolApi.as_view(), name='api_modificar_rol'),
     path('roles/<int:id_rol>/', ModificarRolApi.as_view(), name='api_roles_detalle_edit'),
 ]

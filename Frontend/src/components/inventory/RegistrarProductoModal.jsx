@@ -1652,7 +1652,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                       <button
                         type="submit"
                         disabled={guardandoNuevoModelo || !nuevoModeloNombre.trim()}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 text-slate-950 font-bold text-xs hover:from-cyan-400 hover:to-violet-500 transition-all shadow-md shadow-cyan-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                        className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
                       >
                         {guardandoNuevoModelo ? (
                           <>
@@ -1773,7 +1773,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                       <button
                         type="submit"
                         disabled={guardandoNuevaCategoria || !nuevaCategoriaNombre.trim()}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-cyan-500 text-slate-950 font-bold text-xs hover:from-purple-400 hover:to-cyan-400 transition-all shadow-md shadow-purple-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                        className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
                       >
                         {guardandoNuevaCategoria ? (
                           <>
@@ -1881,7 +1881,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
                       <button
                         type="submit"
                         disabled={guardandoNuevaMarca || !nuevaMarcaNombre.trim()}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 text-slate-950 font-bold text-xs hover:from-cyan-400 hover:to-violet-500 transition-all shadow-md shadow-cyan-950/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                        className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
                       >
                         {guardandoNuevaMarca ? (
                           <>

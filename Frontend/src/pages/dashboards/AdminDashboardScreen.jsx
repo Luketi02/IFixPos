@@ -40,6 +40,14 @@ export default function AdminDashboardScreen() {
             navigate('/admin/zonas-cobertura');
           } else if (val === 'sales-payments') {
             navigate('/admin/medios-pago');
+          } else if (val === 'admin-users') {
+            navigate('/admin/usuarios');
+          } else if (val === 'admin-roles') {
+            navigate('/admin/roles');
+          } else if (val === 'purchases-suppliers') {
+            navigate('/admin/proveedores');
+          } else if (val === 'purchases-direct') {
+            navigate('/admin/recepcion-compras');
           } else {
             setActiveMenu(val);
           }
@@ -161,7 +169,7 @@ export default function AdminDashboardScreen() {
                       Control de usuarios, roles, perfiles, sesiones JWT y flujo de activación/recuperación con OTP.
                     </p>
                     <button
-                      onClick={() => setActiveMenu('users-list')}
+                      onClick={() => navigate('/admin/usuarios')}
                       className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
                     >
                       Ver Usuarios &rarr;

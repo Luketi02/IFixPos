@@ -28,16 +28,19 @@ urlpatterns = [
     # CU-24: Registrar Proveedor
     path('proveedores/registrar/', RegistrarProveedorApi.as_view(), name='registrar-proveedor'),
 
+    # CU-36: Filtrar Proveedores (GET lista / POST alta)
+    path('proveedores/filtrar/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores-query'),
+    path('proveedores/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores'),
+
     # CU-28: Modificar Proveedor
     path('proveedores/<str:id_proveedor>/modificar/', ModificarProveedorApi.as_view(), name='modificar-proveedor-action'),
     path('proveedores/<str:id_proveedor>/', ModificarProveedorApi.as_view(), name='modificar-proveedor'),
 
-    # CU-36: Filtrar Proveedores (GET lista / POST alta)
-    path('proveedores/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores'),
-    path('proveedores/filtrar/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores-query'),
-
     # CU-14: Generar Solicitud de Cotización (POST)
     path('solicitudes-cotizacion/generar/', GenerarSolicitudCotizacionApi.as_view(), name='generar-solicitud-cotizacion'),
+
+    # CU-41: Filtrar Solicitud de Cotización
+    path('solicitudes-cotizacion/filtrar/', FiltrarSolicitudesCotizacionApi.as_view(), name='filtrar-solicitudes-cotizacion-query'),
 
     # CU-16: Modificar Solicitud de Cotización (PUT / PATCH)
     path('solicitudes-cotizacion/<int:id_solicitud>/modificar/', ModificarSolicitudCotizacionApi.as_view(), name='modificar-solicitud-cotizacion-action'),
@@ -48,9 +51,6 @@ urlpatterns = [
     # CU-15: Consultar Solicitud de Cotización (Detalle, actualización y baja directa)
     path('solicitudes-cotizacion/<int:id_solicitud>/', DetalleSolicitudCotizacionApi.as_view(), name='detalle-solicitud-cotizacion'),
     path('solicitudes-cotizacion/', ListarSolicitudesCotizacionApi.as_view(), name='listar-solicitudes-cotizacion'),
-
-    # CU-41: Filtrar Solicitud de Cotización
-    path('solicitudes-cotizacion/filtrar/', FiltrarSolicitudesCotizacionApi.as_view(), name='filtrar-solicitudes-cotizacion-query'),
 
     # CU-37: Filtrar Órdenes de Compra
     path('ordenes-compra/', FiltrarOrdenesCompraApi.as_view(), name='filtrar-ordenes-compra'),
@@ -82,6 +82,7 @@ urlpatterns = [
     path('ordenes-compra/<int:id_orden>/', ConsultarOrdenCompraApi.as_view(), name='consultar-orden-compra'),
 
     # CU-31: Registrar Compra (Compra Directa)
+    path('compras-directas/', RegistrarCompraDirectaApi.as_view(), name='listar-compras-directas'),
     path('compras-directas/registrar/', RegistrarCompraDirectaApi.as_view(), name='registrar-compra-directa'),
 ]
 

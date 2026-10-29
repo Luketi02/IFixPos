@@ -402,7 +402,7 @@ export default function EntregarDispositivo({ onAlerta }) {
               <button
                 type="button"
                 onClick={handleReiniciar}
-                className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-sm font-bold shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+                className="px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
               >
                 Entregar otro dispositivo
               </button>
@@ -454,7 +454,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                   <button
                     type="submit"
                     disabled={cargandoBusqueda || !(modoBusqueda === 'TOKEN' ? tokenInput.trim() : dniInput.trim())}
-                    className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-sm font-bold shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    className="px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {cargandoBusqueda ? (
                       <>
@@ -606,7 +606,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                       className={`w-full py-4 rounded-xl text-sm font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 mt-4 ${
                         tieneSaldoPendiente
                           ? 'bg-slate-800/80 border border-slate-700 text-slate-500 cursor-not-allowed'
-                          : 'bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white shadow-xl shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:scale-[1.01] active:scale-[0.99] cursor-pointer'
+                          : 'bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer'
                       }`}
                     >
                       {confirmandoEntrega ? (
@@ -691,7 +691,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                     <button
                       type="button"
                       onClick={() => setModalCobroAbierto(false)}
-                      className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-xs font-bold shadow-lg shadow-cyan-500/20 hover:scale-[1.02] transition-all cursor-pointer"
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
                     >
                       Continuar con la Entrega Física
                     </button>
@@ -856,7 +856,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                       <button
                         type="submit"
                         disabled={!esCobroValido || procesandoCobro}
-                        className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-xs font-bold shadow-lg shadow-cyan-500/20 hover:scale-[1.02] disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-2 cursor-pointer"
+                        className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-2 cursor-pointer"
                       >
                         {procesandoCobro ? (
                           <>

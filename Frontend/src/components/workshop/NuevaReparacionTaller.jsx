@@ -392,7 +392,7 @@ export default function NuevaReparacionTaller({ onAlerta }) {
                 <button
                   type="button"
                   onClick={() => cargarDispositivos()}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-slate-950 font-bold text-xs shadow-md shadow-cyan-500/20 hover:opacity-95 transition-all"
+                  className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
                 >
                   Aplicar Criterios de Filtro
                 </button>
@@ -685,7 +685,7 @@ export default function NuevaReparacionTaller({ onAlerta }) {
                     <button
                       type="button"
                       onClick={() => setModalAbierto(true)}
-                      className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-slate-950 font-black text-sm tracking-wide shadow-xl shadow-cyan-500/20 hover:opacity-95 hover:shadow-cyan-500/30 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+                      className="w-full py-3.5 px-4 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-black text-sm tracking-wide shadow-lg shadow-cyan-500/25 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
                     >
                       <span>⚡</span>
                       <span>Iniciar Reparación</span>

@@ -15,7 +15,8 @@ from purchases_app.models import (
     Cotizacion,
     CotizacionProducto,
     OrdenCompra,
-    DetalleOrdenCompra
+    DetalleOrdenCompra,
+    RegistroCompra
 )
 
 
@@ -23,7 +24,8 @@ def _verificar_permiso_admin(usuario: Usuario):
     """Verifica que el usuario posea rol estricto de Administrador."""
     rol = getattr(usuario, 'id_rol', None) or getattr(usuario, 'rol', None)
     codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
-    if codigo_rol != 'ADMIN':
+    nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+    if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
         raise PermissionDenied("Se requieren privilegios de Administrador para acceder al módulo de compras y abastecimiento.")
 
 
@@ -61,7 +63,21 @@ def filtrar_proveedores(
 
     cuit_exacto = str(filtros.get('cuit_prov') or '').strip()
     if cuit_exacto:
-        qs = qs.filter(cuit_prov__iexact=cuit_exacto)
+        solo_digitos = cuit_exacto.replace('-', '').replace(' ', '')
+        if len(solo_digitos) == 11 and solo_digitos.isdigit():
+            cuit_con_guiones = f"{solo_digitos[:2]}-{solo_digitos[2:10]}-{solo_digitos[10]}"
+            qs = qs.filter(
+                Q(cuit_prov__iexact=cuit_exacto) |
+                Q(cuit_prov__iexact=solo_digitos) |
+                Q(cuit_prov__iexact=cuit_con_guiones) |
+                Q(cuit_prov__icontains=cuit_exacto)
+            )
+        else:
+            qs = qs.filter(cuit_prov__icontains=cuit_exacto)
+
+    estado = filtros.get('estado')
+    if estado is not None:
+        qs = qs.filter(estado=bool(estado))
 
     ofrece_envio = filtros.get('ofrece_envio')
     if ofrece_envio is not None:
@@ -661,4 +677,37 @@ def obtener_detalle_orden_compra(id_orden: int) -> OrdenCompra:
         raise ObjectDoesNotExist("El documento solicitado no existe o no está disponible.")
 
     return orden
+
+
+# ==============================================================================
+# CU-31: LISTAR COMPRAS DIRECTAS (SELECTORS)
+# ==============================================================================
+
+def listar_compras_directas(
+    *,
+    usuario_ejecutor: Usuario,
+    buscar: str = '',
+    impacto_stock: Optional[bool] = None
+) -> QuerySet[RegistroCompra]:
+    """
+    CU-31: Recupera el padrón histórico de compras directas registradas por administración,
+    optimizado con select_related sobre usuario responsable y producto generado.
+    """
+    _verificar_permiso_admin(usuario_ejecutor)
+
+    qs = RegistroCompra.objects.select_related('id_usuario', 'id_producto').order_by('-id_compra')
+
+    texto = (buscar or '').strip()
+    if texto:
+        qs = qs.filter(
+            Q(origen_vendedor__icontains=texto) |
+            Q(descripcion_articulo__icontains=texto) |
+            Q(motivo__icontains=texto)
+        )
+
+    if impacto_stock is not None:
+        qs = qs.filter(impacto_stock=bool(impacto_stock))
+
+    return qs
+
 
