@@ -48,6 +48,8 @@ export default function AdminDashboardScreen() {
             navigate('/admin/proveedores');
           } else if (val === 'purchases-direct') {
             navigate('/admin/recepcion-compras');
+          } else if (val === 'purchases-quotes') {
+            navigate('/admin/cotizaciones');
           } else {
             setActiveMenu(val);
           }

@@ -27,6 +27,9 @@ import AdminUsersScreen from './pages/admin/AdminUsersScreen';
 import AdminRolesScreen from './pages/admin/AdminRolesScreen';
 import AdminSuppliersScreen from './pages/admin/AdminSuppliersScreen';
 import AdminDirectPurchasesScreen from './pages/admin/AdminDirectPurchasesScreen';
+import AdminQuotationsScreen from './pages/admin/AdminQuotationsScreen';
+import AdminManageQuotationsScreen from './pages/admin/AdminManageQuotationsScreen';
+import PortalProveedorCotizarScreen from './pages/portal/PortalProveedorCotizarScreen';
 import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
 import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
 import TiposDispositivoScreen from './pages/admin/catalogs/TiposDispositivoScreen';
@@ -52,6 +55,10 @@ function App() {
         <Router>
           <SessionExpiredModal />
           <Routes>
+            {/* Portal Público de Proveedores (Acceso directo seguro vía Token) */}
+            <Route path="/portal-proveedor/cotizar" element={<PortalProveedorCotizarScreen />} />
+            <Route path="/portal-proveedor/cotizar/:tokenAcceso" element={<PortalProveedorCotizarScreen />} />
+
             {/* Rutas Públicas: Redirigen si ya existe una sesión activa */}
             <Route element={<PublicRoute />}>
               <Route path="/login" element={<LoginScreen />} />
@@ -100,6 +107,8 @@ function App() {
                 <Route path="/admin/roles" element={<AdminRolesScreen />} />
                 <Route path="/admin/proveedores" element={<AdminSuppliersScreen />} />
                 <Route path="/admin/recepcion-compras" element={<AdminDirectPurchasesScreen />} />
+                <Route path="/admin/cotizaciones" element={<AdminQuotationsScreen />} />
+                <Route path="/admin/gestionar-cotizaciones" element={<AdminManageQuotationsScreen />} />
                 <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
                 <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
                 <Route path="/admin/inventario" element={<AdminInventoryScreen />} />

@@ -134,9 +134,31 @@ class SolicitudProductoOutputSerializer(serializers.Serializer):
     id_solicitud_producto = serializers.IntegerField(read_only=True)
     id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
     nombre_producto = serializers.SerializerMethodField()
+    categoria = serializers.SerializerMethodField()
+    cantidad_requerida = serializers.SerializerMethodField()
+    es_manual = serializers.SerializerMethodField()
+    descripcion = serializers.SerializerMethodField()
 
     def get_nombre_producto(self, obj):
         return obj.id_producto.nombre if obj.id_producto else ""
+
+    def get_categoria(self, obj):
+        if obj.id_producto and obj.id_producto.id_categoria:
+            return obj.id_producto.id_categoria.nombre
+        return ""
+
+    def get_cantidad_requerida(self, obj):
+        return getattr(obj, 'cantidad', 1)
+
+    def get_es_manual(self, obj):
+        if obj.id_producto and obj.id_producto.descripcion:
+            return obj.id_producto.descripcion.startswith('[SONDEO_MANUAL]')
+        return False
+
+    def get_descripcion(self, obj):
+        if obj.id_producto and obj.id_producto.descripcion:
+            return obj.id_producto.descripcion.replace('[SONDEO_MANUAL]', '').strip()
+        return ""
 
 
 class SolicitudCotizacionOutputSerializer(serializers.Serializer):
@@ -144,11 +166,29 @@ class SolicitudCotizacionOutputSerializer(serializers.Serializer):
     id_solicitud = serializers.IntegerField(read_only=True)
     fecha_emision = serializers.DateField(read_only=True)
     estado_solicitud = serializers.IntegerField(read_only=True)
+    estado = serializers.SerializerMethodField()
+    sol_tec = serializers.BooleanField(read_only=True)
+    total_proveedores = serializers.SerializerMethodField()
+    total_productos = serializers.SerializerMethodField()
     productos = serializers.SerializerMethodField()
+    cotizaciones = serializers.SerializerMethodField()
+
+    def get_estado(self, obj):
+        return getattr(obj, 'estado_nombre', 'Borrador')
+
+    def get_total_proveedores(self, obj):
+        return obj.invitacioncotizar_set.count()
+
+    def get_total_productos(self, obj):
+        return obj.solicitudcotizacionproducto_set.count()
 
     def get_productos(self, obj):
         items = obj.solicitudcotizacionproducto_set.all()
         return SolicitudProductoOutputSerializer(items, many=True).data
+
+    def get_cotizaciones(self, obj):
+        invitaciones = obj.invitacioncotizar_set.all()
+        return CotizacionProveedorOutputSerializer(invitaciones, many=True).data
 
 
 # ==============================================================================
@@ -159,17 +199,19 @@ class FiltrarCotizacionesInputSerializer(serializers.Serializer):
     """La Aduana (CU-60): Valida parámetros de consulta para cotizaciones recibidas."""
     id_cotizacion = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     id_solicitud = serializers.IntegerField(required=False, allow_null=True, min_value=1)
-    cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    proveedor = serializers.CharField(required=False, allow_blank=True, max_length=100)
     estado_cotizacion = serializers.IntegerField(required=False, allow_null=True)
     fecha_validez_desde = serializers.DateField(required=False, allow_null=True)
     fecha_validez_hasta = serializers.DateField(required=False, allow_null=True)
     id_producto = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    buscar_producto = serializers.CharField(required=False, allow_blank=True, max_length=255)
 
     def validate(self, attrs):
         f_desde = attrs.get('fecha_validez_desde')
         f_hasta = attrs.get('fecha_validez_hasta')
         if f_desde and f_hasta and f_desde > f_hasta:
-            raise serializers.ValidationError("El rango temporal de validez es inconsistente.")
+            raise serializers.ValidationError("El rango temporal de validez es inconsistente (desde mayor a hasta).")
         return attrs
 
 
@@ -177,24 +219,55 @@ class CotizacionProductoOutputSerializer(serializers.Serializer):
     id_cotizacion_producto = serializers.IntegerField(read_only=True)
     id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
     nombre_producto = serializers.SerializerMethodField()
+    categoria = serializers.SerializerMethodField()
     precio_ofrecido = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    precio_unitario = serializers.DecimalField(source='precio_ofrecido', max_digits=10, decimal_places=2, read_only=True)
+    cantidad = serializers.SerializerMethodField()
+    subtotal = serializers.SerializerMethodField()
+
+    def _get_cantidad(self, obj):
+        cotizacion = getattr(obj, 'id_cotizacion', None)
+        if cotizacion and cotizacion.id_invitacion and cotizacion.id_invitacion.id_solicitud:
+            solicitud = cotizacion.id_invitacion.id_solicitud
+            for sp in solicitud.solicitudcotizacionproducto_set.all():
+                if sp.id_producto_id == obj.id_producto_id:
+                    return sp.cantidad
+        return 1
 
     def get_nombre_producto(self, obj):
         return obj.id_producto.nombre if obj.id_producto else ""
 
+    def get_categoria(self, obj):
+        if obj.id_producto and obj.id_producto.id_categoria:
+            return obj.id_producto.id_categoria.nombre
+        return ""
+
+    def get_cantidad(self, obj):
+        return self._get_cantidad(obj)
+
+    def get_subtotal(self, obj):
+        cant = self._get_cantidad(obj)
+        return Decimal(str(cant)) * obj.precio_ofrecido
+
 
 class CotizacionOutputSerializer(serializers.Serializer):
-    """Formato de salida estructurado para cotizaciones recibidas."""
+    """Formato de salida estructurado para cotizaciones recibidas (CU-60)."""
     id_cotizacion = serializers.IntegerField(read_only=True)
     tiempo_promesa = serializers.IntegerField(read_only=True)
     archivo_adjunto = serializers.CharField(read_only=True, allow_null=True)
     estado_cotizacion = serializers.IntegerField(read_only=True)
+    estado = serializers.SerializerMethodField()
     comentarios = serializers.CharField(read_only=True, allow_null=True)
     fecha_validez = serializers.DateField(read_only=True)
     id_solicitud = serializers.SerializerMethodField()
     cuit_prov = serializers.SerializerMethodField()
     nombre_proveedor = serializers.SerializerMethodField()
+    monto_total_cotizado = serializers.SerializerMethodField()
+    monto_total = serializers.SerializerMethodField()
     items = serializers.SerializerMethodField()
+
+    def get_estado(self, obj):
+        return obj.estado_nombre
 
     def get_id_solicitud(self, obj):
         if obj.id_invitacion and obj.id_invitacion.id_solicitud_id:
@@ -210,6 +283,21 @@ class CotizacionOutputSerializer(serializers.Serializer):
         if obj.id_invitacion and obj.id_invitacion.cuit_prov:
             return obj.id_invitacion.cuit_prov.nombre_proveedor
         return ""
+
+    def get_monto_total_cotizado(self, obj):
+        total = Decimal("0.00")
+        cantidades_map = {}
+        if obj.id_invitacion and obj.id_invitacion.id_solicitud:
+            for sp in obj.id_invitacion.id_solicitud.solicitudcotizacionproducto_set.all():
+                cantidades_map[sp.id_producto_id] = sp.cantidad
+
+        for cp in obj.cotizacionproducto_set.all():
+            cant = cantidades_map.get(cp.id_producto_id, 1)
+            total += Decimal(str(cant)) * cp.precio_ofrecido
+        return total
+
+    def get_monto_total(self, obj):
+        return self.get_monto_total_cotizado(obj)
 
     def get_items(self, obj):
         detalles = obj.cotizacionproducto_set.all()
@@ -444,9 +532,67 @@ class ProveedorDetalleOutputSerializer(serializers.Serializer):
 # ==============================================================================
 
 class ProductoSolicitadoInputSerializer(serializers.Serializer):
-    """La Aduana (CU-14): Valida cada producto solicitado y su cantidad requerida."""
-    id_producto = serializers.IntegerField(min_value=1, help_text="Identificador único del producto en catálogo.")
-    cantidad_requerida = serializers.IntegerField(min_value=1, help_text="Cantidad de unidades requeridas para cotizar.")
+    """
+    La Aduana (CU-14): Valida cada producto solicitado y su cantidad requerida.
+    Soporta tanto productos registrados en el catálogo (id_producto) como ítems de
+    carga manual exclusiva para el sondeo (es_manual=True con marca, modelo y descripcion).
+    """
+    id_producto = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+        help_text="Identificador único del producto en catálogo."
+    )
+    es_manual = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Indica si el insumo corresponde a una carga manual exclusiva para este sondeo."
+    )
+    marca = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+        help_text="Marca técnica del insumo manual."
+    )
+    modelo = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+        help_text="Modelo compatible del insumo manual."
+    )
+    descripcion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        help_text="Descripción técnica del insumo manual."
+    )
+    cantidad_requerida = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        default=1,
+        help_text="Cantidad de unidades requeridas para cotizar (opcional, por defecto 1)."
+    )
+
+    def validate(self, attrs):
+        es_manual = bool(attrs.get('es_manual', False))
+        id_prod = attrs.get('id_producto')
+
+        if es_manual:
+            marca = (attrs.get('marca') or '').strip()
+            modelo = (attrs.get('modelo') or '').strip()
+            descripcion = (attrs.get('descripcion') or '').strip()
+            if not marca or not modelo or not descripcion:
+                raise serializers.ValidationError(
+                    "Para un insumo de carga manual debe completar Marca, Modelo y Descripción."
+                )
+            attrs['marca'] = marca
+            attrs['modelo'] = modelo
+            attrs['descripcion'] = descripcion
+        else:
+            if not id_prod:
+                raise serializers.ValidationError({'id_producto': ['Este campo es requerido.']})
+
+        return attrs
 
 
 class GenerarSolicitudInputSerializer(serializers.Serializer):
@@ -492,8 +638,11 @@ class SolicitudCotizacionListOutputSerializer(serializers.Serializer):
     fecha_emision = serializers.DateField(read_only=True)
     estado_solicitud = serializers.IntegerField(read_only=True)
     estado = serializers.SerializerMethodField()
+    sol_tec = serializers.BooleanField(read_only=True)
     total_proveedores = serializers.SerializerMethodField()
     total_productos = serializers.SerializerMethodField()
+    productos = serializers.SerializerMethodField()
+    cotizaciones = serializers.SerializerMethodField()
 
     def get_estado(self, obj):
         return getattr(obj, 'estado_nombre', 'Borrador')
@@ -504,6 +653,14 @@ class SolicitudCotizacionListOutputSerializer(serializers.Serializer):
     def get_total_productos(self, obj):
         return obj.solicitudcotizacionproducto_set.count()
 
+    def get_productos(self, obj):
+        items = obj.solicitudcotizacionproducto_set.all()
+        return ProductoSolicitadoOutputSerializer(items, many=True).data
+
+    def get_cotizaciones(self, obj):
+        invitaciones = obj.invitacioncotizar_set.all()
+        return CotizacionProveedorOutputSerializer(invitaciones, many=True).data
+
 
 class ProductoSolicitadoOutputSerializer(serializers.Serializer):
     """Detalle de producto requerido dentro de una solicitud de cotización."""
@@ -512,6 +669,8 @@ class ProductoSolicitadoOutputSerializer(serializers.Serializer):
     nombre_producto = serializers.SerializerMethodField()
     categoria = serializers.SerializerMethodField()
     cantidad_requerida = serializers.SerializerMethodField()
+    es_manual = serializers.SerializerMethodField()
+    descripcion = serializers.SerializerMethodField()
 
     def get_nombre_producto(self, obj):
         return obj.id_producto.nombre if obj.id_producto else ""
@@ -523,6 +682,16 @@ class ProductoSolicitadoOutputSerializer(serializers.Serializer):
 
     def get_cantidad_requerida(self, obj):
         return getattr(obj, 'cantidad', 1)
+
+    def get_es_manual(self, obj):
+        if obj.id_producto and obj.id_producto.descripcion:
+            return obj.id_producto.descripcion.startswith('[SONDEO_MANUAL]')
+        return False
+
+    def get_descripcion(self, obj):
+        if obj.id_producto and obj.id_producto.descripcion:
+            return obj.id_producto.descripcion.replace('[SONDEO_MANUAL]', '').strip()
+        return ""
 
 
 class CotizacionProveedorOutputSerializer(serializers.Serializer):

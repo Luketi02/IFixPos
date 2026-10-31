@@ -1065,6 +1065,30 @@ class ModificarSolicitudCotizacionTestCase(TestCase):
         response = self.client.patch(url, data={}, format='json')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_modificar_solicitud_tecnica_amputar_insumo_restringido_400(self):
+        """Comentarios CU-16: Bloquea amputar insumos determinados por el área técnica para la reparación."""
+        sol_tecnica = SolicitudCotizacion.objects.create(
+            fecha_emision=timezone.now().date(),
+            estado_solicitud=SolicitudCotizacion.ESTADO_BORRADOR,
+            sol_tec=True
+        )
+        SolicitudCotizacionProducto.objects.create(
+            id_solicitud=sol_tecnica,
+            id_producto=self.prod1,
+            cantidad=1
+        )
+        self.client.force_authenticate(user=self.admin)
+        url = f'/api/purchases/solicitudes-cotizacion/{sol_tecnica.id_solicitud}/modificar/'
+
+        # Intenta modificar dejando solo el prod2 y quitando el prod1 original
+        payload = {
+            "ids_proveedores": [self.prov_activo_1.cuit_prov],
+            "productos": [{"id_producto": self.prod2.id_producto, "cantidad_requerida": 1}]
+        }
+        response = self.client.patch(url, data=payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("insumos técnicos", response.data.get('error', '').lower())
+
 
 # ==============================================================================
 # CU-17: ELIMINAR SOLICITUD DE COTIZACIÓN (TESTS)
@@ -3081,6 +3105,402 @@ class RegistrarCompraDirectaTestCase(TestCase):
         }
         response = self.client.post(self.url, data=payload, format='json')
         self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+# ==============================================================================
+# CU-41: FILTRAR SOLICITUD DE COTIZACIÓN (TESTS)
+# ==============================================================================
+
+class FiltrarSolicitudCotizacionTestCase(TestCase):
+    """
+    Pruebas unitarias e integración para el CU-41: Filtrar Solicitud de Cotización.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = '/api/purchases/solicitudes-cotizacion/filtrar/'
+
+        # Roles
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+
+        # Usuarios
+        self.admin = Usuario.objects.create(
+            email='admin.filtrosol@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.filtrosol@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        # Categoría y Productos
+        self.categoria = CategoriaProducto.objects.create(
+            nombre="Repuestos de Pantallas",
+            estado=True
+        )
+        self.prod_pantalla = Producto.objects.create(
+            nombre="Pantalla OLED iPhone 11",
+            descripcion="Display Super Retina",
+            precio_venta=Decimal("95000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+        self.prod_bateria = Producto.objects.create(
+            nombre="Batería Original iPhone 11",
+            descripcion="Batería 3110mAh",
+            precio_venta=Decimal("38000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+
+        # Solicitud 1: Borrador con pantalla
+        self.sol1 = SolicitudCotizacion.objects.create(
+            fecha_emision=timezone.now().date() - timezone.timedelta(days=10),
+            estado_solicitud=SolicitudCotizacion.ESTADO_BORRADOR,
+            sol_tec=False
+        )
+        SolicitudCotizacionProducto.objects.create(
+            id_solicitud=self.sol1,
+            id_producto=self.prod_pantalla,
+            cantidad=5
+        )
+
+        # Solicitud 2: Enviada con batería
+        self.sol2 = SolicitudCotizacion.objects.create(
+            fecha_emision=timezone.now().date(),
+            estado_solicitud=SolicitudCotizacion.ESTADO_ENVIADA,
+            sol_tec=True
+        )
+        SolicitudCotizacionProducto.objects.create(
+            id_solicitud=self.sol2,
+            id_producto=self.prod_bateria,
+            cantidad=3
+        )
+
+    def test_filtrar_solicitudes_por_id_exacto(self):
+        """Paso 2 y 5: Búsqueda exacta por idSolicitud."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_solicitud': self.sol1.id_solicitud})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_solicitud'], self.sol1.id_solicitud)
+
+    def test_filtrar_solicitudes_por_estado_categorico(self):
+        """Paso 2 y 5: Filtro categórico por estado de la solicitud."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'estado_solicitud': SolicitudCotizacion.ESTADO_ENVIADA})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_solicitud'], self.sol2.id_solicitud)
+        self.assertEqual(response.data[0]['estado'], 'Enviada a Proveedores')
+
+    def test_filtrar_solicitudes_por_rango_fechas(self):
+        """Paso 2 y 5: Filtros cronológicos por rango de fecha de emisión (Desde / Hasta)."""
+        self.client.force_authenticate(user=self.admin)
+        hoy = timezone.now().date()
+        response = self.client.get(self.url, {
+            'fecha_desde': str(hoy - timezone.timedelta(days=2)),
+            'fecha_hasta': str(hoy)
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_solicitud'], self.sol2.id_solicitud)
+
+    def test_filtrar_solicitudes_por_producto_busqueda_contenido(self):
+        """Paso 2 y 5: Búsqueda por contenido de insumo o producto incluido en el pedido."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'buscar_producto': 'Pantalla'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_solicitud'], self.sol1.id_solicitud)
+
+    def test_filtrar_solicitudes_fecha_desde_mayor_que_hasta_error_400(self):
+        """Excepción Paso 4: Si fecha_desde es posterior a fecha_hasta, notifica error 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {
+            'fecha_desde': '2026-10-25',
+            'fecha_hasta': '2026-10-20'
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no puede ser posterior", str(response.data))
+
+    def test_filtrar_solicitudes_id_invalido_error_400(self):
+        """Excepción Paso 4: Si id_solicitud no es un entero positivo válido, notifica error 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_solicitud': 'abc'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filtrar_solicitudes_sin_coincidencias_retorna_vacio(self):
+        """Excepción Paso 5: Si ningún registro coincide, retorna lista vacía."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'buscar_producto': 'InexistenteRepuestoXYZ'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_filtrar_solicitudes_no_admin_denegado_403(self):
+        """Precondición: Exclusivo para rol de Administrador."""
+        self.client.force_authenticate(user=self.tecnico)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+# ==============================================================================
+# CU-60: FILTRAR COTIZACIONES (TESTS)
+# ==============================================================================
+
+class FiltrarCotizacionesTestCase(TestCase):
+    """
+    Pruebas unitarias e integrales para CU-60: Filtrar Cotizaciones.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = '/api/purchases/cotizaciones/filtrar/'
+
+        # Roles y Usuarios
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+        self.admin = Usuario.objects.create(
+            email='admin.filtcotiz@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.filtcotiz@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        # Categoría y Repuestos
+        self.categoria = CategoriaProducto.objects.create(nombre="Pantallas OLED", estado=True)
+        self.prod1 = Producto.objects.create(
+            nombre="Pantalla iPhone 13 Pro",
+            descripcion="Pantalla OLED Super Retina XDR",
+            precio_venta=Decimal("120000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+        self.prod2 = Producto.objects.create(
+            nombre="Batería iPhone 13",
+            descripcion="Batería original 3227mAh",
+            precio_venta=Decimal("45000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+
+        # Proveedores
+        self.prov1 = Proveedor.objects.create(
+            cuit_prov="30-77778888-9",
+            nombre_proveedor="Apple Parts Oficial SA",
+            correo="ventas@appleparts.com",
+            telefono="011-7777-8888",
+            estado=True
+        )
+        self.prov2 = Proveedor.objects.create(
+            cuit_prov="30-99990000-1",
+            nombre_proveedor="Tech Distribuidores SRL",
+            correo="ventas@techdist.com",
+            telefono="011-9999-0000",
+            estado=True
+        )
+
+        # Solicitudes
+        self.solicitud1 = SolicitudCotizacion.objects.create(
+            fecha_emision=timezone.now().date(),
+            estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA,
+            sol_tec=False
+        )
+        SolicitudCotizacionProducto.objects.create(
+            id_solicitud=self.solicitud1,
+            id_producto=self.prod1,
+            cantidad=3
+        )
+
+        self.solicitud2 = SolicitudCotizacion.objects.create(
+            fecha_emision=timezone.now().date(),
+            estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA,
+            sol_tec=False
+        )
+        SolicitudCotizacionProducto.objects.create(
+            id_solicitud=self.solicitud2,
+            id_producto=self.prod2,
+            cantidad=5
+        )
+
+        # Invitaciones y Cotizaciones
+        self.inv1 = InvitacionCotizar.objects.create(
+            id_solicitud=self.solicitud1,
+            cuit_prov=self.prov1,
+            estado_invitacion=InvitacionCotizar.ESTADO_COTIZADA
+        )
+        self.cotiz1 = Cotizacion.objects.create(
+            id_invitacion=self.inv1,
+            tiempo_promesa=5,
+            estado_cotizacion=Cotizacion.ESTADO_PENDIENTE,
+            fecha_validez=timezone.now().date() + timezone.timedelta(days=10),
+            comentarios="Garantía 6 meses"
+        )
+        CotizacionProducto.objects.create(
+            id_cotizacion=self.cotiz1,
+            id_producto=self.prod1,
+            precio_ofrecido=Decimal("85000.00")
+        )
+
+        self.inv2 = InvitacionCotizar.objects.create(
+            id_solicitud=self.solicitud2,
+            cuit_prov=self.prov2,
+            estado_invitacion=InvitacionCotizar.ESTADO_COTIZADA
+        )
+        self.cotiz2 = Cotizacion.objects.create(
+            id_invitacion=self.inv2,
+            tiempo_promesa=3,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=timezone.now().date() + timezone.timedelta(days=25),
+            comentarios="Precios con flete bonificado"
+        )
+        CotizacionProducto.objects.create(
+            id_cotizacion=self.cotiz2,
+            id_producto=self.prod2,
+            precio_ofrecido=Decimal("29000.00")
+        )
+
+    def test_filtrar_cotizaciones_sin_filtros_retorna_todas(self):
+        """Paso 1 y 5: Administrador consulta el listado general de propuestas sin filtros."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [c['id_cotizacion'] for c in response.data]
+        self.assertIn(self.cotiz1.id_cotizacion, ids)
+        self.assertIn(self.cotiz2.id_cotizacion, ids)
+
+    def test_filtrar_por_id_cotizacion_exacto(self):
+        """Paso 2: Búsqueda exacta por idCotizacion."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_cotizacion': self.cotiz1.id_cotizacion})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz1.id_cotizacion)
+
+    def test_filtrar_por_id_solicitud_asociada(self):
+        """Paso 2: Búsqueda exacta por idSolicitud asociada."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_solicitud': self.solicitud2.id_solicitud})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz2.id_cotizacion)
+
+    def test_filtrar_por_proveedor_emisor(self):
+        """Paso 2: Filtro categórico por Proveedor emisor (CUIT o Nombre)."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'cuit_prov': 'Apple Parts'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz1.id_cotizacion)
+
+    def test_filtrar_por_estado_actual(self):
+        """Paso 2: Filtro por Estado actual de cotización (Aceptada = 1)."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'estado_cotizacion': 1})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz2.id_cotizacion)
+
+    def test_filtrar_por_rango_fecha_validez(self):
+        """Paso 2: Filtro cronológico por Rango de Fecha de Validez."""
+        self.client.force_authenticate(user=self.admin)
+        hoy = timezone.now().date()
+        response = self.client.get(self.url, {
+            'fecha_validez_desde': (hoy + timezone.timedelta(days=20)).isoformat(),
+            'fecha_validez_hasta': (hoy + timezone.timedelta(days=30)).isoformat()
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz2.id_cotizacion)
+
+    def test_filtrar_por_insumo_cotizado(self):
+        """Paso 2: Búsqueda por contenido (Insumo/Repuesto específico cotizado)."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_producto': self.prod1.id_producto})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_cotizacion'], self.cotiz1.id_cotizacion)
+
+    def test_filtrar_fechas_inconsistentes_error_400(self):
+        """Excepción Paso 4: Rango de validez cronológicamente inconsistente retorna 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {
+            'fecha_validez_desde': '2026-11-20',
+            'fecha_validez_hasta': '2026-11-10'
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("inconsistente", str(response.data))
+
+    def test_filtrar_id_invalido_error_400(self):
+        """Excepción Paso 4: Si id_cotizacion no es numérico, retorna 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_cotizacion': 'no_es_un_numero'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filtrar_sin_coincidencias_retorna_vacio(self):
+        """Excepción Paso 5: Sin coincidencias retorna lista vacía."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'buscar_producto': 'ArticuloInexistente999'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_filtrar_no_admin_denegado_403(self):
+        """Precondición: Exclusivo para rol Administrador."""
+        self.client.force_authenticate(user=self.tecnico)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
 
 
 

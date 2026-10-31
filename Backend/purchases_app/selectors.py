@@ -227,7 +227,8 @@ def filtrar_cotizaciones(
         'id_invitacion__cuit_prov__id_direccion'
     ).prefetch_related(
         'cotizacionproducto_set__id_producto',
-        'cotizacionproducto_set__id_producto__id_categoria'
+        'cotizacionproducto_set__id_producto__id_categoria',
+        'id_invitacion__id_solicitud__solicitudcotizacionproducto_set'
     ).order_by('-id_cotizacion')
 
     id_cotizacion = filtros.get('id_cotizacion')
@@ -238,9 +239,12 @@ def filtrar_cotizaciones(
     if id_solicitud:
         qs = qs.filter(id_invitacion__id_solicitud_id=id_solicitud)
 
-    cuit_prov = str(filtros.get('cuit_prov') or '').strip()
+    cuit_prov = str(filtros.get('cuit_prov') or filtros.get('proveedor') or '').strip()
     if cuit_prov:
-        qs = qs.filter(id_invitacion__cuit_prov_id__icontains=cuit_prov)
+        qs = qs.filter(
+            Q(id_invitacion__cuit_prov__cuit_prov__icontains=cuit_prov) |
+            Q(id_invitacion__cuit_prov__nombre_proveedor__icontains=cuit_prov)
+        )
 
     estado_cotizacion = filtros.get('estado_cotizacion')
     if estado_cotizacion is not None:
@@ -254,6 +258,10 @@ def filtrar_cotizaciones(
     id_producto = filtros.get('id_producto')
     if id_producto:
         qs = qs.filter(cotizacionproducto__id_producto_id=id_producto)
+
+    buscar_producto = str(filtros.get('buscar_producto') or '').strip()
+    if buscar_producto:
+        qs = qs.filter(cotizacionproducto__id_producto__nombre__icontains=buscar_producto)
 
     return qs.distinct()
 
@@ -411,7 +419,7 @@ def obtener_solicitud_en_borrador(id_solicitud: int) -> SolicitudCotizacion:
         raise ObjectDoesNotExist(f"No se encontró la solicitud de cotización con identificador #{id_solicitud}.")
 
     if solicitud.estado_solicitud != SolicitudCotizacion.ESTADO_BORRADOR:
-        raise ValidationError("Operación bloqueada: La solicitud ya superó la fase de borrador y no puede ser alterada ni eliminada físicamente.")
+        raise ValidationError("Los documentos que ya han interactuado con agentes externos no pueden ser alterados ni eliminados (la solicitud ya superó la fase de borrador).")
 
     return solicitud
 

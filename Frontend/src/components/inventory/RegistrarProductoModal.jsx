@@ -658,7 +658,7 @@ export default function RegistrarProductoModal({ isOpen, onClose, onSuccess }) {
       );
 
       const msg = res.data?.mensaje || `Producto '${formData.nombre}' registrado con éxito.`;
-      if (onSuccess) onSuccess(msg);
+      if (onSuccess) onSuccess(msg, res.data?.producto || res.data);
       onClose();
     } catch (err) {
       console.error('Error al registrar producto:', err);

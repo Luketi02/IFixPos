@@ -275,9 +275,9 @@ def generar_solicitud_cotizacion(
     # Paso 4: Validar proveedores activos y existentes
     proveedores_validados = list(validar_proveedores_activos(ids_proveedores))
 
-    # Validar existencia de productos solicitados en el catálogo
-    ids_prods = [item['id_producto'] for item in productos_data]
-    productos_encontrados = {p.id_producto: p for p in Producto.objects.filter(id_producto__in=ids_prods)}
+    # Validar existencia de productos de catálogo solicitados
+    ids_prods = [item['id_producto'] for item in productos_data if not item.get('es_manual') and item.get('id_producto')]
+    productos_encontrados = {p.id_producto: p for p in Producto.objects.filter(id_producto__in=ids_prods)} if ids_prods else {}
     for id_p in ids_prods:
         if id_p not in productos_encontrados:
             raise ValidationError(f"El producto con ID {id_p} no existe en el catálogo.")
@@ -293,12 +293,32 @@ def generar_solicitud_cotizacion(
         estado_solicitud=estado_solicitud
     )
 
-    # Paso 8 (Detalle de productos requeridos)
+    # Paso 8 (Detalle de productos requeridos: de catálogo o carga manual de sondeo)
     for item in productos_data:
+        if item.get('es_manual'):
+            marca_txt = (item.get('marca') or '').strip()
+            modelo_txt = (item.get('modelo') or '').strip()
+            desc_txt = (item.get('descripcion') or '').strip()
+            nombre_compuesto = f"{marca_txt} {modelo_txt} — {desc_txt}".strip(' —')[:255]
+            prod_instancia = Producto.objects.create(
+                nombre=nombre_compuesto,
+                descripcion=f"[SONDEO_MANUAL] Marca: {marca_txt} | Modelo: {modelo_txt} | Detalle: {desc_txt}"[:1000],
+                precio_venta=Decimal("0.00"),
+                estado=False,
+                apto_venta=False,
+                apto_reparacion=False,
+                apto_consumible=False,
+                modulo_automatico=False,
+                id_categoria=None,
+                id_modelo=None
+            )
+        else:
+            prod_instancia = productos_encontrados[item['id_producto']]
+
         SolicitudCotizacionProducto.objects.create(
             id_solicitud=solicitud,
-            id_producto=productos_encontrados[item['id_producto']],
-            cantidad=item['cantidad_requerida']
+            id_producto=prod_instancia,
+            cantidad=item.get('cantidad_requerida', 1)
         )
 
     # Paso 9 y 10: Cotizaciones y Tokens (si no es borrador)
@@ -381,19 +401,46 @@ def modificar_solicitud_cotizacion(
     proveedores_validados = list(validar_proveedores_activos(ids_proveedores))
 
     # Paso 4: Validar productos existentes en el catálogo
-    ids_prods = [item['id_producto'] for item in productos_data]
-    productos_encontrados = {p.id_producto: p for p in Producto.objects.filter(id_producto__in=ids_prods)}
+    ids_prods = [item['id_producto'] for item in productos_data if not item.get('es_manual') and item.get('id_producto')]
+    productos_encontrados = {p.id_producto: p for p in Producto.objects.filter(id_producto__in=ids_prods)} if ids_prods else {}
     for id_p in ids_prods:
         if id_p not in productos_encontrados:
             raise ValidationError(f"El producto con ID {id_p} no existe en el catálogo.")
 
+    # Paso 2 / Comentarios CU-16: Restricción estricta de borrado sobre insumos técnicos de taller
+    if getattr(solicitud, 'sol_tec', False):
+        ids_originales = set(solicitud.solicitudcotizacionproducto_set.values_list('id_producto_id', flat=True))
+        ids_nuevos = set(item['id_producto'] for item in productos_data if not item.get('es_manual') and item.get('id_producto'))
+        if not ids_originales.issubset(ids_nuevos):
+            raise ValidationError("Operación restringida: Imposible amputar insumos técnicos requeridos por el área técnica para la reparación.")
+
     # Paso 7: Limpieza de renglones viejos y guardado de los nuevos
     solicitud.solicitudcotizacionproducto_set.all().delete()
     for item in productos_data:
+        if item.get('es_manual'):
+            marca_txt = (item.get('marca') or '').strip()
+            modelo_txt = (item.get('modelo') or '').strip()
+            desc_txt = (item.get('descripcion') or '').strip()
+            nombre_compuesto = f"{marca_txt} {modelo_txt} — {desc_txt}".strip(' —')[:255]
+            prod_instancia = Producto.objects.create(
+                nombre=nombre_compuesto,
+                descripcion=f"[SONDEO_MANUAL] Marca: {marca_txt} | Modelo: {modelo_txt} | Detalle: {desc_txt}"[:1000],
+                precio_venta=Decimal("0.00"),
+                estado=False,
+                apto_venta=False,
+                apto_reparacion=False,
+                apto_consumible=False,
+                modulo_automatico=False,
+                id_categoria=None,
+                id_modelo=None
+            )
+        else:
+            prod_instancia = productos_encontrados[item['id_producto']]
+
         SolicitudCotizacionProducto.objects.create(
             id_solicitud=solicitud,
-            id_producto=productos_encontrados[item['id_producto']],
-            cantidad=item['cantidad_requerida']
+            id_producto=prod_instancia,
+            cantidad=item.get('cantidad_requerida', 1)
         )
 
     # Paso 7: Transición a emisión o mantenimiento de borrador

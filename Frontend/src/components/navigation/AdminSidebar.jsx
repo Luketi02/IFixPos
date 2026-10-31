@@ -50,8 +50,10 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Compras & Abastecimiento',
     children: [
+      { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' },
       { value: 'purchases-suppliers', label: 'Gestión de Proveedores', icon: PackageReceiveIcon, route: '/admin/proveedores' },
-      { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' }
+      { value: 'purchases-quotes', label: 'Solicitudes de Cotización', icon: Layers01Icon, route: '/admin/cotizaciones' },
+      { value: 'purchases-proposals', label: 'Gestionar Cotizaciones', icon: Coins01Icon, route: '/admin/gestionar-cotizaciones' }
     ]
   },
   {

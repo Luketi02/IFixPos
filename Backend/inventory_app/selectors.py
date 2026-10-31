@@ -97,6 +97,8 @@ def filtrar_stock_inventario(
         'id_modelo',
         'id_modelo__id_marca',
         'id_modelo__id_tipo_dispositivo'
+    ).exclude(
+        descripcion__startswith='[SONDEO_MANUAL]'
     ).annotate(
         id_stock=F('stock__id_stock'),
         stock_minimo=Coalesce(F('stock__stock_minimo'), Value(0)),
