@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import EditUserModal from '../../components/users/EditUserModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -265,47 +265,27 @@ export default function AdminUsersScreen() {
 
       {/* Columna Principal */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Cabecera Superior */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Gestión de Roles • <span className="text-cyan-400 font-semibold">Directorio de Usuarios</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada */}
+        <AdminHeader
+          category="Gestión de Roles"
+          pageName="Usuarios"
+          title="Directorio de Usuarios"
+        />
 
         <div className="p-6 sm:p-8 space-y-6 flex-1 max-w-7xl w-full mx-auto">
-          {/* Encabezado de Pantalla y Cápsulas de Resumen */}
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl">
-            <div>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-semibold border border-cyan-500/30 mb-2">
-                Administración de Cuentas
-              </span>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                Directorio y Gestión de Usuarios
-              </h1>
-              <p className="text-slate-400 text-xs sm:text-sm mt-1">
-                Filtra cuentas por criterios combinados y administra sus datos personales, roles y credenciales.
-              </p>
+          {/* Cápsulas de Resumen */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 rounded-2xl bg-[#1E293B] border border-slate-700/80 text-center">
+              <p className="text-[11px] font-mono uppercase text-slate-400">En Vista</p>
+              <p className="text-2xl font-black text-white mt-0.5">{totalUsuarios}</p>
             </div>
-
-            <div className="grid grid-cols-3 gap-3 sm:w-auto w-full">
-              <div className="px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700/70 text-center">
-                <p className="text-[11px] font-mono uppercase text-slate-400">En Vista</p>
-                <p className="text-xl font-black text-white mt-0.5">{totalUsuarios}</p>
-              </div>
-              <div className="px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-center">
-                <p className="text-[11px] font-mono uppercase text-emerald-300">Activos</p>
-                <p className="text-xl font-black text-emerald-400 mt-0.5">{totalActivos}</p>
-              </div>
-              <div className="px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-center">
-                <p className="text-[11px] font-mono uppercase text-rose-300">Inactivos</p>
-                <p className="text-xl font-black text-rose-400 mt-0.5">{totalInactivos}</p>
-              </div>
+            <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-center">
+              <p className="text-[11px] font-mono uppercase text-emerald-300">Activos</p>
+              <p className="text-2xl font-black text-emerald-400 mt-0.5">{totalActivos}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-center">
+              <p className="text-[11px] font-mono uppercase text-rose-300">Inactivos</p>
+              <p className="text-2xl font-black text-rose-400 mt-0.5">{totalInactivos}</p>
             </div>
           </div>
 

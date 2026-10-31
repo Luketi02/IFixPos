@@ -53,13 +53,78 @@ class ProveedorOutputSerializer(serializers.Serializer):
 
 class FiltrarOrdenesCompraInputSerializer(serializers.Serializer):
     """La Aduana (CU-37): Valida parámetros de consulta para órdenes de compra."""
-    id_orden = serializers.IntegerField(required=False, allow_null=True, min_value=1)
-    estado_orden = serializers.IntegerField(required=False, allow_null=True)
-    cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=20)
-    tipo_entrega = serializers.IntegerField(required=False, allow_null=True)
-    sol_tec = serializers.BooleanField(required=False, allow_null=True)
-    fecha_desde = serializers.DateField(required=False, allow_null=True)
-    fecha_hasta = serializers.DateField(required=False, allow_null=True)
+    id_orden = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        error_messages={
+            'invalid': 'El ID de la Orden debe ser un valor estrictamente numérico positivo.',
+            'min_value': 'El ID de la Orden debe ser un número entero mayor a cero.'
+        }
+    )
+    estado_orden = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        error_messages={
+            'invalid': 'El estado de la orden debe ser un código numérico válido.'
+        }
+    )
+    cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    proveedor = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    tipo_entrega = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        error_messages={
+            'invalid': 'El tipo de recepción debe ser un código numérico válido (1: Retiro en Sucursal, 2: Envío a Domicilio).'
+        }
+    )
+    sol_tec = serializers.BooleanField(required=False, allow_null=True, default=None)
+    fecha_desde = serializers.DateField(
+        required=False,
+        allow_null=True,
+        error_messages={
+            'invalid': 'El formato de Fecha Desde es inválido (utilice AAAA-MM-DD).'
+        }
+    )
+    fecha_hasta = serializers.DateField(
+        required=False,
+        allow_null=True,
+        error_messages={
+            'invalid': 'El formato de Fecha Hasta es inválido (utilice AAAA-MM-DD).'
+        }
+    )
+
+    def to_internal_value(self, data):
+        mutable = dict(data.items()) if hasattr(data, 'items') else dict(data)
+        # Soporte de alias camelCase según especificación (idOrden, tipoEntrega, etc.)
+        alias_map = {
+            'idOrden': 'id_orden',
+            'estadoOrden': 'estado_orden',
+            'tipoEntrega': 'tipo_entrega',
+            'fechaDesde': 'fecha_desde',
+            'fechaHasta': 'fecha_hasta',
+            'cuitProv': 'cuit_prov',
+        }
+        for camel_key, snake_key in alias_map.items():
+            if camel_key in mutable and snake_key not in mutable:
+                mutable[snake_key] = mutable[camel_key]
+
+        # Normalizar cadenas vacías en campos opcionales numéricos/fechas
+        for key in ('id_orden', 'estado_orden', 'tipo_entrega', 'sol_tec', 'fecha_desde', 'fecha_hasta'):
+            if key in mutable and str(mutable[key]).strip() == '':
+                mutable[key] = None
+
+        return super().to_internal_value(mutable)
+
+    def validate_estado_orden(self, value):
+        if value is not None and value not in (0, 1, 2, 3, 4):
+            raise serializers.ValidationError("El estado de la orden seleccionado no es válido.")
+        return value
+
+    def validate_tipo_entrega(self, value):
+        if value is not None and value not in (1, 2):
+            raise serializers.ValidationError("El tipo de recepción seleccionado no es válido (1: Retiro en Sucursal, 2: Envío a Domicilio).")
+        return value
 
     def validate(self, attrs):
         f_desde = attrs.get('fecha_desde')
@@ -69,44 +134,84 @@ class FiltrarOrdenesCompraInputSerializer(serializers.Serializer):
         return attrs
 
 
-class DetalleOrdenCompraOutputSerializer(serializers.Serializer):
-    id_detalle_compra = serializers.IntegerField(read_only=True)
-    id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
-    nombre_producto = serializers.SerializerMethodField()
-    cantidad = serializers.IntegerField(read_only=True)
-    cantidad_recibida = serializers.IntegerField(read_only=True, allow_null=True)
-    precio_unitario = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    subtotal = serializers.SerializerMethodField()
-
-    def get_nombre_producto(self, obj):
-        return obj.id_producto.nombre if obj.id_producto else ""
-
-    def get_subtotal(self, obj):
-        cant = obj.cantidad_recibida if obj.cantidad_recibida is not None else obj.cantidad
-        if cant is not None and obj.precio_unitario is not None:
-            return str(Decimal(str(cant)) * Decimal(str(obj.precio_unitario)))
-        return "0.00"
-
-
 class OrdenCompraOutputSerializer(serializers.Serializer):
-    """Formato de salida estructurado para órdenes de compra."""
+    """Formato de salida estructurado para órdenes de compra (CU-37)."""
+    ESTADOS_NOMBRES = {
+        0: 'Borrador',
+        1: 'Esperando Entrega',
+        2: 'Entregada',
+        3: 'Cancelada',
+        4: 'Entregada Parcialmente',
+    }
+    TIPOS_ENTREGA_NOMBRES = {
+        1: 'Retiro en Sucursal',
+        2: 'Envío a Domicilio',
+    }
+
     id_orden = serializers.IntegerField(read_only=True)
     fecha_emision = serializers.DateField(read_only=True)
     estado_orden = serializers.IntegerField(read_only=True)
+    estado = serializers.SerializerMethodField()
+    estado_nombre = serializers.SerializerMethodField()
     sol_tec = serializers.BooleanField(read_only=True)
     nro_remito = serializers.CharField(read_only=True, allow_null=True)
     tipo_entrega = serializers.IntegerField(read_only=True)
+    tipo_entrega_nombre = serializers.SerializerMethodField()
     fecha_recepcion = serializers.DateField(read_only=True, allow_null=True)
     cuit_prov = serializers.CharField(source='cuit_prov_id', read_only=True)
     nombre_proveedor = serializers.SerializerMethodField()
+    proveedor = serializers.SerializerMethodField()
     items = serializers.SerializerMethodField()
+    detalles = serializers.SerializerMethodField()
+    cantidad_items = serializers.SerializerMethodField()
+    total_unidades = serializers.SerializerMethodField()
+    monto_total = serializers.SerializerMethodField()
+
+    def get_estado(self, obj):
+        return self.ESTADOS_NOMBRES.get(obj.estado_orden, getattr(obj, 'estado_nombre', 'Desconocido'))
+
+    def get_estado_nombre(self, obj):
+        return self.get_estado(obj)
+
+    def get_tipo_entrega_nombre(self, obj):
+        return self.TIPOS_ENTREGA_NOMBRES.get(obj.tipo_entrega, getattr(obj, 'tipo_entrega_nombre', 'Retiro en Sucursal'))
 
     def get_nombre_proveedor(self, obj):
         return obj.cuit_prov.nombre_proveedor if obj.cuit_prov else ""
 
+    def get_proveedor(self, obj):
+        p = obj.cuit_prov
+        if not p:
+            return None
+        return {
+            "cuit": p.cuit_prov,
+            "cuit_prov": p.cuit_prov,
+            "nombre": p.nombre_proveedor,
+            "nombre_proveedor": p.nombre_proveedor,
+            "correo": p.correo,
+            "telefono": p.telefono,
+            "ofrece_envio": p.ofrece_envio
+        }
+
     def get_items(self, obj):
-        detalles = obj.detalleordencompra_set.all()
+        detalles = obj.detalles.all()
         return DetalleOrdenCompraOutputSerializer(detalles, many=True).data
+
+    def get_detalles(self, obj):
+        return self.get_items(obj)
+
+    def get_cantidad_items(self, obj):
+        return len(obj.detalles.all())
+
+    def get_total_unidades(self, obj):
+        return sum((d.cantidad or 0) for d in obj.detalles.all())
+
+    def get_monto_total(self, obj):
+        total = sum(
+            Decimal(str(d.cantidad_recibida if d.cantidad_recibida is not None else d.cantidad)) * d.precio_unitario
+            for d in obj.detalles.all()
+        )
+        return str(total.quantize(Decimal("0.01")))
 
 
 # ==============================================================================
@@ -1141,10 +1246,28 @@ class DetalleOrdenCompraOutputSerializer(serializers.Serializer):
     id_detalle_compra = serializers.IntegerField(read_only=True)
     id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
     nombre_producto = serializers.CharField(source='id_producto.nombre', read_only=True)
+    categoria = serializers.SerializerMethodField()
+    descripcion_producto = serializers.SerializerMethodField()
     cantidad = serializers.IntegerField(read_only=True)
     cantidad_recibida = serializers.IntegerField(read_only=True, allow_null=True)
     precio_unitario = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    subtotal_solicitado = serializers.SerializerMethodField()
     subtotal = serializers.SerializerMethodField()
+
+    def get_categoria(self, obj):
+        if obj.id_producto and obj.id_producto.id_categoria:
+            return obj.id_producto.id_categoria.nombre
+        return ""
+
+    def get_descripcion_producto(self, obj):
+        if obj.id_producto and obj.id_producto.descripcion:
+            return obj.id_producto.descripcion.replace('[SONDEO_MANUAL]', '').strip()
+        return ""
+
+    def get_subtotal_solicitado(self, obj):
+        if obj.cantidad is not None and obj.precio_unitario is not None:
+            return Decimal(str(obj.cantidad)) * obj.precio_unitario
+        return Decimal("0.00")
 
     def get_subtotal(self, obj):
         cant = obj.cantidad_recibida if obj.cantidad_recibida is not None else obj.cantidad
@@ -1166,6 +1289,14 @@ class OrdenCompraCompletaOutputSerializer(serializers.Serializer):
     proveedor = serializers.SerializerMethodField()
     items = serializers.SerializerMethodField()
     monto_total = serializers.SerializerMethodField()
+    archivo_pdf = serializers.SerializerMethodField()
+
+    def get_archivo_pdf(self, obj):
+        if getattr(obj, 'ruta_pdf', None):
+            return obj.ruta_pdf
+        if obj.id_orden and obj.fecha_emision:
+            return f"/media/ordenes_compra/orden_{obj.id_orden}_{obj.fecha_emision.strftime('%Y%m%d')}.pdf"
+        return None
 
     def get_proveedor(self, obj):
         p = obj.cuit_prov
@@ -1310,25 +1441,60 @@ class ProveedorResumenOutputSerializer(serializers.Serializer):
     correo = serializers.CharField(read_only=True, allow_null=True)
     telefono = serializers.CharField(read_only=True, allow_null=True)
     ofrece_envio = serializers.BooleanField(read_only=True)
+    nivel = serializers.CharField(read_only=True, allow_null=True)
+    indice_confiabilidad = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    tiempo_promedio_entrega = serializers.IntegerField(read_only=True, allow_null=True)
+    direccion = serializers.SerializerMethodField()
+
+    def get_direccion(self, obj):
+        d = getattr(obj, 'id_direccion', None)
+        if not d:
+            return None
+        ciudad = getattr(d, 'id_ciudad', None)
+        provincia = getattr(ciudad, 'id_provincia', None) if ciudad else None
+        pais = getattr(provincia, 'id_pais', None) if provincia else None
+        return {
+            "calle": d.nro_calle,
+            "barrio": d.nombre_barrio,
+            "ciudad": ciudad.nombre_ciudad if ciudad else None,
+            "provincia": provincia.nombre_provincia if provincia else None,
+            "pais": pais.nombre_pais if pais else None
+        }
 
 
 class OrdenCompraDetailOutputSerializer(serializers.Serializer):
     """Vista de solo lectura del archivo digital inmutable de la Orden de Compra (CU-57)."""
+    ESTADOS_NOMBRES = {
+        0: 'Borrador',
+        1: 'Esperando Entrega',
+        2: 'Entregada',
+        3: 'Cancelada',
+        4: 'Entregada Parcialmente',
+    }
+
     id_orden = serializers.IntegerField(read_only=True)
     fecha_emision = serializers.DateField(read_only=True)
     estado_orden = serializers.IntegerField(read_only=True)
-    estado = serializers.CharField(source='estado_nombre', read_only=True)
-    estado_nombre = serializers.CharField(read_only=True)
+    estado = serializers.SerializerMethodField()
+    estado_nombre = serializers.SerializerMethodField()
     tipo_entrega = serializers.IntegerField(read_only=True)
     tipo_entrega_nombre = serializers.CharField(read_only=True)
     fecha_recepcion = serializers.DateField(read_only=True, allow_null=True)
     nro_remito = serializers.CharField(read_only=True, allow_null=True)
     sol_tec = serializers.BooleanField(read_only=True)
+    solTec = serializers.BooleanField(source='sol_tec', read_only=True)
     proveedor = serializers.SerializerMethodField()
     detalles = serializers.SerializerMethodField()
     items = serializers.SerializerMethodField()
+    monto_solicitado = serializers.SerializerMethodField()
     monto_total = serializers.SerializerMethodField()
     total_abonar = serializers.SerializerMethodField()
+
+    def get_estado(self, obj):
+        return self.ESTADOS_NOMBRES.get(obj.estado_orden, getattr(obj, 'estado_nombre', 'Desconocido'))
+
+    def get_estado_nombre(self, obj):
+        return self.get_estado(obj)
 
     def get_proveedor(self, obj):
         p = obj.cuit_prov
@@ -1340,6 +1506,12 @@ class OrdenCompraDetailOutputSerializer(serializers.Serializer):
 
     def get_items(self, obj):
         return self.get_detalles(obj)
+
+    def get_monto_solicitado(self, obj):
+        return sum(
+            Decimal(str(d.cantidad)) * d.precio_unitario
+            for d in obj.detalles.all()
+        )
 
     def get_monto_total(self, obj):
         return sum(

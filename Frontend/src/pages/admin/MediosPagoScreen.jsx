@@ -382,6 +382,7 @@ export default function MediosPagoScreen() {
 
   return (
     <CatalogLayout
+      category="Ventas & Facturación"
       title="Medios de Pago"
       subtitle="Configuración y habilitación de canales financieros de cobro para el mostrador y la tienda virtual."
       badgeText="Ventas & Facturación"

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -199,42 +199,32 @@ export default function AdminRolesScreen() {
 
       {/* Contenido Principal */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Cabecera Superior */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-violet-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Gestión de Roles • <span className="text-violet-400 font-semibold">Configuración de Perfiles</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada */}
+        <AdminHeader
+          category="Gestión de Roles"
+          pageName="Roles"
+          title="Gestión de Roles"
+        />
 
         <div className="p-6 sm:p-8 space-y-6 flex-1 max-w-6xl w-full mx-auto">
-          {/* Encabezado Principal */}
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl">
-            <div>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 text-xs font-semibold border border-violet-500/30 mb-2">
-                Seguridad y Accesos
-              </span>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                Roles del Sistema
-              </h1>
-              <p className="text-slate-400 text-xs sm:text-sm mt-1">
-                Administra la denominación y descripción funcional de los roles activos en la plataforma.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:w-auto w-full">
-              <div className="px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700/70 text-center">
-                <p className="text-[11px] font-mono uppercase text-slate-400">Roles Activos</p>
-                <p className="text-xl font-black text-cyan-400 mt-0.5">{roles.length}</p>
+          {/* Métricas Rápidas */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="px-5 py-4 rounded-2xl bg-[#1E293B] border border-slate-700/80 shadow-lg flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-mono uppercase text-slate-400">Roles Activos en Sistema</p>
+                <p className="text-2xl font-black text-cyan-400 mt-1">{roles.length}</p>
               </div>
-              <div className="px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700/70 text-center">
-                <p className="text-[11px] font-mono uppercase text-slate-400">Cuentas Vinculadas</p>
-                <p className="text-xl font-black text-violet-400 mt-0.5">{totalUsuariosAsignados}</p>
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-bold">
+                🛡️
+              </div>
+            </div>
+            <div className="px-5 py-4 rounded-2xl bg-[#1E293B] border border-slate-700/80 shadow-lg flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-mono uppercase text-slate-400">Cuentas de Usuario Vinculadas</p>
+                <p className="text-2xl font-black text-violet-400 mt-1">{totalUsuariosAsignados}</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center text-violet-400 font-bold">
+                👥
               </div>
             </div>
           </div>

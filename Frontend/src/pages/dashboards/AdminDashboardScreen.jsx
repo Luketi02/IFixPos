@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 
 export default function AdminDashboardScreen() {
   const { user, logout } = useAuth();
@@ -50,6 +50,10 @@ export default function AdminDashboardScreen() {
             navigate('/admin/recepcion-compras');
           } else if (val === 'purchases-quotes') {
             navigate('/admin/cotizaciones');
+          } else if (val === 'purchases-proposals') {
+            navigate('/admin/gestionar-cotizaciones');
+          } else if (val === 'purchases-orders') {
+            navigate('/admin/ordenes-compra');
           } else {
             setActiveMenu(val);
           }
@@ -59,22 +63,12 @@ export default function AdminDashboardScreen() {
       {/* 2. ÁREA DE CONTENIDO PRINCIPAL (COLUMNA DERECHA) */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         
-        {/* Barra Superior del Panel */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Sistema Operativo • Base de Datos: <span className="text-emerald-400 font-semibold">Conectada</span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full hidden sm:inline-block">
-              Sección: {activeMenu.toUpperCase()}
-            </span>
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+                {/* Cabecera Superior Unificada Cyber-Tech */}
+        <AdminHeader
+          category="Panel Principal"
+          pageName="Métricas & Control"
+          title="Panel de Control General"
+        />
 
         {/* Contenedor del Dashboard */}
         <div className="p-6 sm:p-8 space-y-8 flex-1">

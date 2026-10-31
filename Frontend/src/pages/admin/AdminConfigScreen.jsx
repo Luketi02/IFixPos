@@ -4,8 +4,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
-import logoEmpresa from '../../assets/img/itemLogoVentana.png';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import AddressManagementModal from '../../components/geo/AddressManagementModal';
 import CyberNumberInput from '../../components/common/CyberNumberInput';
 
@@ -435,55 +434,19 @@ export default function AdminConfigScreen() {
       {/* 2. Área de Contenido Principal (Columna Derecha) */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
 
-        {/* Header Superior Cyber-Tech */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => {
-                if (window.history.state && window.history.state.idx > 0) {
-                  navigate(-1);
-                } else {
-                  navigate('/admin/dashboard');
-                }
-              }}
-              className="flex items-center gap-2 text-xs font-semibold text-slate-300 hover:text-cyan-300 transition-all px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700/80 border border-slate-700/80 hover:border-cyan-500/40 shadow-sm active:scale-95"
-              title="Volver a la vista anterior"
-            >
-              <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-              </svg>
-              <span>Volver</span>
-            </button>
-
-            <div className="h-5 w-px bg-slate-700 hidden sm:block" />
-
-            <div className="flex items-center gap-3">
-              <img
-                src={logoEmpresa}
-                alt="Logo IFixPos"
-                className="w-8 h-8 object-contain drop-shadow-[0_2px_8px_rgba(139,92,246,0.35)]"
-              />
-              <div className="flex flex-col">
-                <span className="font-extrabold text-base tracking-tight text-white leading-tight">
-                  {formData.nombreLocal && formData.nombreLocal !== 'S/N' ? (
-                    formData.nombreLocal
-                  ) : (
-                    <>IFix<span className="text-[#06B6D4]">Pos</span></>
-                  )}
-                </span>
-                <p className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5 leading-none mt-0.5">
-                  <span>Sistema</span>
-                  <span className="text-cyan-400 text-[10px]">→</span>
-                  <span className="text-cyan-300 font-semibold">Configuración</span>
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada Cyber-Tech */}
+        <AdminHeader
+          category="Sistema"
+          pageName="Configuración Global"
+          title="Configuración Global del Sistema"
+          onBack={() => {
+            if (window.history.state && window.history.state.idx > 0) {
+              navigate(-1);
+            } else {
+              navigate('/admin/dashboard');
+            }
+          }}
+        />
 
       {/* 2. Notificación Flotante de Éxito (Toast) */}
       <AnimatePresence>
@@ -515,19 +478,6 @@ export default function AdminConfigScreen() {
       {/* 3. Contenedor Principal */}
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 py-8 w-full space-y-8">
         
-        {/* Banner de Título */}
-        <div className="bg-gradient-to-r from-[#1E293B] via-[#1E293B] to-slate-900 border border-cyan-500/30 rounded-2xl p-6 sm:p-8 relative overflow-hidden shadow-xl shadow-cyan-950/20">
-          <div className="relative z-10 max-w-3xl">
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight mb-2">
-              Configuraciones Global del Sistema
-            </h1>
-            <p className="text-slate-300 text-xs sm:text-sm leading-relaxed">
-              Modifica los valores dinámicos que gobiernan el ERP IFixPos. Al guardar, cada ajuste se actualiza y persiste generando su correspondiente registro de auditoría.
-            </p>
-          </div>
-          <div className="absolute right-0 bottom-0 translate-x-12 translate-y-12 w-64 h-64 bg-gradient-to-br from-violet-600/15 to-cyan-500/15 rounded-full blur-3xl pointer-events-none" />
-        </div>
-
         {/* Alerta de Error con Fade-Out de 6s */}
         <AnimatePresence>
           {serverError && (

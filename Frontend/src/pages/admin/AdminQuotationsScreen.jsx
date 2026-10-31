@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import SupplierModal from '../../components/purchases/SupplierModal';
 import DetalleSolicitudModal from '../../components/purchases/DetalleSolicitudModal';
 import ModificarSolicitudModal from '../../components/purchases/ModificarSolicitudModal';
@@ -692,53 +692,29 @@ export default function AdminQuotationsScreen() {
 
       {/* ÁREA DE CONTENIDO PRINCIPAL */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Barra Superior */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Compras & Abastecimiento • <span className="text-cyan-400 font-semibold">Gestión de Cotizaciones</span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full hidden sm:inline-block">
-              SONDEO DE MERCADO B2B
-            </span>
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada */}
+        <AdminHeader
+          category="Compras & Abastecimiento"
+          pageName="Solicitudes de Cotización"
+          title="Solicitudes de Cotización"
+        />
 
         {/* Contenedor Principal */}
         <div className="p-6 sm:p-8 space-y-6 flex-1">
-          {/* Encabezado y Acción Principal (Paso 1) */}
-          <div className="bg-gradient-to-r from-[#1E293B] via-[#1E293B] to-slate-900 border border-cyan-500/30 rounded-2xl p-6 sm:p-8 relative overflow-hidden shadow-xl shadow-cyan-950/20 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-            <div className="relative z-10 max-w-2xl">
-              <span className="inline-block px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-300 text-xs font-mono border border-cyan-500/30 mb-3">
-                Abastecimiento e Inventario
-              </span>
-              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight mb-2">
-                Gestión de <span className="text-[#06B6D4]">Solicitudes de Cotización</span>
-              </h1>
-              <p className="text-slate-300 text-sm leading-relaxed">
-                Confeccione y despache pedidos de cotización hacia múltiples proveedores activos para consultar precios y plazos de entrega sin compromiso financiero, o resguárdelos como borrador.
-              </p>
+          {/* Cabecera Operativa con Botón de Creación */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-white tracking-tight">Pliegos de Solicitud</h2>
             </div>
-
-            <div className="relative z-10 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={abrirModalNuevaSolicitud}
-                className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
-              >
-                <span className="text-lg leading-none">+</span>
-                <span>Nueva Solicitud de Cotización</span>
-              </button>
-            </div>
-
-            <div className="absolute right-0 bottom-0 translate-x-12 translate-y-12 w-72 h-72 bg-gradient-to-br from-cyan-500/15 to-violet-600/15 rounded-full blur-3xl pointer-events-none" />
+            <button
+              type="button"
+              onClick={abrirModalNuevaSolicitud}
+              className="px-4 py-2.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <span className="text-base leading-none font-black">+</span>
+              <span>Nueva Solicitud de Cotización</span>
+            </button>
           </div>
-
           {/* Alertas de Feedback (Regla 6: Auto-cierre en 6 segundos) */}
           <AnimatePresence>
             {errorBanner && (

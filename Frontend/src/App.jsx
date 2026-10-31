@@ -29,6 +29,7 @@ import AdminSuppliersScreen from './pages/admin/AdminSuppliersScreen';
 import AdminDirectPurchasesScreen from './pages/admin/AdminDirectPurchasesScreen';
 import AdminQuotationsScreen from './pages/admin/AdminQuotationsScreen';
 import AdminManageQuotationsScreen from './pages/admin/AdminManageQuotationsScreen';
+import AdminPurchaseOrdersScreen from './pages/admin/AdminPurchaseOrdersScreen';
 import PortalProveedorCotizarScreen from './pages/portal/PortalProveedorCotizarScreen';
 import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
 import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
@@ -109,6 +110,8 @@ function App() {
                 <Route path="/admin/recepcion-compras" element={<AdminDirectPurchasesScreen />} />
                 <Route path="/admin/cotizaciones" element={<AdminQuotationsScreen />} />
                 <Route path="/admin/gestionar-cotizaciones" element={<AdminManageQuotationsScreen />} />
+                <Route path="/admin/ordenes-compra" element={<AdminPurchaseOrdersScreen />} />
+                <Route path="/admin/ordenes-compra/:id_orden" element={<AdminPurchaseOrdersScreen />} />
                 <Route path="/admin/configuracion" element={<AdminConfigScreen />} />
                 <Route path="/admin/zonas-cobertura" element={<CoverageZonesScreen />} />
                 <Route path="/admin/inventario" element={<AdminInventoryScreen />} />

@@ -116,8 +116,8 @@ def filtrar_ordenes_compra(
         'cuit_prov__id_direccion',
         'cuit_prov__id_direccion__id_ciudad'
     ).prefetch_related(
-        'detalleordencompra_set__id_producto',
-        'detalleordencompra_set__id_producto__id_categoria'
+        'detalles__id_producto',
+        'detalles__id_producto__id_categoria'
     ).order_by('-fecha_emision', '-id_orden')
 
     id_orden = filtros.get('id_orden')
@@ -128,9 +128,12 @@ def filtrar_ordenes_compra(
     if estado_orden is not None:
         qs = qs.filter(estado_orden=estado_orden)
 
-    cuit_prov = str(filtros.get('cuit_prov') or '').strip()
+    cuit_prov = str(filtros.get('cuit_prov') or filtros.get('proveedor') or '').strip()
     if cuit_prov:
-        qs = qs.filter(cuit_prov_id__icontains=cuit_prov)
+        qs = qs.filter(
+            Q(cuit_prov__cuit_prov__icontains=cuit_prov) |
+            Q(cuit_prov__nombre_proveedor__icontains=cuit_prov)
+        )
 
     tipo_entrega = filtros.get('tipo_entrega')
     if tipo_entrega is not None:
@@ -145,7 +148,7 @@ def filtrar_ordenes_compra(
     if fecha_hasta:
         qs = qs.filter(fecha_emision__lte=fecha_hasta)
 
-    return qs
+    return qs.distinct()
 
 
 # ==============================================================================
@@ -676,8 +679,17 @@ def obtener_detalle_orden_compra(id_orden: int) -> OrdenCompra:
     """
     orden = (
         OrdenCompra.objects
-        .select_related('cuit_prov', 'cuit_prov__id_direccion')
-        .prefetch_related('detalles__id_producto')
+        .select_related(
+            'cuit_prov',
+            'cuit_prov__id_direccion',
+            'cuit_prov__id_direccion__id_ciudad',
+            'cuit_prov__id_direccion__id_ciudad__id_provincia',
+            'cuit_prov__id_direccion__id_ciudad__id_provincia__id_pais'
+        )
+        .prefetch_related(
+            'detalles__id_producto',
+            'detalles__id_producto__id_categoria'
+        )
         .filter(pk=id_orden)
         .first()
     )

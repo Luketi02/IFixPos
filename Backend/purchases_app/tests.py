@@ -3501,6 +3501,218 @@ class FiltrarCotizacionesTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
+# ==============================================================================
+# CU-37: FILTRAR ÓRDENES DE COMPRA (TESTS)
+# ==============================================================================
+
+class FiltrarOrdenesCompraTestCase(TestCase):
+    """
+    Pruebas unitarias e integrales para el CU-37: Filtrar Órdenes de Compra.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = '/api/purchases/ordenes-compra/filtrar/'
+
+        # Roles y Usuarios
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Administrador'}
+        )
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico', 'descripcion': 'Rol Técnico'}
+        )
+        self.admin = Usuario.objects.create(
+            email='admin.filtoc@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.filtoc@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_tecnico,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+        # Categoría y Productos
+        self.categoria = CategoriaProducto.objects.create(nombre="Módulos y Displays", estado=True)
+        self.prod1 = Producto.objects.create(
+            nombre="Módulo Samsung S23 Ultra",
+            descripcion="Display Dynamic AMOLED 2X",
+            precio_venta=Decimal("180000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+        self.prod2 = Producto.objects.create(
+            nombre="Pin de Carga USB-C S23",
+            descripcion="Subplaca de carga original",
+            precio_venta=Decimal("25000.00"),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.categoria
+        )
+
+        # Proveedores
+        self.prov1 = Proveedor.objects.create(
+            cuit_prov="30-55556666-7",
+            nombre_proveedor="Samsung Parts Mayorista SA",
+            correo="ventas@samsungparts.com",
+            telefono="011-5555-6666",
+            estado=True,
+            ofrece_envio=True
+        )
+        self.prov2 = Proveedor.objects.create(
+            cuit_prov="30-12123434-5",
+            nombre_proveedor="Importadora Microcomponentes SRL",
+            correo="info@microcomp.com",
+            telefono="011-1212-3434",
+            estado=True,
+            ofrece_envio=False
+        )
+
+        hoy = timezone.now().date()
+
+        # Orden 1: Esperando Entrega, Envío a Domicilio, Prov 1
+        self.orden1 = OrdenCompra.objects.create(
+            fecha_emision=hoy - timezone.timedelta(days=7),
+            estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA,
+            sol_tec=True,
+            tipo_entrega=OrdenCompra.TIPO_ENTREGA_ENVIO,
+            cuit_prov=self.prov1
+        )
+        DetalleOrdenCompra.objects.create(
+            id_orden=self.orden1,
+            id_producto=self.prod1,
+            cantidad=4,
+            precio_unitario=Decimal("110000.00")
+        )
+
+        # Orden 2: Entregada, Retiro en Sucursal, Prov 2
+        self.orden2 = OrdenCompra.objects.create(
+            fecha_emision=hoy,
+            estado_orden=OrdenCompra.ESTADO_ENTREGADA,
+            sol_tec=False,
+            nro_remito="REM-0001-8899",
+            fecha_recepcion=hoy,
+            tipo_entrega=OrdenCompra.TIPO_ENTREGA_RETIRO,
+            cuit_prov=self.prov2
+        )
+        DetalleOrdenCompra.objects.create(
+            id_orden=self.orden2,
+            id_producto=self.prod2,
+            cantidad=10,
+            cantidad_recibida=10,
+            precio_unitario=Decimal("12000.00")
+        )
+
+    def test_filtrar_ordenes_sin_filtros_retorna_todas_y_audita_log(self):
+        """Paso 1 y 5: Consulta sin filtros retorna todas las órdenes y registra auditoría en LogSistema."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertTrue(
+            LogSistema.objects.filter(
+                id_usuario=self.admin,
+                accion__icontains="CU-37"
+            ).exists()
+        )
+
+    def test_filtrar_por_id_orden_exacto(self):
+        """Paso 2: Búsqueda exacta por id_orden / idOrden."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_orden': self.orden1.id_orden})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_orden'], self.orden1.id_orden)
+        self.assertEqual(response.data[0]['estado_nombre'], 'Esperando Entrega')
+
+    def test_filtrar_por_estado_orden_categorico(self):
+        """Paso 2: Filtro categórico por estado de la orden."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'estado_orden': OrdenCompra.ESTADO_ENTREGADA})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_orden'], self.orden2.id_orden)
+        self.assertEqual(response.data[0]['nro_remito'], 'REM-0001-8899')
+
+    def test_filtrar_por_rango_fechas_emision(self):
+        """Paso 2: Filtro temporal por rango de fechas de emisión (Fecha Desde / Fecha Hasta)."""
+        self.client.force_authenticate(user=self.admin)
+        hoy = timezone.now().date()
+        response = self.client.get(self.url, {
+            'fecha_desde': (hoy - timezone.timedelta(days=2)).isoformat(),
+            'fecha_hasta': hoy.isoformat()
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_orden'], self.orden2.id_orden)
+
+    def test_filtrar_por_tipo_entrega(self):
+        """Paso 2: Filtro por tipo de recepción (1: Retiro en Sucursal, 2: Envío a Domicilio)."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'tipo_entrega': OrdenCompra.TIPO_ENTREGA_ENVIO})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_orden'], self.orden1.id_orden)
+        self.assertEqual(response.data[0]['tipo_entrega_nombre'], 'Envío a Domicilio')
+
+    def test_filtrar_por_proveedor_destinatario(self):
+        """Paso 2: Filtro por proveedor destinatario (CUIT o Razón Social)."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'cuit_prov': 'Samsung Parts'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id_orden'], self.orden1.id_orden)
+
+    def test_filtrar_id_orden_no_numerico_retorna_400(self):
+        """Excepción Paso 4: Si el ID de la orden no es numérico positivo, retorna 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'id_orden': 'orden_invalida'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filtrar_rango_fechas_inconsistente_retorna_400(self):
+        """Excepción Paso 4: Si Fecha Desde > Fecha Hasta, retorna 400."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {
+            'fecha_desde': '2026-10-30',
+            'fecha_hasta': '2026-10-15'
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no puede ser posterior", str(response.data))
+
+    def test_filtrar_sin_coincidencias_retorna_vacio(self):
+        """Excepción Paso 5: Si ninguna orden coincide, retorna lista vacía."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {'cuit_prov': '99-99999999-9'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_filtrar_no_admin_denegado_403(self):
+        """Precondición: Solo Administrador puede filtrar órdenes de compra."""
+        self.client.force_authenticate(user=self.tecnico)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+
 
 
 

@@ -53,7 +53,8 @@ export const ADMIN_MENU_ITEMS = [
       { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' },
       { value: 'purchases-suppliers', label: 'Gestión de Proveedores', icon: PackageReceiveIcon, route: '/admin/proveedores' },
       { value: 'purchases-quotes', label: 'Solicitudes de Cotización', icon: Layers01Icon, route: '/admin/cotizaciones' },
-      { value: 'purchases-proposals', label: 'Gestionar Cotizaciones', icon: Coins01Icon, route: '/admin/gestionar-cotizaciones' }
+      { value: 'purchases-proposals', label: 'Gestionar Cotizaciones', icon: Coins01Icon, route: '/admin/gestionar-cotizaciones' },
+      { value: 'purchases-orders', label: 'Órdenes de Compra', icon: CheckmarkCircle01Icon, route: '/admin/ordenes-compra' }
     ]
   },
   {
@@ -266,6 +267,14 @@ export default function AdminSidebar({
       navigate('/admin/roles');
     } else if (val === 'purchases-suppliers') {
       navigate('/admin/proveedores');
+    } else if (val === 'purchases-direct') {
+      navigate('/admin/recepcion-compras');
+    } else if (val === 'purchases-quotes') {
+      navigate('/admin/cotizaciones');
+    } else if (val === 'purchases-proposals') {
+      navigate('/admin/gestionar-cotizaciones');
+    } else if (val === 'purchases-orders') {
+      navigate('/admin/ordenes-compra');
     } else {
       if (effectiveRole === 'cliente') {
         navigate('/tienda');

@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import NotificationBell from '../../components/navigation/NotificationBell';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import DetalleCotizacionModal from '../../components/purchases/DetalleCotizacionModal';
 import EvaluarCotizacionModal from '../../components/purchases/EvaluarCotizacionModal';
 
@@ -243,24 +242,12 @@ export default function AdminManageQuotationsScreen() {
 
       {/* Contenedor Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Cabecera Superior */}
-        <header className="px-8 py-5 border-b border-slate-800 bg-[#0F172A]/80 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between">
-          <div>
-            <div className="text-xs text-slate-400 flex items-center gap-2 mb-1">
-              <span>Compras & Abastecimiento</span>
-              <span>›</span>
-              <span className="text-cyan-400 font-semibold">Gestionar Cotizaciones</span>
-            </div>
-            <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-3">
-              <span>Padrón y Evaluación de Cotizaciones</span>
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <NotificationBell />
-            <UserProfileDropdown />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada */}
+        <AdminHeader
+          category="Compras & Abastecimiento"
+          pageName="Gestionar Cotizaciones"
+          title="Evaluación de Cotizaciones"
+        />
 
         {/* Contenido */}
         <main className="p-8 space-y-6">

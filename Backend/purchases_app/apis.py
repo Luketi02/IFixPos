@@ -68,7 +68,8 @@ from purchases_app.services import (
     evaluar_cotizacion,
     emitir_ordenes_compra,
     recepcionar_orden_compra,
-    registrar_compra_directa
+    registrar_compra_directa,
+    registrar_auditoria_filtro_ordenes_compra
 )
 
 
@@ -120,7 +121,7 @@ class FiltrarOrdenesCompraApi(APIView):
     """
     CU-37: Filtrar Órdenes de Compra.
     Endpoint exclusivo para Administradores.
-    Permite auditar órdenes de compra por ID, estado, rango de fechas y proveedor.
+    Permite auditar órdenes de compra por ID, estado, rango de fechas, modalidad de entrega y proveedor.
     """
     permission_classes = [IsAuthenticated]
 
@@ -136,7 +137,15 @@ class FiltrarOrdenesCompraApi(APIView):
         )
 
         output = OrdenCompraOutputSerializer(ordenes, many=True)
-        return Response(output.data, status=status.HTTP_200_OK)
+        datos_salida = output.data
+
+        registrar_auditoria_filtro_ordenes_compra(
+            usuario_admin=request.user,
+            filtros=serializer.validated_data,
+            total_resultados=len(datos_salida)
+        )
+
+        return Response(datos_salida, status=status.HTTP_200_OK)
 
 
 # ==============================================================================

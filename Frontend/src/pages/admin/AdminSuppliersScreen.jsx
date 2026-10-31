@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import SupplierModal from '../../components/purchases/SupplierModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -206,49 +206,30 @@ export default function AdminSuppliersScreen() {
 
       {/* Contenido Principal */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Cabecera Superior */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Compras & Abastecimiento • <span className="text-cyan-400 font-semibold">Gestión de Proveedores</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Cabecera Superior Unificada */}
+        <AdminHeader
+          category="Compras & Abastecimiento"
+          pageName="Gestión de Proveedores"
+          title="Gestión de Proveedores"
+        />
 
         <div className="p-6 sm:p-8 space-y-6 flex-1 max-w-7xl w-full mx-auto">
-          {/* Encabezado Principal + Botón Registrar Nuevo Proveedor + Métricas */}
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5 bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl">
-            <div className="space-y-1">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-semibold border border-cyan-500/30 mb-1">
-                Padrón Comercial y Abastecimiento
-              </span>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                Gestión de Proveedores
-              </h1>
-              <p className="text-slate-400 text-xs sm:text-sm">
-                Empadrona nuevos proveedores, actualiza sus datos fiscales o de contacto y audita su estado operativo.
-              </p>
+          {/* Cabecera Operativa con Botón de Creación */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-white tracking-tight">Directorio de Proveedores</h2>
             </div>
-
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-              
-              <button
-                type="button"
-                onClick={handleAbrirNuevo}
-                className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
-              >
-                <svg className="w-5 h-5 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M12 4v16m8-8H4" />
-                </svg>
-                <span>Registrar Nuevo Proveedor</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleAbrirNuevo}
+              className="px-4 py-2.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <svg className="w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+              </svg>
+              <span>Registrar Nuevo Proveedor</span>
+            </button>
           </div>
-
           {/* Alertas de Éxito y Error */}
           <AnimatePresence>
             {successMsg && (

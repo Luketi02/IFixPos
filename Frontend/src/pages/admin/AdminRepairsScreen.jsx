@@ -3,9 +3,8 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
-import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import { resolverUrlImagen } from '../../utils/imagenes';
-import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -212,31 +211,13 @@ export default function AdminRepairsScreen() {
       {/* Contenedor Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto relative">
         
-        {/* Header Superior Cyber-Tech */}
-        <header className="border-b border-slate-800 bg-[#1E293B]/85 backdrop-blur-md sticky top-0 z-30 shadow-md shadow-slate-950/20">
-          <div className="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-            
-            {/* Identidad y Título */}
-            <div className="flex items-center gap-3">
-              <img
-                src={logoEmpresa}
-                alt="Logo IFixPos"
-                className="w-10 h-10 object-contain drop-shadow-[0_2px_10px_rgba(6,182,212,0.4)]"
-              />
-              <div>
-                <span className="font-extrabold text-lg tracking-tight text-white">
-                  IFix<span className="text-[#06B6D4]">Pos</span>
-                </span>
-                <span className="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 uppercase font-mono tracking-widest hidden sm:inline-block">
-                  Control de Taller
-                </span>
-              </div>
-            </div>
+        {/* Cabecera Superior Unificada Cyber-Tech */}
+        <AdminHeader
+          category="Taller & Reparaciones"
+          pageName="Gestión de Reparaciones"
+          title="Gestión de Reparaciones"
+        />
 
-            {/* Menú de Perfil */}
-            <UserProfileDropdown />
-          </div>
-        </header>
 
         {/* Notificaciones y Alertas Flotantes */}
         <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none">
@@ -282,49 +263,36 @@ export default function AdminRepairsScreen() {
 
         {/* Contenido Central */}
         <main className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto w-full">
-          
-          {/* Cabecera del Panel */}
-          <section className="bg-gradient-to-r from-[#1E293B] via-slate-800/80 to-[#1E293B] p-6 rounded-2xl border border-slate-700/80 shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-80 h-full bg-gradient-to-l from-cyan-500/5 via-violet-500/5 to-transparent pointer-events-none" />
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-3">
-                  <span>Gestión de Reparaciones</span>
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 font-mono font-medium">
-                    {reparaciones.length} {reparaciones.length === 1 ? 'orden' : 'órdenes'}
-                  </span>
-                </h1>
-                <p className="text-slate-400 text-sm mt-1">
-                  Monitoreo operativo de equipos, trazabilidad inmutable de bitácoras y valoraciones de servicio.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={cargarReparaciones}
-                  disabled={cargando}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-semibold flex items-center gap-2 transition-all disabled:opacity-50"
-                  title="Refrescar listado"
-                >
-                  <svg
-                    className={`w-4 h-4 text-cyan-400 ${cargando ? 'animate-spin' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                  <span>Actualizar</span>
-                </button>
-              </div>
+          {/* Cabecera Operativa con Botón de Actualizar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-white tracking-tight">Órdenes de Servicio Técnico</h2>
             </div>
-          </section>
+            <button
+              type="button"
+              onClick={cargarReparaciones}
+              disabled={cargando}
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-semibold flex items-center gap-2 transition-all disabled:opacity-50 cursor-pointer shrink-0"
+              title="Refrescar listado"
+            >
+              <svg
+                className={`w-4 h-4 text-cyan-400 ${cargando ? 'animate-spin' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+              <span>Actualizar Listado</span>
+            </button>
+          </div>
+          
+          
 
           {/* Bloque de Filtros Multicriterio Dinámicos */}
           <section className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-4">
