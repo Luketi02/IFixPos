@@ -563,6 +563,7 @@ class RealizarVentaPresencialInputSerializer(serializers.Serializer):
     """
     CU-67: Aduana Comercial para registrar una venta física en mostrador.
     Permite asociar un cliente registrado o delegar al perfil genérico Consumidor Final.
+    Permite opcionalmente liquidar y cobrar la venta en una única transacción atómica.
     """
     id_cliente = serializers.IntegerField(
         required=False,
@@ -579,6 +580,11 @@ class RealizarVentaPresencialInputSerializer(serializers.Serializer):
             'empty': 'La lista de productos no puede estar vacía.'
         }
     )
+    # Campos opcionales para Cobro Atómico en Mostrador (POS)
+    medio_pago = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    monto_pagado = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    numero_operacion = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    detalle = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
 # ==============================================================================
@@ -797,6 +803,7 @@ class EstadoVentaOutputSerializer(serializers.Serializer):
     estado_venta = serializers.CharField(read_only=True)
     codigo_sec = serializers.CharField(read_only=True, allow_null=True)
     pagada = serializers.BooleanField(read_only=True)
+    ruta_comprobante = serializers.CharField(read_only=True, required=False, allow_null=True)
 
 
 class CostoEnvioTarifasOutputSerializer(serializers.Serializer):

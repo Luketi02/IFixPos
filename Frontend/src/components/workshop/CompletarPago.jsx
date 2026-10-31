@@ -17,7 +17,10 @@ export default function CompletarPago({ onAlerta }) {
   const [fechaDesde, setFechaDesde] = useState('');
   const [fechaHasta, setFechaHasta] = useState('');
   const [medioPagoFiltro, setMedioPagoFiltro] = useState('');
-  const [mostrarFiltrosAvanzados, setMostrarFiltrosAvanzados] = useState(false);
+
+  // Catálogo dinámico de medios de pago en base de datos (CU-82 / CU-18)
+  const [catalogoMediosPago, setCatalogoMediosPago] = useState([]);
+  const [cargandoMedios, setCargandoMedios] = useState(false);
 
   // Datos recuperados de transacciones
   const [transacciones, setTransacciones] = useState([]);
@@ -61,6 +64,29 @@ export default function CompletarPago({ onAlerta }) {
   );
 
   // ============================================================================
+  // CARGA DINÁMICA DE MEDIOS DE PAGO ACTIVOS (DESDE BACKEND)
+  // ============================================================================
+  useEffect(() => {
+    const cargarMedios = async () => {
+      if (!token) return;
+      setCargandoMedios(true);
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/sales/medios-pago/`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const items = Array.isArray(res.data) ? res.data : [];
+        const activos = items.filter((m) => m.estado !== false && m.estado_activo !== false);
+        setCatalogoMediosPago(activos);
+      } catch (err) {
+        console.warn('No se pudo cargar el catálogo de medios de pago:', err);
+      } finally {
+        setCargandoMedios(false);
+      }
+    };
+    cargarMedios();
+  }, [token]);
+
+  // ============================================================================
   // MOTOR DE CONSULTA: FILTRAR COBROS Y PAGOS (CU-38)
   // ============================================================================
   const cargarTransacciones = useCallback(
@@ -80,10 +106,10 @@ export default function CompletarPago({ onAlerta }) {
           medio_pago:
             filtrosOverride.medio_pago !== undefined
               ? filtrosOverride.medio_pago
-              : medioPagoFiltro.trim() || undefined
+              : (medioPagoFiltro.trim() || undefined)
         };
 
-        // Doble validación en React: fechas coherentes
+        // Doble validación en React: coherencia cronológica de fechas
         if (queryParams.fecha_desde && queryParams.fecha_hasta && queryParams.fecha_desde > queryParams.fecha_hasta) {
           dispararMensaje('error', 'La fecha de inicio (desde) no puede ser posterior a la fecha hasta.');
           setCargandoLista(false);
@@ -105,7 +131,7 @@ export default function CompletarPago({ onAlerta }) {
 
         if (!data.resultados || data.resultados.length === 0) {
           if (busquedaExacta.trim()) {
-            dispararMensaje('warning', 'No se encontraron operaciones pendientes para los criterios ingresados.');
+            dispararMensaje('warning', 'No se encontraron operaciones para los criterios ingresados.');
           }
         }
       } catch (error) {
@@ -130,7 +156,24 @@ export default function CompletarPago({ onAlerta }) {
     cargarTransacciones();
   };
 
-  // Atajo para Arqueo de Caja del Día (Fecha hoy + Estado Pendiente)
+  // Manejador inteligente de cambio de Medio de Pago
+  const handleCambioMedioPago = (nuevoMedio) => {
+    setMedioPagoFiltro(nuevoMedio);
+    let nuevoEstado = estadoFiltro;
+    // Si se selecciona un medio de pago específico pero el estado estaba en PENDIENTE,
+    // transicionar automáticamente a PAGADO ya que las cuentas pendientes aún no poseen
+    // un medio de pago liquidado en caja.
+    if (nuevoMedio && estadoFiltro === 'PENDIENTE') {
+      nuevoEstado = 'PAGADO';
+      setEstadoFiltro('PAGADO');
+    }
+    cargarTransacciones({
+      medio_pago: nuevoMedio.trim() || undefined,
+      estado_pago: nuevoEstado
+    });
+  };
+
+  // Atajos rápidos temporales
   const handleArqueoHoy = () => {
     const hoyStr = new Date().toISOString().split('T')[0];
     setFechaDesde(hoyStr);
@@ -145,6 +188,27 @@ export default function CompletarPago({ onAlerta }) {
       busqueda_exacta: undefined,
       medio_pago: undefined
     });
+  };
+
+  const handleUltimos7Dias = () => {
+    const hoy = new Date();
+    const hace7 = new Date();
+    hace7.setDate(hace7.getDate() - 7);
+    const desdeStr = hace7.toISOString().split('T')[0];
+    const hastaStr = hoy.toISOString().split('T')[0];
+    setFechaDesde(desdeStr);
+    setFechaHasta(hastaStr);
+    cargarTransacciones({ fecha_desde: desdeStr, fecha_hasta: hastaStr });
+  };
+
+  const handleMesActual = () => {
+    const hoy = new Date();
+    const primeroMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const desdeStr = primeroMes.toISOString().split('T')[0];
+    const hastaStr = hoy.toISOString().split('T')[0];
+    setFechaDesde(desdeStr);
+    setFechaHasta(hastaStr);
+    cargarTransacciones({ fecha_desde: desdeStr, fecha_hasta: hastaStr });
   };
 
   const handleLimpiarFiltros = () => {
@@ -188,7 +252,9 @@ export default function CompletarPago({ onAlerta }) {
       setDesgloseOperacion(data);
       // Precargar datos del formulario con el total a cobrar exacto
       setMontoAbonado(data.total_a_cobrar || String(item.monto) || '0.00');
-      setMedioPago('Efectivo');
+      // Seleccionar primer medio activo disponible o 'Efectivo'
+      const primerMedio = catalogoMediosPago[0]?.nombre_medio_pago || 'Efectivo';
+      setMedioPago(primerMedio);
       setNumeroOperacion('');
       setDetalle('');
     } catch (error) {
@@ -219,64 +285,79 @@ export default function CompletarPago({ onAlerta }) {
   };
 
   // ============================================================================
-  // FASE 3: CONFIRMACIÓN DEL COBRO EN CAJA
+  // CONFIRMACIÓN DEL COBRO Y TRANSICIÓN DE ESTADO (CU-21 & CU-20)
   // ============================================================================
   const esTransferencia = useMemo(() => {
-    return (medioPago || '').toUpperCase() === 'TRANSFERENCIA';
+    const m = (medioPago || '').toLowerCase();
+    return m.includes('transf') || m.includes('bancari') || m.includes('cbu');
   }, [medioPago]);
 
   const totalAdeudadoNum = useMemo(() => {
-    return parseFloat(desgloseOperacion?.total_a_cobrar || operacionSeleccionada?.monto || 0);
+    if (!desgloseOperacion?.total_a_cobrar) {
+      return parseFloat(operacionSeleccionada?.monto || 0);
+    }
+    return parseFloat(desgloseOperacion.total_a_cobrar || 0);
   }, [desgloseOperacion, operacionSeleccionada]);
 
   const esFormularioValido = useMemo(() => {
-    if (!operacionSeleccionada) return false;
     const monto = parseFloat(montoAbonado);
-    if (!monto || monto <= 0) return false;
-    // Validación estricta del monto adeudado (Paso 4)
+    if (isNaN(monto) || monto <= 0) return false;
+    // El monto debe cubrir exactamente el total a cobrar
     if (Math.abs(monto - totalAdeudadoNum) > 0.01) return false;
+    // Si es transferencia, el número de operación es obligatorio
     if (esTransferencia && !numeroOperacion.trim()) return false;
     return true;
-  }, [operacionSeleccionada, montoAbonado, totalAdeudadoNum, esTransferencia, numeroOperacion]);
+  }, [montoAbonado, totalAdeudadoNum, esTransferencia, numeroOperacion]);
 
   const handleConfirmarCobro = async (e) => {
-    e.preventDefault();
-    if (!esFormularioValido || procesandoPago) return;
+    if (e && e.preventDefault) e.preventDefault();
+
+    if (!esFormularioValido) {
+      if (esTransferencia && !numeroOperacion.trim()) {
+        dispararMensaje('error', 'El número de operación es obligatorio para cobros por transferencia bancaria.');
+        return;
+      }
+      dispararMensaje('error', 'Por favor verifica el monto ingresado. Debe cubrir exactamente el total a cobrar.');
+      return;
+    }
 
     setProcesandoPago(true);
-
     try {
-      const identificador = operacionSeleccionada.codigo_seguridad || operacionSeleccionada.cliente?.email;
       const payload = {
-        identificador,
-        medio_pago: medioPago.toUpperCase(),
-        monto_pagado: parseFloat(montoAbonado).toFixed(2),
-        numero_operacion: esTransferencia ? numeroOperacion.trim() : null,
+        id_operacion: operacionSeleccionada.id_operacion,
+        tipo_operacion: operacionSeleccionada.tipo_operacion,
+        monto_pagado: parseFloat(montoAbonado),
+        medio_pago: medioPago,
+        cod_operacion: numeroOperacion.trim() || undefined,
         detalle: detalle.trim() || undefined
       };
 
       const response = await axios.post(`${API_BASE_URL}/api/sales/pagos/completar/`, payload, {
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
       });
 
       const data = response.data;
+      dispararMensaje('success', data.mensaje || '¡Cobro registrado con éxito! Factura generada.');
+
+      // Transición al ticket de éxito con comprobante
       setTicketExito({
-        montoPagado: data.monto_pagado || montoAbonado,
-        rutaComprobante: data.ruta_comprobante,
-        medioPago,
-        cliente: operacionSeleccionada.cliente?.nombre || 'Cliente',
+        cliente: operacionSeleccionada.cliente?.nombre || 'Consumidor',
+        montoPagado: montoAbonado,
+        medioPago: medioPago,
         tipoOperacion: operacionSeleccionada.tipo_operacion,
-        codigoSeguridad: operacionSeleccionada.codigo_seguridad
+        codigoSeguridad: operacionSeleccionada.codigo_seguridad,
+        rutaComprobante: data.pago?.ruta_comprobante || ''
       });
-      dispararMensaje('success', '¡Pago registrado exitosamente en caja!');
-      // Refrescar listado en segundo plano
-      cargarTransacciones();
     } catch (error) {
       console.error('Error al registrar cobro:', error);
-      const msg = error.response?.data?.error || 'Error al procesar el cobro. Verifica los datos ingresados.';
+      const msg =
+        error.response?.data?.error ||
+        error.response?.data?.detail ||
+        error.response?.data?.mensaje ||
+        'Error al procesar el cobro.';
       dispararMensaje('error', typeof msg === 'object' ? JSON.stringify(msg) : msg);
     } finally {
       setProcesandoPago(false);
@@ -284,7 +365,10 @@ export default function CompletarPago({ onAlerta }) {
   };
 
   const handleDescargarFactura = () => {
-    if (!ticketExito?.rutaComprobante) return;
+    if (!ticketExito?.rutaComprobante) {
+      dispararMensaje('warning', 'La factura aún no se encuentra disponible para descarga.');
+      return;
+    }
     const url = ticketExito.rutaComprobante.startsWith('http')
       ? ticketExito.rutaComprobante
       : `${API_BASE_URL}${ticketExito.rutaComprobante}`;
@@ -293,7 +377,7 @@ export default function CompletarPago({ onAlerta }) {
 
   return (
     <div className="space-y-6">
-      {/* Alerta local flotante (Cyber-Tech suave con auto-descarte) */}
+      {/* Alerta flotante local */}
       <AnimatePresence>
         {alertaLocal && (
           <motion.div
@@ -308,15 +392,11 @@ export default function CompletarPago({ onAlerta }) {
                 : 'bg-rose-950/90 border-rose-500/50 text-rose-200'
             }`}
           >
-            <div className="flex items-center gap-3">
-              <span className="text-xl">
-                {alertaLocal.tipo === 'success' ? '⚡' : alertaLocal.tipo === 'warning' ? '🔔' : '⚠️'}
-              </span>
-              <span>{alertaLocal.mensaje}</span>
-            </div>
+            <span>{alertaLocal.mensaje}</span>
             <button
+              type="button"
               onClick={() => setAlertaLocal(null)}
-              className="text-xs px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
+              className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
             >
               Cerrar
             </button>
@@ -324,7 +404,7 @@ export default function CompletarPago({ onAlerta }) {
         )}
       </AnimatePresence>
 
-      {/* Cabecera Principal (Cumpliendo Regla 9: Cero etiquetas CU-X) */}
+      {/* Cabecera Principal */}
       <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-cyan-500/10 via-purple-500/5 to-transparent rounded-full blur-3xl pointer-events-none" />
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -336,8 +416,7 @@ export default function CompletarPago({ onAlerta }) {
               <span>💳</span> Completar Pago de Operación
             </h1>
             <p className="text-slate-300 text-xs sm:text-sm mt-1 max-w-2xl">
-              Localiza órdenes de servicio y ventas mediante filtros contables precisos, asienta el ingreso en caja y
-              emite automáticamente el comprobante fiscal en formato PDF.
+              Localiza órdenes de servicio y ventas mediante filtros contables precisos por estado, medio de pago o fechas, asienta el ingreso en caja y emite automáticamente el comprobante fiscal.
             </p>
           </div>
 
@@ -490,38 +569,30 @@ export default function CompletarPago({ onAlerta }) {
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
                       {operacionSeleccionada.tipo_operacion}
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                      {operacionSeleccionada.estado_pago}
+                    <span className="text-xs font-mono text-slate-400">
+                      {operacionSeleccionada.codigo_seguridad && `Código: ${operacionSeleccionada.codigo_seguridad}`}
                     </span>
-                    {operacionSeleccionada.codigo_seguridad && (
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-mono text-slate-300 bg-slate-800 border border-slate-700">
-                        Código: {operacionSeleccionada.codigo_seguridad}
-                      </span>
-                    )}
                   </div>
-                  <h3 className="text-xl font-bold text-white mt-2">
-                    Titular:{' '}
-                    <span className="text-slate-200">
-                      {operacionSeleccionada.cliente?.nombre || 'Consumidor'}
-                    </span>
+                  <h3 className="text-xl font-bold text-white mt-1">
+                    Cobro a: {operacionSeleccionada.cliente?.nombre || 'Consumidor Final'}
                   </h3>
                   <p className="text-xs text-slate-400 font-mono mt-0.5">
-                    {operacionSeleccionada.cliente?.email}{' '}
-                    {operacionSeleccionada.cliente?.dni ? `• DNI: ${operacionSeleccionada.cliente?.dni}` : ''}
+                    {operacionSeleccionada.cliente?.email || 'Sin correo asociado'}
+                    {operacionSeleccionada.cliente?.dni && ` • DNI: ${operacionSeleccionada.cliente.dni}`}
                   </p>
                 </div>
 
-                <div className="bg-[#0F172A] border border-cyan-500/30 rounded-2xl p-4 sm:px-6 text-right w-full md:w-auto">
-                  <span className="text-[11px] font-mono uppercase text-slate-400 font-bold block">
-                    TOTAL A COBRAR
+                <div className="bg-[#0F172A] border border-cyan-500/40 rounded-2xl px-6 py-3 text-right">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block font-semibold">
+                    Total a Liquidar
                   </span>
-                  <span className="text-3xl font-black text-[#06B6D4] font-mono tracking-tight">
-                    ${desgloseOperacion?.total_a_cobrar || operacionSeleccionada.monto}
+                  <span className="text-3xl font-black text-[#06B6D4] font-mono">
+                    ${totalAdeudadoNum.toFixed(2)}
                   </span>
                 </div>
               </div>
 
-              {/* Desglose de Renglones / Insumos */}
+              {/* Renglones de la Operación */}
               {cargandoDesglose ? (
                 <div className="py-8 text-center text-slate-400 flex items-center justify-center gap-3">
                   <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
@@ -564,19 +635,29 @@ export default function CompletarPago({ onAlerta }) {
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Medio de Pago */}
+                  {/* Medio de Pago dinámico */}
                   <div>
                     <label className="block text-xs font-mono uppercase text-slate-300 font-bold mb-1.5">
-                      Medio de Pago
+                      Medio de Pago <span className="text-cyan-400">*</span>
                     </label>
                     <select
                       value={medioPago}
                       onChange={(e) => setMedioPago(e.target.value)}
                       className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#06B6D4] focus:ring-1 focus:ring-[#06B6D4]"
                     >
-                      <option value="Efectivo">Efectivo</option>
-                      <option value="Transferencia">Transferencia Virtual</option>
-                      <option value="Tarjeta">Tarjeta de Débito / Crédito</option>
+                      {catalogoMediosPago.length > 0 ? (
+                        catalogoMediosPago.map((m) => (
+                          <option key={m.id_mediopago || m.nombre_medio_pago} value={m.nombre_medio_pago}>
+                            {m.nombre_medio_pago} {Number(m.recargo) > 0 ? `(+${m.recargo}%)` : ''}
+                          </option>
+                        ))
+                      ) : (
+                        <>
+                          <option value="Efectivo">Efectivo</option>
+                          <option value="Transferencia">Transferencia Virtual</option>
+                          <option value="Tarjeta">Tarjeta de Débito / Crédito</option>
+                        </>
+                      )}
                     </select>
                   </div>
 
@@ -676,137 +757,199 @@ export default function CompletarPago({ onAlerta }) {
           /* VISTA 3: FILTRAR Y LOCALIZAR OPERACIONES (CU-38)                   */
           /* ================================================================== */
           <div className="space-y-6">
-            {/* Panel de Filtros Multicriterio */}
+            {/* Panel de Filtros Multicriterio con Medio de Pago integrado */}
             <motion.div
               layout
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 shadow-xl space-y-4"
             >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">🔍</span>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                    Parámetros de Búsqueda y Filtros Contables
+                  </h3>
+                </div>
+
+                {/* Atajos Rápidos Temporales */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-mono text-slate-400 mr-1">Rango rápido:</span>
+                  <button
+                    type="button"
+                    onClick={handleArqueoHoy}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 transition-colors cursor-pointer"
+                  >
+                    Hoy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUltimos7Dias}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    7 días
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleMesActual}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    Mes actual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLimpiarFiltros}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30 transition-colors cursor-pointer ml-1"
+                    title="Restablecer todos los filtros"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+
               <form onSubmit={handleBuscar} className="space-y-4">
-                {/* Fila 1: Búsqueda exacta y selector de estado */}
+                {/* Cuadrícula Principal: Búsqueda exacta, Estado y MEDIO DE PAGO */}
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                  <div className="md:col-span-8 relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-lg">
-                      🔍
-                    </span>
-                    <input
-                      type="text"
-                      value={busquedaExacta}
-                      onChange={(e) => setBusquedaExacta(e.target.value)}
-                      placeholder="Buscar por Código de Seguridad o Correo del Cliente..."
-                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl pl-12 pr-4 py-3.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 transition-all font-sans"
-                    />
+                  {/* Búsqueda Exacta */}
+                  <div className="md:col-span-5 relative">
+                    <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
+                      Búsqueda Exacta
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                        🔎
+                      </span>
+                      <input
+                        type="text"
+                        value={busquedaExacta}
+                        onChange={(e) => setBusquedaExacta(e.target.value)}
+                        placeholder="Código de Seguridad o Correo del Cliente..."
+                        className="w-full bg-[#0F172A] border border-slate-700 rounded-xl pl-10 pr-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#8B5CF6] focus:ring-1 focus:ring-[#8B5CF6]/30 transition-all font-sans"
+                      />
+                    </div>
                   </div>
 
-                  <div className="md:col-span-4">
+                  {/* Estado del Pago */}
+                  <div className="md:col-span-3">
+                    <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
+                      Estado del Pago
+                    </label>
                     <select
                       value={estadoFiltro}
-                      onChange={(e) => setEstadoFiltro(e.target.value)}
-                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-3.5 text-sm text-white focus:outline-none focus:border-[#8B5CF6] font-sans"
+                      onChange={(e) => {
+                        const nuevo = e.target.value;
+                        setEstadoFiltro(nuevo);
+                        cargarTransacciones({ estado_pago: nuevo });
+                      }}
+                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#8B5CF6] font-sans"
                     >
-                      <option value="PENDIENTE">Estado: Pendiente (Por Cobrar)</option>
-                      <option value="PAGADO">Estado: Pagado (Histórico)</option>
-                      <option value="ANULADO">Estado: Anulado / Cancelado</option>
+                      <option value="PENDIENTE">Pendientes (Por Cobrar)</option>
+                      <option value="PAGADO">Pagados (Liquidados)</option>
+                      <option value="ANULADO">Anulados / Cancelados</option>
                       <option value="TODOS">Todos los Estados</option>
+                    </select>
+                  </div>
+
+                  {/* MEDIO DE PAGO (Nuevo filtro integrado de primer orden) */}
+                  <div className="md:col-span-4">
+                    <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1 flex items-center justify-between">
+                      <span>Medio de Pago</span>
+                      {cargandoMedios && (
+                        <span className="text-[10px] text-cyan-400 lowercase">cargando...</span>
+                      )}
+                    </label>
+                    <select
+                      value={medioPagoFiltro}
+                      onChange={(e) => handleCambioMedioPago(e.target.value)}
+                      className={`w-full bg-[#0F172A] border rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none font-sans transition-all ${
+                        medioPagoFiltro
+                          ? 'border-purple-500 ring-1 ring-purple-500/30'
+                          : 'border-slate-700 focus:border-[#8B5CF6]'
+                      }`}
+                    >
+                      <option value="">Todos los Medios de Pago</option>
+                      {catalogoMediosPago.length > 0 ? (
+                        catalogoMediosPago.map((m) => (
+                          <option key={m.id_mediopago || m.nombre_medio_pago} value={m.nombre_medio_pago}>
+                            {m.nombre_medio_pago}
+                          </option>
+                        ))
+                      ) : (
+                        <>
+                          <option value="Efectivo">Efectivo</option>
+                          <option value="Transferencia">Transferencia Virtual</option>
+                          <option value="Tarjeta">Tarjeta de Débito / Crédito</option>
+                          <option value="Mercado Pago">Mercado Pago / QR</option>
+                        </>
+                      )}
                     </select>
                   </div>
                 </div>
 
-                {/* Toggle de Filtros Avanzados (Fechas y Medios) */}
-                <div className="flex items-center justify-between pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setMostrarFiltrosAvanzados(!mostrarFiltrosAvanzados)}
-                    className="text-xs font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <span>{mostrarFiltrosAvanzados ? '▲ Ocultar filtros avanzados' : '▼ Filtros de fecha y método de pago'}</span>
-                  </button>
+                {/* Fila 2: Filtros Temporales (Fecha Desde / Hasta) y Acción */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-slate-800 items-end">
+                  <div className="sm:col-span-4">
+                    <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
+                      Fecha Desde
+                    </label>
+                    <input
+                      type="date"
+                      value={fechaDesde}
+                      onChange={(e) => setFechaDesde(e.target.value)}
+                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
+                    />
+                  </div>
 
-                  {(fechaDesde || fechaHasta || medioPagoFiltro || busquedaExacta) && (
+                  <div className="sm:col-span-4">
+                    <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
+                      Fecha Hasta
+                    </label>
+                    <input
+                      type="date"
+                      value={fechaHasta}
+                      onChange={(e) => setFechaHasta(e.target.value)}
+                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-4 flex items-center justify-end gap-2">
                     <button
-                      type="button"
-                      onClick={handleLimpiarFiltros}
-                      className="text-xs text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      type="submit"
+                      disabled={cargandoLista}
+                      className="w-full py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-50 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer font-mono"
                     >
-                      Limpiar filtros
+                      {cargandoLista ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Filtrando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>⚡</span>
+                          <span>Aplicar Filtros</span>
+                        </>
+                      )}
                     </button>
-                  )}
+                  </div>
                 </div>
 
-                {/* Filtros Temporales y de Método de Cobro */}
-                <AnimatePresence>
-                  {mostrarFiltrosAvanzados && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-800"
-                    >
-                      <div>
-                        <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                          Fecha Desde
-                        </label>
-                        <input
-                          type="date"
-                          value={fechaDesde}
-                          onChange={(e) => setFechaDesde(e.target.value)}
-                          className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                          Fecha Hasta
-                        </label>
-                        <input
-                          type="date"
-                          value={fechaHasta}
-                          onChange={(e) => setFechaHasta(e.target.value)}
-                          className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                          Método de Pago
-                        </label>
-                        <select
-                          value={medioPagoFiltro}
-                          onChange={(e) => setMedioPagoFiltro(e.target.value)}
-                          className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-sans"
-                        >
-                          <option value="">Cualquier método</option>
-                          <option value="Efectivo">Efectivo</option>
-                          <option value="Transferencia">Transferencia</option>
-                          <option value="Tarjeta">Tarjeta</option>
-                        </select>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Botón de Ejecución del Filtrado */}
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="submit"
-                    disabled={cargandoLista}
-                    className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-50 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
-                  >
-                    {cargandoLista ? (
-                      <>
-                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        <span>Filtrando...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>⚡</span>
-                        <span>Aplicar Filtros</span>
-                      </>
-                    )}
-                  </button>
-                </div>
+                {/* Píldora de estado de filtro de medio de pago activo */}
+                {medioPagoFiltro && (
+                  <div className="pt-2 flex items-center gap-2">
+                    <span className="text-xs font-mono text-slate-400">Filtro de canal activo:</span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                      <span>💳 {medioPagoFiltro}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleCambioMedioPago('')}
+                        className="hover:text-white transition-colors cursor-pointer ml-1"
+                        title="Quitar filtro de medio de pago"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  </div>
+                )}
               </form>
             </motion.div>
 
@@ -834,7 +977,7 @@ export default function CompletarPago({ onAlerta }) {
                   <h4 className="text-base font-bold text-white">No se encontraron resultados</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
                     No existen operaciones comerciales que coincidan con los parámetros de búsqueda provistos.
-                    Prueba modificando el rango de fechas o el estado del pago.
+                    Prueba modificando el rango de fechas, el estado del pago o el medio de pago.
                   </p>
                   <button
                     type="button"
@@ -849,6 +992,7 @@ export default function CompletarPago({ onAlerta }) {
                   {transacciones.map((t, idx) => {
                     const esPendiente = t.estado_pago === 'PENDIENTE';
                     const esPagado = t.estado_pago === 'PAGADO';
+                    const nomMedio = (t.medio_pago || '').toLowerCase();
                     return (
                       <motion.div
                         key={idx}
@@ -887,9 +1031,30 @@ export default function CompletarPago({ onAlerta }) {
                               </span>
                             )}
 
-                            {t.medio_pago && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-purple-300 bg-purple-500/10 border border-purple-500/30">
-                                {t.medio_pago}
+                            {/* Badge Interactivo de Medio de Pago */}
+                            {t.medio_pago ? (
+                              <button
+                                type="button"
+                                onClick={() => handleCambioMedioPago(t.medio_pago)}
+                                title={`Filtrar operaciones por ${t.medio_pago}`}
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border transition-all cursor-pointer flex items-center gap-1 ${
+                                  nomMedio.includes('efectivo')
+                                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/20'
+                                    : nomMedio.includes('transf')
+                                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/20'
+                                    : nomMedio.includes('tarjet')
+                                    ? 'bg-violet-500/10 text-violet-300 border-violet-500/40 hover:bg-violet-500/20'
+                                    : nomMedio.includes('mercado') || nomMedio.includes('qr')
+                                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/40 hover:bg-amber-500/20'
+                                    : 'bg-purple-500/10 text-purple-300 border-purple-500/40 hover:bg-purple-500/20'
+                                }`}
+                              >
+                                <span>💳</span>
+                                <span>{t.medio_pago}</span>
+                              </button>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-slate-800/80 border border-slate-700">
+                                Sin liquidar
                               </span>
                             )}
                           </div>
@@ -937,7 +1102,7 @@ export default function CompletarPago({ onAlerta }) {
                             <button
                               type="button"
                               onClick={() => handleSeleccionarOperacion(t)}
-                              className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                              className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer font-mono"
                             >
                               <span>💳</span>
                               <span>Cobrar en Caja</span>
@@ -951,7 +1116,7 @@ export default function CompletarPago({ onAlerta }) {
                                   : `${API_BASE_URL}${t.ruta_comprobante}`;
                                 window.open(url, '_blank', 'noopener,noreferrer');
                               }}
-                              className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-700 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer"
+                              className="px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-700 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer font-mono"
                             >
                               <span>📄</span>
                               <span>Factura PDF</span>

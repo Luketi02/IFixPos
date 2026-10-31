@@ -109,3 +109,59 @@ input[type="number"] {
   appearance: textfield;
 }
 
+
+
+/* ==============================================================================
+   REGLAS GLOBALES DE IMPRESIÓN Y EXPORTACIÓN A PDF (@media print)
+   Garantiza que la impresión del sistema (Ctrl+P / window.print()) no salga en blanco
+   y renderice un documento ejecutivo limpio con fondo blanco y tipografía de alto contraste.
+   ============================================================================== */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 15mm 15mm 15mm;
+  }
+
+  html, body, #root, .app-shell, [data-print-container] {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Ocultar elementos de navegación y de control de interfaz */
+  aside, nav, header, .no-print, button, input, select {
+    display: none !important;
+  }
+
+  /* Eliminar scrollbars y overflow hidden de contenedores */
+  div {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Inversión estética para papel: fondos claros y texto oscuro */
+  .bg-\[\#0F172A\], .bg-\[\#1E293B\] {
+    background: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+
+  .text-white, .text-slate-100, .text-slate-200, .text-slate-300 {
+    color: #0f172a !important;
+  }
+
+  .text-slate-400, .text-slate-500 {
+    color: #475569 !important;
+  }
+
+  /* Evitar saltos de página dentro de tarjetas o tablas */
+  tr, .rounded-2xl, .rounded-xl, table {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}

@@ -44,7 +44,7 @@ def crear_o_reactivar_marca(
             marca_existente.save(update_fields=['estado_activo'])
 
             LogSistema.objects.create(
-                fecha_hora=timezone.now().time(),
+                fecha_hora=timezone.now(),
                 accion="Reactivación de Marca (CU-77)",
                 detalle=f"Reactivación de marca '{marca_existente.nombre}' (ID: {marca_existente.id_marca}) por {email_admin}.",
                 tipo="AUDITORIA_CATALOGO",
@@ -62,7 +62,7 @@ def crear_o_reactivar_marca(
     )
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Alta nueva de Marca (CU-77)",
         detalle=f"Alta nueva de marca '{nueva_marca.nombre}' (ID: {nueva_marca.id_marca}) por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -96,7 +96,7 @@ def cambiar_estado_marca(
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin)) if usuario_admin else 'Sistema'
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Cambio de Estado de Marca (CU-78)",
         detalle=f"Cambio de estado de la marca '{marca.nombre}' (ID: {marca.id_marca}) a {operacion} por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -147,7 +147,7 @@ def crear_o_reactivar_modelo(
             modelo_existente.save(update_fields=['estado_activo', 'id_tipo_dispositivo'])
 
             LogSistema.objects.create(
-                fecha_hora=timezone.now().time(),
+                fecha_hora=timezone.now(),
                 accion="Reactivación de Modelo (CU-79)",
                 detalle=f"Reactivación de modelo '{modelo_existente.nombre}' (ID: {modelo_existente.id_modelo}) para marca '{marca.nombre}' por {email_ejecutor}.",
                 tipo="AUDITORIA_CATALOGO",
@@ -167,7 +167,7 @@ def crear_o_reactivar_modelo(
     )
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Alta nueva de Modelo (CU-79)",
         detalle=f"Alta nueva de modelo '{nuevo_modelo.nombre}' (ID: {nuevo_modelo.id_modelo}) para marca '{marca.nombre}' por {email_ejecutor}.",
         tipo="AUDITORIA_CATALOGO",
@@ -201,7 +201,7 @@ def cambiar_estado_modelo(
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin)) if usuario_admin else 'Sistema'
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Cambio de Estado de Modelo (CU-80)",
         detalle=f"Cambio de estado del modelo '{modelo.nombre}' (ID: {modelo.id_modelo}) a {operacion} por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -329,7 +329,7 @@ def registrar_producto(
         # 5. Generar auditoría inmutable en LogSistema
         email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Registrar Producto (CU-12)",
             detalle=(
                 f"Alta del producto '{producto.nombre}' (ID: {producto.id_producto}) por {email_admin}. "
@@ -458,7 +458,7 @@ def modificar_producto(
     # 6. Auditoría inmutable en LogSistema
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Modificar Producto (CU-68)",
         detalle=(
             f"Modificación del producto '{producto.nombre}' (ID: {producto.id_producto}) por {email_admin}. "
@@ -494,7 +494,7 @@ def crear_tipo_dispositivo(*, usuario_admin: Any, nombre: str) -> TipoDispositiv
 
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Alta de Tipo de Dispositivo",
         detalle=f"Alta del tipo de dispositivo '{tipo_dispositivo.nombre}' (ID: {tipo_dispositivo.id_tipo_dispositivo}) por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -523,7 +523,7 @@ def cambiar_estado_tipo_dispositivo(*, usuario_admin: Any, id_tipo: int) -> Tipo
     operacion = "Restauración (Activo)" if tipo_dispositivo.estado_activo else "Soft Delete (Inactivo)"
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Cambio de Estado de Tipo de Dispositivo",
         detalle=f"Cambio de estado del tipo de dispositivo '{tipo_dispositivo.nombre}' (ID: {tipo_dispositivo.id_tipo_dispositivo}) a {operacion} por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -559,7 +559,7 @@ def crear_categoria_producto(
 
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Alta de Categoría de Producto (CU-29)",
         detalle=f"Alta de categoría '{categoria.nombre}' (ID: {categoria.id_categoria}) por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -593,7 +593,7 @@ def cambiar_estado_categoria_producto(
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Cambio de Estado de Categoría de Producto (CU-30)",
         detalle=f"Cambio de estado de categoría '{categoria.nombre}' (ID: {categoria.id_categoria}) a {operacion} por {email_admin}.",
         tipo="AUDITORIA_CATALOGO",
@@ -672,7 +672,7 @@ def crear_producto_desde_compra_directa(
 
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Alta de Producto por Compra Directa (CU-31)",
         detalle=(
             f"Se generó el producto '{producto.nombre}' (ID: {producto.id_producto}) "

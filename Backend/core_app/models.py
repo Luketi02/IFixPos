@@ -42,8 +42,8 @@ class LogSistema(models.Model):
         primary_key=True,
         help_text='Identificador único del evento de log.'
     )
-    fecha_hora = models.TimeField(
-        help_text='Sello de tiempo exacto del evento.'
+    fecha_hora = models.DateTimeField(
+        help_text='Sello de fecha y hora exacto del evento.'
     )
     accion = models.CharField(
         max_length=255,

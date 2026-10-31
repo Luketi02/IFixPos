@@ -641,7 +641,7 @@ class RealizarVentaPresencialApi(APIView):
         serializer.is_valid(raise_exception=True)
 
         try:
-            venta, warnings = crear_venta_presencial(
+            venta, warnings, ruta_pdf = crear_venta_presencial(
                 usuario_cajero=request.user,
                 datos_validados=serializer.validated_data
             )
@@ -649,6 +649,22 @@ class RealizarVentaPresencialApi(APIView):
             return Response(
                 {"detail": e.message_dict if hasattr(e, 'message_dict') else (e.messages if hasattr(e, 'messages') else str(e))},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if ruta_pdf:
+            return Response(
+                {
+                    "mensaje": "Venta presencial y cobro registrados exitosamente en mostrador.",
+                    "id_venta": venta.id_venta,
+                    "codigo_seguridad": venta.codigo_sec,
+                    "monto_total": str(venta.monto_subtotal),
+                    "estado_venta": venta.estado_venta,
+                    "cliente": venta.id_usuario.email if venta.id_usuario else "Consumidor Final",
+                    "advertencias_stock": warnings,
+                    "cobrada": True,
+                    "ruta_comprobante": ruta_pdf
+                },
+                status=status.HTTP_201_CREATED
             )
 
         return Response(
@@ -659,7 +675,8 @@ class RealizarVentaPresencialApi(APIView):
                 "monto_total": str(venta.monto_subtotal),
                 "estado_venta": venta.estado_venta,
                 "cliente": venta.id_usuario.email if venta.id_usuario else "Consumidor Final",
-                "advertencias_stock": warnings
+                "advertencias_stock": warnings,
+                "cobrada": False
             },
             status=status.HTTP_201_CREATED
         )
@@ -871,13 +888,15 @@ class MercadoPagoCrearPreferenciaApi(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Validar que la venta pertenezca al usuario o que sea admin
+        # Validar que la venta pertenezca al usuario o que sea operador de mostrador (admin o técnico)
         id_user_venta = getattr(venta.id_usuario, 'id_usuario', getattr(venta.id_usuario, 'pk', None))
         id_user_req = getattr(request.user, 'id_usuario', getattr(request.user, 'pk', None))
         rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
-        es_admin = (getattr(rol, 'codigo', '') or '').upper() == 'ADMIN'
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        es_operador = codigo_rol in ['ADMIN', 'TECNICO'] or nombre_rol in ['administrador', 'técnico', 'tecnico']
 
-        if id_user_venta != id_user_req and not es_admin:
+        if id_user_venta != id_user_req and not es_operador:
             return Response(
                 {"error": "No posee autorización para generar pagos sobre esta orden de compra."},
                 status=status.HTTP_403_FORBIDDEN
@@ -956,19 +975,27 @@ class ConsultarEstadoVentaApi(APIView):
         id_user_venta = getattr(venta.id_usuario, 'id_usuario', getattr(venta.id_usuario, 'pk', None))
         id_user_req = getattr(request.user, 'id_usuario', getattr(request.user, 'pk', None))
         rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
-        es_admin = (getattr(rol, 'codigo', '') or '').upper() == 'ADMIN'
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        es_operador = codigo_rol in ['ADMIN', 'TECNICO'] or nombre_rol in ['administrador', 'técnico', 'tecnico']
 
-        if id_user_venta != id_user_req and not es_admin:
+        if id_user_venta != id_user_req and not es_operador:
             return Response(
                 {"error": "No posee autorización para consultar esta venta."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        ultimo_pago = venta.pago_set.order_by('-id_pago').first() if hasattr(venta, 'pago_set') else None
+        ruta_comp = None
+        if ultimo_pago and ultimo_pago.ruta_comprobante:
+            ruta_comp = f"/media/{ultimo_pago.ruta_comprobante.lstrip('/')}"
+
         data = {
             "id_venta": venta.id_venta,
             "estado_venta": venta.estado_venta,
             "codigo_sec": venta.codigo_sec,
-            "pagada": venta.estado_venta == "PAGADA"
+            "pagada": venta.estado_venta == "PAGADA",
+            "ruta_comprobante": ruta_comp
         }
         output_serializer = EstadoVentaOutputSerializer(data)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
@@ -983,11 +1010,19 @@ class CancelarVentaVirtualApi(APIView):
 
     def post(self, request, id_venta: int):
         from sales_app.services import cancelar_venta_y_restituir_stock
+        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        es_operador = codigo_rol in ['ADMIN', 'TECNICO'] or nombre_rol in ['administrador', 'técnico', 'tecnico']
+
+        usuario_filtro = None if es_operador else request.user
+        motivo_str = "Cancelación en mostrador / cliente desiste de la compra" if es_operador else "Cancelación voluntaria por el cliente desde el modal de checkout"
+
         try:
             venta = cancelar_venta_y_restituir_stock(
                 id_venta=id_venta,
-                usuario=request.user,
-                motivo="Cancelación voluntaria por el cliente desde el modal de checkout"
+                usuario=usuario_filtro,
+                motivo=motivo_str
             )
             return Response(
                 {

@@ -33,11 +33,12 @@ export default function TechnicianModuleScreen({ forcedModule }) {
   }
 
   // Mapeo a activeMenu del sidebar
+  const esAdmin = (user?.rol || '').toLowerCase().includes('admin');
   const menuValueMap = {
     'nueva-reparacion': 'tech-repairs-new',
     'en-curso': 'tech-repairs-ongoing',
     'finalizadas': 'tech-repairs-finished',
-    'cobros': 'tech-cash-charges',
+    'cobros': esAdmin ? 'sales-charges' : 'tech-cash-charges',
     'entregar-dispositivo': 'tech-cash-deliver-device',
     'registrar-compra': 'tech-cash-purchase',
     'recepcionar-dispositivo': 'tech-cash-receive-device',

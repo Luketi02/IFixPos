@@ -95,7 +95,7 @@ def registrar_proveedor(
 
     # Paso 8: Generar log de auditoría
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Registrar Proveedor (CU-24)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) registró al nuevo "
@@ -224,7 +224,7 @@ def modificar_proveedor(
 
     # Paso 7: Generar log de auditoría
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Modificar Proveedor (CU-28)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) modificó al proveedor "
@@ -359,7 +359,7 @@ def generar_solicitud_cotizacion(
         )
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Generar Solicitud de Cotización (CU-14)",
         detalle=detalle_log[:1000],
         tipo="ADMINISTRACION",
@@ -484,7 +484,7 @@ def modificar_solicitud_cotizacion(
         )
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Modificar Solicitud de Cotización (CU-16)",
         detalle=detalle_log[:1000],
         tipo="ADMINISTRACION",
@@ -527,7 +527,7 @@ def eliminar_solicitud_cotizacion(
 
     # Paso 5: Asentar traza inmutable de auditoría
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Eliminar Solicitud de Cotización (CU-17)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) eliminó definitivamente "
@@ -609,7 +609,7 @@ def procesar_respuesta_cotizacion(
             solicitud.save()
 
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Declinar Solicitud de Cotización (CU-25)",
             detalle=(
                 f"El proveedor '{invitacion.cuit_prov.nombre_proveedor}' (CUIT: {invitacion.cuit_prov_id}) "
@@ -661,7 +661,7 @@ def procesar_respuesta_cotizacion(
         solicitud.save()
 
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Responder Solicitud de Cotización (CU-25)",
             detalle=(
                 f"El proveedor '{invitacion.cuit_prov.nombre_proveedor}' (CUIT: {invitacion.cuit_prov_id}) "
@@ -737,7 +737,7 @@ def evaluar_cotizacion(
     nombre_prov = prov.nombre_proveedor if prov else "Desconocido"
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Evaluar Cotización (CU-53)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) evaluó la "
@@ -1047,7 +1047,7 @@ def emitir_ordenes_compra(
 
     ids_str = ", ".join(f"#{o.id_orden}" for o in ordenes_creadas)
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Generar Orden de Compra (CU-54)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) emitió "
@@ -1253,7 +1253,7 @@ def recepcionar_orden_compra(
                     BitacoraReparacion.objects.create(
                         id_reparacion=rep,
                         id_usuario=usuario_admin,
-                        fecha_hora=timezone.now().time(),
+                        fecha_hora=timezone.now(),
                         estado_alcanzado=5,  # EN_REPARACION
                         comentario="Insumos recepcionados. Reparación reactivada automáticamente"
                     )
@@ -1294,7 +1294,7 @@ def recepcionar_orden_compra(
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Recepcionar Compra (CU-55)",
         detalle=(
             f"El admin {id_admin} ({email_admin}) recepcionó la orden #{orden.id_orden} "
@@ -1394,7 +1394,7 @@ def registrar_compra_directa(
         detalle_auditoria += f" Producto generado ID: {id_producto_generado} ({cantidad} unidades)."
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Registrar Compra Directa (CU-31)",
         detalle=detalle_auditoria[:1000],
         tipo="ADMINISTRACION",
@@ -1419,9 +1419,14 @@ def registrar_auditoria_filtro_ordenes_compra(
     total_resultados: int
 ) -> Optional[LogSistema]:
     """
-    CU-37: Registra la traza inmutable de auditoría en LogSistema sobre las consultas
-    y filtros realizados en el módulo de órdenes de compra.
+    CU-37: Registra la traza de auditoría en LogSistema sobre las consultas
+    y filtros realizados en el módulo de órdenes de compra, condicionado al flag
+    'log_operaciones_lectura' (desactivado por defecto).
     """
+    from core_app.selectors import obtener_configuracion_bool
+    if not obtener_configuracion_bool('log_operaciones_lectura'):
+        return None
+
     criterios_activos = {
         k: str(v) for k, v in (filtros or {}).items()
         if v is not None and str(v).strip() != ''
@@ -1436,7 +1441,7 @@ def registrar_auditoria_filtro_ordenes_compra(
         f"Criterios: [{resumen_criterios}]. Coincidencias: {total_resultados}."
     )
     return LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Filtrar Órdenes de Compra (CU-37)",
         detalle=detalle[:1000],
         tipo="AUDITORIA",

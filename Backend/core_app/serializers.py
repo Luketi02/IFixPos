@@ -247,12 +247,35 @@ class FiltrarLogsAuditoriaInputSerializer(serializers.Serializer):
     tabla_afectada = serializers.CharField(required=False, allow_blank=True, max_length=50)
     id_usuario = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     usuario_query = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    fecha_desde = serializers.DateField(required=False, allow_null=True)
+    fecha_hasta = serializers.DateField(required=False, allow_null=True)
+    hora_desde = serializers.TimeField(required=False, allow_null=True)
+    hora_hasta = serializers.TimeField(required=False, allow_null=True)
+    accion_tipo = serializers.CharField(required=False, allow_blank=True, max_length=50)
+
+    def validate(self, attrs):
+        fecha_desde = attrs.get('fecha_desde')
+        fecha_hasta = attrs.get('fecha_hasta')
+        if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
+            raise serializers.ValidationError(
+                "La fecha de inicio (Desde) no puede ser cronológicamente posterior a la fecha de fin (Hasta)."
+            )
+
+        hora_desde = attrs.get('hora_desde')
+        hora_hasta = attrs.get('hora_hasta')
+        if hora_desde and hora_hasta and hora_desde > hora_hasta:
+            raise serializers.ValidationError(
+                "La hora de inicio (Desde) no puede ser cronológicamente posterior a la hora de fin (Hasta)."
+            )
+        return attrs
 
 
 class LogSistemaOutputSerializer(serializers.Serializer):
     """Formato estructurado de salida para eventos de auditoría."""
     id_log = serializers.IntegerField(read_only=True)
-    fecha_hora = serializers.TimeField(read_only=True)
+    fecha_hora = serializers.DateTimeField(read_only=True)
+    fecha = serializers.SerializerMethodField()
+    hora = serializers.SerializerMethodField()
     accion = serializers.CharField(read_only=True)
     detalle = serializers.CharField(read_only=True, allow_null=True)
     tipo = serializers.CharField(read_only=True)
@@ -263,6 +286,16 @@ class LogSistemaOutputSerializer(serializers.Serializer):
     email_usuario = serializers.SerializerMethodField()
     nombre_usuario = serializers.SerializerMethodField()
     rol_usuario = serializers.SerializerMethodField()
+
+    def get_fecha(self, obj):
+        if obj.fecha_hora and hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%d/%m/%Y")
+        return "N/D"
+
+    def get_hora(self, obj):
+        if obj.fecha_hora and hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%H:%M:%S")
+        return "N/D"
 
     def get_email_usuario(self, obj):
         return obj.id_usuario.email if obj.id_usuario else "Sistema / Desconocido"
@@ -291,6 +324,7 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
     """
     id_backup = serializers.IntegerField(read_only=True)
     fecha_creacion = serializers.DateField(read_only=True)
+    hora_creacion = serializers.SerializerMethodField()
     automatico = serializers.BooleanField(read_only=True)
     ubicacion_archivo = serializers.CharField(read_only=True)
     nombre_archivo = serializers.SerializerMethodField()
@@ -300,7 +334,26 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
     nombre_usuario = serializers.SerializerMethodField()
     tamano_bytes = serializers.SerializerMethodField()
     tamano_mb = serializers.SerializerMethodField()
+    tamano_formateado = serializers.SerializerMethodField()
     archivo_existe = serializers.SerializerMethodField()
+
+    def get_hora_creacion(self, obj):
+        import os
+        import datetime
+        if obj.ubicacion_archivo and os.path.exists(obj.ubicacion_archivo):
+            try:
+                mtime = os.path.getmtime(obj.ubicacion_archivo)
+                return datetime.datetime.fromtimestamp(mtime).strftime("%H:%M:%S")
+            except OSError:
+                pass
+        if obj.ubicacion_archivo:
+            import os
+            base = os.path.basename(obj.ubicacion_archivo)
+            parts = base.replace('.sql', '').split('_')
+            if len(parts) >= 3 and len(parts[2]) == 6:
+                hhmmss = parts[2]
+                return f"{hhmmss[:2]}:{hhmmss[2:4]}:{hhmmss[4:6]}"
+        return "N/D"
 
     def get_nombre_archivo(self, obj):
         import os
@@ -328,6 +381,17 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
     def get_tamano_mb(self, obj):
         bytes_totales = self.get_tamano_bytes(obj)
         return round(bytes_totales / (1024 * 1024), 2)
+
+    def get_tamano_formateado(self, obj):
+        tamano_bytes = self.get_tamano_bytes(obj)
+        if tamano_bytes <= 0:
+            return "0 B"
+        if tamano_bytes < 1024:
+            return f"{tamano_bytes} B"
+        elif tamano_bytes < 1024 * 1024:
+            return f"{round(tamano_bytes / 1024, 1)} KB"
+        else:
+            return f"{round(tamano_bytes / (1024 * 1024), 2)} MB"
 
     def get_archivo_existe(self, obj):
         import os

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
@@ -15,7 +15,7 @@ const CATEGORIAS_CONFIG = [
   { id: 'all', label: 'Todas las Categorías', badge: '46' },
   { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '8' },
   { id: 'taller', label: 'Taller & Servicio Técnico', badge: '2' },
-  { id: 'fidelizacion', label: 'Fidelización & Pagos', badge: '11' },
+  { id: 'fidelizacion', label: 'Fidelización, Descuentos & Tarifas', badge: '11' },
   { id: 'institucional', label: 'Institucional (Master Data)', badge: '12' },
   { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '8' },
   { id: 'auditoria', label: 'Auditoría & Logs', badge: '5' }
@@ -24,6 +24,8 @@ const CATEGORIAS_CONFIG = [
 export default function AdminConfigScreen() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
 
   // Estado con los 46 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
   const [formData, setFormData] = useState({
@@ -98,7 +100,15 @@ export default function AdminConfigScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [serverError, setServerError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
+  const categoriaParam = searchParams.get('categoria') || location.state?.categoria || 'all';
+  const [selectedCategory, setSelectedCategory] = useState(categoriaParam);
+
+  useEffect(() => {
+    const cat = searchParams.get('categoria') || location.state?.categoria;
+    if (cat) {
+      setSelectedCategory(cat);
+    }
+  }, [searchParams, location.state]);
   const [searchFilter, setSearchFilter] = useState('');
 
   // Estados para alternar visibilidad de credenciales privadas de Mercado Pago

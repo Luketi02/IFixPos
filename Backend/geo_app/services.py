@@ -21,7 +21,7 @@ def _registrar_auditoria_personal(*, usuario: Usuario, accion: str, id_registro:
 
     if rol_codigo in ['ADMIN', 'TECNICO']:
         LogSistema.objects.create(
-            fecha_hora=datetime.now(timezone.utc).time(),
+            fecha_hora=datetime.now(timezone.utc),
             accion=accion,
             detalle=detalle,
             tipo='AUDITORIA',

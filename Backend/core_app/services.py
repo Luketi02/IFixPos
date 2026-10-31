@@ -152,7 +152,7 @@ def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict
 
     # Auditoría (LogSistema)
     LogSistema.objects.create(
-        fecha_hora=ahora.time(),
+        fecha_hora=ahora,
         accion="Actualización de Configuración Global del Sistema",
         detalle=detalle_log,
         tipo="AUDITORIA_SISTEMA",
@@ -220,7 +220,7 @@ def guardar_logo_empresa(*, archivo: Any, usuario_admin: Any) -> str:
 
         # Auditoría
         LogSistema.objects.create(
-            fecha_hora=ahora.time(),
+            fecha_hora=ahora,
             accion="Actualización de Logo Institucional",
             detalle=f"Archivo guardado como {url_relativa}",
             tipo="AUDITORIA_SISTEMA",
@@ -296,6 +296,63 @@ def eliminar_todas_notificaciones(*, usuario: Any) -> int:
 
 
 # ==============================================================================
+# MOTOR CENTRALIZADO DE AUDITORÍA Y CONTROL DE LOGS POR CONFIGURACIÓN
+# ==============================================================================
+
+def registrar_log_evento(
+    *,
+    accion: str,
+    modulo_origen: str,
+    tipo: str = "INFO",
+    detalle: Optional[str] = None,
+    tabla_afectada: Optional[str] = None,
+    id_registro_afectado: Optional[str] = None,
+    id_usuario: Optional[Any] = None,
+    categoria_config: Optional[str] = None
+) -> Optional[LogSistema]:
+    """
+    Función centralizada para asentar eventos en LogSistema respetando los parámetros
+    configurables del sistema (ConfiguracionSistema):
+    - log_seguridad_accesos
+    - log_caja_anulaciones
+    - log_stock_ajustes_manuales
+    - log_roles_permisos
+    - log_operaciones_lectura (Desactivado por defecto para alto rendimiento)
+    """
+    from core_app.selectors import obtener_configuracion_bool
+
+    # 1. Comprobación de flags según categoría o tipo
+    if categoria_config == 'SEGURIDAD' or tipo in ['SEGURIDAD', 'AUTH_ERROR']:
+        if not obtener_configuracion_bool('log_seguridad_accesos'):
+            return None
+    elif categoria_config == 'CAJA_ANULACION' or tipo == 'ANULACION_CAJA':
+        if not obtener_configuracion_bool('log_caja_anulaciones'):
+            return None
+    elif categoria_config == 'STOCK_AJUSTE' or tipo == 'AJUSTE_STOCK':
+        if not obtener_configuracion_bool('log_stock_ajustes_manuales'):
+            return None
+    elif categoria_config == 'ROLES_PERMISOS' or tipo == 'ROLES_PERMISOS':
+        if not obtener_configuracion_bool('log_roles_permisos'):
+            return None
+    elif categoria_config == 'LECTURA_PASIVA' or tipo in ['CONSULTA_AUDITORIA', 'LECTURA_PASIVA']:
+        if not obtener_configuracion_bool('log_operaciones_lectura'):
+            return None
+
+    ahora = django_timezone.now()
+    return LogSistema.objects.create(
+        fecha_hora=ahora,
+        accion=accion,
+        detalle=detalle[:1000] if detalle else None,
+        tipo=tipo,
+        modulo_origen=modulo_origen,
+        tabla_afectada=tabla_afectada,
+        id_registro_afectado=str(id_registro_afectado) if id_registro_afectado is not None else None,
+        id_usuario=id_usuario
+    )
+
+
+
+# ==============================================================================
 # CU-22: REALIZAR COPIA DE SEGURIDAD (SERVICES)
 # ==============================================================================
 
@@ -320,7 +377,7 @@ def generar_copia_seguridad_manual(
     backup_dir = os.path.join(settings.BASE_DIR, 'backups')
     os.makedirs(backup_dir, exist_ok=True)
 
-    # 1. Validación de espacio en disco (mínimo 50 MB)
+    # 1. Validación de espacio en disco (mínimo 50 MB) y permisos de escritura
     try:
         _, _, free_bytes = shutil.disk_usage(backup_dir)
         espacio_minimo = 50 * 1024 * 1024  # 50 MB
@@ -328,6 +385,9 @@ def generar_copia_seguridad_manual(
             raise ValidationError("Espacio de almacenamiento insuficiente en el servidor para generar el respaldo.")
     except OSError:
         pass
+
+    if not os.access(backup_dir, os.W_OK):
+        raise ValidationError("Permisos de escritura insuficientes en el directorio de destino del servidor.")
 
     # 2. Definición de ruta y nombre del archivo
     timestamp = django_timezone.now().strftime("%Y%m%d_%H%M%S")
@@ -422,7 +482,7 @@ def generar_copia_seguridad_manual(
     ahora = django_timezone.now()
     admin_id = getattr(usuario_admin, 'id_usuario', None) or getattr(usuario_admin, 'id', None)
     LogSistema.objects.create(
-        fecha_hora=ahora.time(),
+        fecha_hora=ahora,
         accion="Generar Copia de Seguridad Manual",
         detalle=f"El administrador [{admin_id}] generó una copia de seguridad manual en {ruta_archivo}",
         tipo="BACKUP",
@@ -485,7 +545,7 @@ def solicitar_token_restauracion(
     # Registro de auditoría
     ahora = django_timezone.now()
     LogSistema.objects.create(
-        fecha_hora=ahora.time(),
+        fecha_hora=ahora,
         accion="Solicitud de Token de Restauración",
         detalle=f"El administrador [{admin_id}] solicitó token OTP para restaurar copia #{id_backup}.",
         tipo="SEGURIDAD",
@@ -552,6 +612,7 @@ def ejecutar_restauracion_sistema(
     # 4. Activar Modo Mantenimiento
     cache.set('MAINTENANCE_MODE', True, timeout=1800)
 
+    exito_restauracion = False
     try:
         # 5. Ejecución de la restauración (psql / pg_restore o carga SQL)
         db_settings = settings.DATABASES.get('default', {})
@@ -595,7 +656,7 @@ def ejecutar_restauracion_sistema(
         # 7. Asentar Log de auditoría
         ahora = django_timezone.now()
         LogSistema.objects.create(
-            fecha_hora=ahora.time(),
+            fecha_hora=ahora,
             accion="Restauración de Sistema",
             detalle=f"Sistema restaurado a partir de la copia #{id_backup} por el administrador [{admin_id}].",
             tipo="RESTORE",
@@ -605,6 +666,7 @@ def ejecutar_restauracion_sistema(
             id_usuario=usuario_admin
         )
 
+        exito_restauracion = True
         return {
             "mensaje": "Restauración exitosa. Sesión finalizada.",
             "codigo": "LOGOUT_REQUIRED",
@@ -612,8 +674,30 @@ def ejecutar_restauracion_sistema(
             "version": copia.version,
             "fecha_creacion": copia.fecha_creacion
         }
+    except Exception as exc:
+        # CU-23 Excepción Paso 7: Se mantiene bloqueado en Modo Mantenimiento y notifica por correo
+        cache.set('MAINTENANCE_MODE', True)
+        try:
+            asunto_falla = "ALERTA CRÍTICA: Error fatal durante la restauración del sistema - IFixPos"
+            cuerpo_falla = (
+                f"Estimado Administrador,\n\n"
+                f"Se ha producido un error fatal durante la restauración de la base de datos a partir de la copia #{id_backup}.\n\n"
+                f"Detalle del error técnico:\n{str(exc)}\n\n"
+                f"Por motivos de máxima seguridad y para evitar corrupción de datos por operaciones concurrentes, "
+                f"el sistema permanecerá en MODO MANTENIMIENTO hasta que intervenga soporte técnico especializado."
+            )
+            registrar_y_enviar_notificacion_correo(
+                usuario=usuario_admin,
+                asunto=asunto_falla,
+                cuerpo_texto=cuerpo_falla,
+                tipo_notificacion='ERROR_SISTEMA'
+            )
+        except Exception:
+            pass
+        raise exc
     finally:
-        # Asegurar siempre desactivación del Modo Mantenimiento
-        cache.set('MAINTENANCE_MODE', False)
+        # Desactivar Modo Mantenimiento únicamente si la operación culminó con éxito
+        if exito_restauracion:
+            cache.set('MAINTENANCE_MODE', False)
 
 

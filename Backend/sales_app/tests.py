@@ -949,14 +949,32 @@ class SalesAppCU38TestCase(TestCase):
         self.assertEqual(res.data['resultados'], [])
 
     def test_auditoria_logsistema_registrada(self):
-        """Verifica que la consulta contable quede auditada en LogSistema."""
+        """Verifica la política de auditoría en LogSistema para consultas contables."""
+        from core_app.models import ConfiguracionSistema
+        # Por defecto no se generan logs al filtrar para alto rendimiento
         self.client.force_authenticate(user=self.tecnico)
         res = self.client.get(
             '/api/sales/pagos/filtrar/',
             {'estado_pago': 'PAGADO'}
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            LogSistema.objects.filter(
+                accion__icontains='Filtrar Cobros y Pagos (CU-38)',
+                id_usuario=self.tecnico
+            ).exists()
+        )
 
+        # Cuando el flag 'log_operaciones_lectura' está habilitado, sí se audita
+        ConfiguracionSistema.objects.update_or_create(
+            clave='log_operaciones_lectura',
+            defaults={'valor': 'True'}
+        )
+        res_con_log = self.client.get(
+            '/api/sales/pagos/filtrar/',
+            {'estado_pago': 'PAGADO'}
+        )
+        self.assertEqual(res_con_log.status_code, status.HTTP_200_OK)
         log = LogSistema.objects.filter(
             accion__icontains='Filtrar Cobros y Pagos (CU-38)',
             id_usuario=self.tecnico
@@ -1700,7 +1718,14 @@ class AuditarHistorialBeneficiosTestCase(TestCase):
         self.assertEqual(response.data['canal_emision'], 'MOMENTO_COMPRA')
         self.assertIsNotNone(response.data['fecha_caducidad_estimada'])
 
-        # Verificar LogSistema generado en core_app
+        # Verificar LogSistema generado en core_app (condicionado a lectura pasiva o forzado en auditoría de expediente)
+        from core_app.models import ConfiguracionSistema
+        ConfiguracionSistema.objects.update_or_create(
+            clave='log_operaciones_lectura',
+            defaults={'valor': 'True'}
+        )
+        # Re-solicitar para validar traza cuando la lectura pasiva está activa
+        response = self.client.get(url)
         log = LogSistema.objects.filter(
             id_usuario=self.admin,
             accion__icontains="Auditar Beneficio (CU-69)"

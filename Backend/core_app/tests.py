@@ -833,4 +833,162 @@ class CopiasSeguridadYRestauracionTests(TestCase):
         finally:
             cache.set('MAINTENANCE_MODE', False)
 
+    def test_api_estado_almacenamiento(self):
+        """CU-22: Verifica endpoint de verificación de estado de almacenamiento y permisos de servidor."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens_admin = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_admin['access']}")
+
+        res = self.client.get('/api/core/backups/estado/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertIn('espacio_libre_mb', data)
+        self.assertIn('espacio_suficiente', data)
+        self.assertIn('permisos_escritura', data)
+        self.assertTrue(data['espacio_suficiente'])
+        self.assertTrue(data['permisos_escritura'])
+
+
+
+# ==============================================================================
+# CU-40: FILTRAR LOGS DE AUDITORÍA (TESTS)
+# ==============================================================================
+
+class FiltrarLogsAuditoriaTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from django.contrib.auth.hashers import make_password
+        from datetime import datetime, date, time, timezone
+        from users_app.models import RolUsuario, Usuario, PerfilUsuario
+        from core_app.models import LogSistema
+
+        self.client = APIClient()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Admin'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin_logs@test.com',
+            contrasena=make_password('AdminPass123!'),
+            fecha_registro=date.today(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.admin,
+            nombre='Admin',
+            apellido='Auditor',
+            dni='99887766'
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente_logs@test.com',
+            contrasena=make_password('ClientPass123!'),
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+        # Crear registros de logs para prueba con fecha y hora completa
+        LogSistema.objects.create(
+            fecha_hora=datetime(2026, 10, 31, 10, 30, 0, tzinfo=timezone.utc),
+            accion='Creación de Usuario de Prueba',
+            detalle='Usuario creado exitosamente',
+            tipo='CREACION',
+            modulo_origen='Usuarios',
+            tabla_afectada='usuario',
+            id_registro_afectado='100',
+            id_usuario=self.admin
+        )
+        LogSistema.objects.create(
+            fecha_hora=datetime(2026, 10, 31, 14, 0, 0, tzinfo=timezone.utc),
+            accion='Eliminación de Registro Obsoleto',
+            detalle='Baja lógica del registro',
+            tipo='ELIMINACION',
+            modulo_origen='Inventario',
+            tabla_afectada='stock',
+            id_registro_afectado='200',
+            id_usuario=self.admin
+        )
+
+    def test_filtrar_logs_exitoso_admin(self):
+        """CU-40: Verifica que un Administrador pueda consultar la traza de logs con fecha y hora."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertGreaterEqual(len(data), 2)
+        self.assertIn('accion', data[0])
+        self.assertIn('tipo', data[0])
+        self.assertIn('fecha', data[0])
+        self.assertIn('hora', data[0])
+
+    def test_filtrar_logs_por_modulo_y_tipo(self):
+        """CU-40: Filtra logs por módulo_origen y tipo."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/', {'modulo_origen': 'Inventario', 'tipo': 'ELIMINACION'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['modulo_origen'], 'Inventario')
+        self.assertEqual(data[0]['tipo'], 'ELIMINACION')
+
+    def test_filtrar_logs_por_rango_fechas(self):
+        """CU-40: Filtra logs por rango de fecha_desde y fecha_hasta."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/', {'fecha_desde': '2026-10-31', 'fecha_hasta': '2026-10-31'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertEqual(len(data), 2)
+
+    def test_filtrar_logs_valida_rango_fechas_incongruente(self):
+        """CU-40 Excepción: Rechaza fecha_desde posterior a fecha_hasta."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/', {'fecha_desde': '2026-11-05', 'fecha_hasta': '2026-10-01'})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filtrar_logs_valida_rango_horas_incongruente(self):
+        """CU-40 Excepción Paso 4: Rechaza hora_desde posterior a hora_hasta."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/', {'hora_desde': '18:00:00', 'hora_hasta': '10:00:00'})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filtrar_logs_bloquea_no_admin(self):
+        """CU-40 Precondición: Bloquea el acceso a usuarios que no posean rol de Administrador."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens = generar_tokens_jwt(self.cliente)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        res = self.client.get('/api/core/logs/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+
 

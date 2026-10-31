@@ -30,6 +30,15 @@ import AdminDirectPurchasesScreen from './pages/admin/AdminDirectPurchasesScreen
 import AdminQuotationsScreen from './pages/admin/AdminQuotationsScreen';
 import AdminManageQuotationsScreen from './pages/admin/AdminManageQuotationsScreen';
 import AdminPurchaseOrdersScreen from './pages/admin/AdminPurchaseOrdersScreen';
+import AdminBenefitsScreen from './pages/admin/AdminBenefitsScreen';
+import AdminAuditLogsScreen from './pages/admin/AdminAuditLogsScreen';
+import AdminBackupsScreen from './pages/admin/AdminBackupsScreen';
+import AdminConversionReportScreen from './pages/admin/metrics/AdminConversionReportScreen';
+import AdminEfficiencyReportScreen from './pages/admin/metrics/AdminEfficiencyReportScreen';
+import AdminProductivityReportScreen from './pages/admin/metrics/AdminProductivityReportScreen';
+import AdminLogisticsReportScreen from './pages/admin/metrics/AdminLogisticsReportScreen';
+import AdminSatisfactionReportScreen from './pages/admin/metrics/AdminSatisfactionReportScreen';
+import VentaPresencialScreen from './pages/sales/VentaPresencialScreen';
 import PortalProveedorCotizarScreen from './pages/portal/PortalProveedorCotizarScreen';
 import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
 import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
@@ -93,6 +102,12 @@ function App() {
                 <Route path="/tecnico/dispositivos/en-curso" element={<TechnicianModuleScreen forcedModule="en-curso" />} />
                 <Route path="/tecnico/dispositivos/finalizadas" element={<TechnicianModuleScreen forcedModule="finalizadas" />} />
                 <Route path="/tecnico/caja/cobros" element={<TechnicianModuleScreen forcedModule="cobros" />} />
+                <Route path="/tecnico/caja/venta-presencial" element={<VentaPresencialScreen />} />
+                <Route path="/admin/caja/venta-presencial" element={<VentaPresencialScreen />} />
+                <Route path="/admin/caja/cobros" element={<TechnicianModuleScreen forcedModule="cobros" />} />
+                <Route path="/admin/cobros" element={<TechnicianModuleScreen forcedModule="cobros" />} />
+                <Route path="/tecnico/cobros" element={<TechnicianModuleScreen forcedModule="cobros" />} />
+                <Route path="/caja/venta-presencial" element={<VentaPresencialScreen />} />
                 <Route path="/tecnico/caja/entregar-dispositivo" element={<TechnicianModuleScreen forcedModule="entregar-dispositivo" />} />
                 <Route path="/tecnico/caja/registrar-compra" element={<TechnicianModuleScreen forcedModule="registrar-compra" />} />
                 <Route path="/tecnico/caja/recepcionar-dispositivo" element={<TechnicianModuleScreen forcedModule="recepcionar-dispositivo" />} />
@@ -117,6 +132,25 @@ function App() {
                 <Route path="/admin/inventario" element={<AdminInventoryScreen />} />
                 <Route path="/admin/reparaciones" element={<AdminRepairsScreen />} />
                 <Route path="/admin/medios-pago" element={<MediosPagoScreen />} />
+                <Route path="/admin/beneficios" element={<AdminBenefitsScreen />} />
+                <Route path="/admin/auditoria/beneficios" element={<AdminBenefitsScreen />} />
+                <Route path="/admin/auditoria/logs" element={<AdminAuditLogsScreen />} />
+                <Route path="/admin/logs" element={<AdminAuditLogsScreen />} />
+                <Route path="/admin/auditoria/copias-seguridad" element={<AdminBackupsScreen />} />
+                <Route path="/admin/backups" element={<AdminBackupsScreen />} />
+                <Route path="/admin/copias-seguridad" element={<AdminBackupsScreen />} />
+                {/* Métricas y Análisis (CU-72, CU-73, CU-74, CU-75 & CU-76) */}
+                <Route path="/admin/metricas/conversion-presupuestos" element={<AdminConversionReportScreen />} />
+                <Route path="/admin/metricas/demanda-eficiencia" element={<AdminEfficiencyReportScreen />} />
+                <Route path="/admin/metricas/productividad-tecnica" element={<AdminProductivityReportScreen />} />
+                <Route path="/admin/metricas/distribucion-logistica" element={<AdminLogisticsReportScreen />} />
+                <Route path="/admin/metricas" element={<Navigate to="/admin/metricas/conversion-presupuestos" replace />} />
+                <Route path="/admin/reportes/conversion" element={<AdminConversionReportScreen />} />
+                <Route path="/admin/reportes/eficiencia" element={<AdminEfficiencyReportScreen />} />
+                <Route path="/admin/reportes/productividad" element={<AdminProductivityReportScreen />} />
+                <Route path="/admin/reportes/logistica" element={<AdminLogisticsReportScreen />} />
+                <Route path="/admin/metricas/satisfaccion-calidad" element={<AdminSatisfactionReportScreen />} />
+                <Route path="/admin/reportes/satisfaccion" element={<AdminSatisfactionReportScreen />} />
                 {/* Catálogos y Taxonomías Base */}
                 <Route path="/admin/catalogos/marcas" element={<MarcasScreen />} />
                 <Route path="/admin/catalogos/modelos" element={<ModelosScreen />} />

@@ -261,9 +261,22 @@ class BaseBackupAdminApiView(APIView):
 
     def _verificar_admin(self, user):
         rol = getattr(user, 'rol', None) or getattr(user, 'id_rol', None)
-        codigo_rol = getattr(rol, 'codigo', '')
-        if (codigo_rol or '').upper() != 'ADMIN':
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol not in ['ADMIN', 'ADMINISTRADOR'] and 'admin' not in nombre_rol:
             raise PermissionDenied("Acceso denegado. Se requieren permisos de Administrador para gestionar copias de seguridad.")
+
+
+class EstadoAlmacenamientoApi(BaseBackupAdminApiView):
+    """
+    CU-22: Verifica en tiempo real el espacio libre en disco, permisos de escritura
+    y estado general del repositorio seguro de copias de seguridad.
+    """
+    def get(self, request):
+        self._verificar_admin(request.user)
+        from core_app.selectors import obtener_estado_almacenamiento
+        estado = obtener_estado_almacenamiento()
+        return Response(estado, status=status.HTTP_200_OK)
 
 
 class ListarCopiasSeguridadApi(BaseBackupAdminApiView):

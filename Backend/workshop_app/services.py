@@ -102,7 +102,7 @@ def evaluar_y_promover_catalogo_8_usos(*, modelo: ModeloDispositivo, usuario_eje
     se promueve automáticamente a estado_activo=True para que quede disponible en el catálogo
     público de toda la comunidad, registrando una traza de auditoría en LogSistema.
     """
-    hora_actual = django_timezone.now().time()
+    hora_actual = django_timezone.now()
 
     # 1. Evaluar Modelo
     if not modelo.estado_activo:
@@ -286,7 +286,7 @@ def registrar_dispositivo(*, usuario_ejecutor: Usuario, datos_validados: dict) -
     evaluar_y_promover_catalogo_8_usos(modelo=modelo, usuario_ejecutor=usuario_ejecutor)
 
     # 8. Auditoría Estricta en LogSistema
-    hora_actual = django_timezone.now().time()
+    hora_actual = django_timezone.now()
     LogSistema.objects.create(
         fecha_hora=hora_actual,
         accion=f"Alta de dispositivo {dispositivo.id_dispositivo}",
@@ -378,7 +378,7 @@ def editar_dispositivo_cliente(*, usuario_cliente: Usuario, id_dispositivo: int,
     dispositivo.save(update_fields=campos or None)
 
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion=f"Edición de dispositivo {dispositivo.id_dispositivo}",
         detalle=f"El cliente ID {usuario_cliente.id_usuario} modificó su dispositivo (campos: {', '.join(campos) or 'ninguno'}).",
         tipo="INFO",
@@ -415,7 +415,7 @@ def crear_categoria_reparacion(
 
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Alta de Categoría de Reparación (CU-62)",
         detalle=f"Alta de categoría de reparación '{categoria.nombre}' (ID: {categoria.id_categoria}) por {email_admin}.",
         tipo="AUDITORIA_TALLER",
@@ -451,7 +451,7 @@ def cambiar_estado_categoria_reparacion(
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
 
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Cambio de Estado de Categoría de Reparación (CU-63)",
         detalle=f"Cambio de estado de categoría de reparación '{categoria.nombre}' (ID: {categoria.id_categoria}) a {operacion} por {email_admin}.",
         tipo="AUDITORIA_TALLER",
@@ -613,7 +613,7 @@ def iniciar_reparacion(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_ejecutor,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_alcanzado_int,
         comentario="Apertura de orden de servicio"
     )
@@ -621,7 +621,7 @@ def iniciar_reparacion(
     # Paso 8: Auditoría y Despacho de Remito de Ingreso
     email_ejecutor = getattr(usuario_ejecutor, 'email', str(usuario_ejecutor))
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Apertura de orden de servicio (CU-26)",
         detalle=(
             f"Reparación #{reparacion.id_reparacion} iniciada por {email_ejecutor} "
@@ -757,7 +757,7 @@ def recepcionar_dispositivo_taller(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=2,  # 2: ESPERANDO_DIAGNOSTICO
         comentario=comentario_bitacora
     )
@@ -765,7 +765,7 @@ def recepcionar_dispositivo_taller(
     # Paso 7: Auditoría en LogSistema y Despacho de Comprobante
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Recepción física de dispositivo (CU-45)",
         detalle=(
             f"Reparación #{reparacion.id_reparacion} recepcionada físicamente en mostrador por {email_tecnico}. "
@@ -952,7 +952,7 @@ def cargar_diagnostico_tecnico(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=4,  # 4: ESPERANDO_CONFIRMACION
         comentario=comentario_bitacora
     )
@@ -966,7 +966,7 @@ def cargar_diagnostico_tecnico(
 
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Carga de diagnóstico técnico (CU-08)",
         detalle=(
             f"Diagnóstico #{diagnostico.id_diagnostico} cargado por técnico {email_tecnico} "
@@ -1174,7 +1174,7 @@ def procesar_decision_reparacion(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_cliente,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_alcanzado_int,
         comentario=comentario_bitacora
     )
@@ -1234,7 +1234,7 @@ def procesar_decision_reparacion(
     email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
     venta_info = f", Venta #{reparacion.id_venta_id} generada en estado PENDIENTE" if reparacion.id_venta else ""
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion=f"Decisión de reparación {decision} (CU-09)",
         detalle=(
             f"El cliente {email_cliente} confirmó la decisión '{decision}' para la Reparación #{reparacion.id_reparacion}. "
@@ -1532,7 +1532,7 @@ def cambiar_estado_reparacion(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_int,
         comentario=comentario
     )
@@ -1547,7 +1547,7 @@ def cambiar_estado_reparacion(
     # Paso 9: Registro de auditoría en LogSistema
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Actualizar estado de reparación (CU-10)",
         detalle=(
             f"Reparación #{reparacion.id_reparacion} actualizada de '{etapa_actual}' a '{nuevo_estado}' "
@@ -1685,7 +1685,7 @@ def entregar_dispositivo_cliente(
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         estado_alcanzado=7,  # ENTREGADO
         comentario=texto_bitacora.strip()[:1000]
     )
@@ -1694,7 +1694,7 @@ def entregar_dispositivo_cliente(
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
     disp_info = str(reparacion.id_dispositivo) if reparacion.id_dispositivo else 'N/A'
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Entregar Dispositivo (CU-46)",
         detalle=(
             f"Entrega física del hardware ({disp_info}) registrada por {email_tecnico} "
@@ -1761,7 +1761,7 @@ def calificar_reparacion(
     email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
     comentario_log = f"'{calificacion.comentario}'" if calificacion.comentario else "Sin comentario"
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Calificar Servicio Técnico (CU-19)",
         detalle=(
             f"El cliente {email_cliente} emitió una calificación de {calificacion.puntuacion}/5 estrellas "
@@ -1808,7 +1808,7 @@ def generar_auditoria_reporte_conversion(
     f_ini = filtros_validados['fecha_inicio']
     f_fin = filtros_validados['fecha_fin']
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Generar Reporte de Conversión (CU-72)",
         detalle=f"El administrador {id_admin} generó el Reporte de Conversión de Presupuestos para el periodo {f_ini} al {f_fin}.",
         tipo="REPORTE_BI",
@@ -1849,7 +1849,7 @@ def generar_auditoria_reporte_eficiencia(
     f_ini = filtros_validados['fecha_inicio']
     f_fin = filtros_validados['fecha_fin']
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Generar Reporte de Demanda y Eficiencia (CU-73)",
         detalle=f"El administrador {id_admin} generó el Reporte de Demanda y Eficiencia para el periodo {f_ini} al {f_fin}.",
         tipo="REPORTE_BI",
@@ -1892,7 +1892,7 @@ def generar_auditoria_productividad(
     f_ini = filtros_validados['fecha_inicio']
     f_fin = filtros_validados['fecha_fin']
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Generar Reporte de Productividad (CU-74)",
         detalle=f"El administrador {id_admin} generó el Reporte de Productividad y Carga de Trabajo Técnica para el periodo {f_ini} al {f_fin}.",
         tipo="REPORTE_BI",
@@ -1936,7 +1936,7 @@ def generar_auditoria_reporte_satisfaccion(
     f_ini = filtros_validados['fecha_inicio']
     f_fin = filtros_validados['fecha_fin']
     LogSistema.objects.create(
-        fecha_hora=django_timezone.now().time(),
+        fecha_hora=django_timezone.now(),
         accion="Generar Reporte de Satisfacción y Calidad (CU-76)",
         detalle=f"El administrador {id_admin} generó el Reporte de Satisfacción y Calidad (CSAT) para el periodo {f_ini} al {f_fin}.",
         tipo="REPORTE_BI",

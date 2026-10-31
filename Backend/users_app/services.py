@@ -45,7 +45,7 @@ def registrar_log_condicional(
     usuario = Usuario.objects.get(id_usuario=id_usuario) if id_usuario else None
         
     LogSistema.objects.create(
-        fecha_hora=datetime.now(timezone.utc).time(),
+        fecha_hora=datetime.now(timezone.utc),
         accion=accion,
         tipo=tipo,
         modulo_origen=modulo_origen,
@@ -952,7 +952,7 @@ def modificar_usuario_por_admin(
 
     now_utc = datetime.now(timezone.utc)
     LogSistema.objects.create(
-        fecha_hora=now_utc.time(),
+        fecha_hora=now_utc,
         accion="Modificación administrativa de usuario (CU-44)",
         detalle=detalle_log,
         tipo="SEGURIDAD",
@@ -1001,7 +1001,7 @@ def modificar_rol_sistema(
 
     now_utc = datetime.now(timezone.utc)
     LogSistema.objects.create(
-        fecha_hora=now_utc.time(),
+        fecha_hora=now_utc,
         accion="Modificación de rol de sistema (CU-84)",
         detalle=detalle_log,
         tipo="SEGURIDAD",

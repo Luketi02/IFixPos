@@ -2051,7 +2051,7 @@ class WorkshopAppCU45TestCase(TestCase):
         BitacoraReparacion.objects.create(
             id_reparacion=self.reparacion_pendiente,
             id_usuario=self.cliente,
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             estado_alcanzado=1,
             comentario='Apertura de orden virtual'
         )
@@ -4793,7 +4793,7 @@ class ReportesBITestCase(TestCase):
         BitacoraReparacion.objects.create(
             id_reparacion=rep_aceptada,
             id_usuario=self.cliente,
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             estado_alcanzado=5,
             comentario='Aprobado por el cliente'
         )
@@ -4815,7 +4815,7 @@ class ReportesBITestCase(TestCase):
         BitacoraReparacion.objects.create(
             id_reparacion=rep_rechazada,
             id_usuario=self.cliente,
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             estado_alcanzado=8,
             comentario='Rechazado por presupuesto excesivo'
         )
@@ -5150,14 +5150,14 @@ class ReporteProductividadTestCase(TestCase):
 
         # Técnico 1: 2 bitácoras registradas en reparaciones del periodo
         BitacoraReparacion.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             estado_alcanzado=3,
             comentario='Desarme y diagnóstico preliminar',
             id_reparacion=rep_fin,
             id_usuario=self.tecnico_1
         )
         BitacoraReparacion.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             estado_alcanzado=6,
             comentario='Reparación completada y verificada',
             id_reparacion=rep_fin,

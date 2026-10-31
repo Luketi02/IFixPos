@@ -21,7 +21,9 @@ import {
   Clock01Icon,
   CheckmarkCircle01Icon,
   Coins01Icon,
-  PackageReceiveIcon
+  PackageReceiveIcon,
+  Database01Icon,
+  Analytics01Icon
 } from '@hugeicons/core-free-icons';
 
 const renderIcon = (icon) => {
@@ -35,26 +37,38 @@ const renderIcon = (icon) => {
 // ==============================================================================
 export const ADMIN_MENU_ITEMS = [
   {
-    label: 'Inicio & Métricas',
+    label: 'Inicio',
     children: [
       { value: 'overview', label: 'Panel Principal', icon: Home01Icon, route: '/admin/dashboard' }
     ]
   },
   {
-    label: 'Gestión de Roles',
+    label: 'Caja',
     children: [
-      { value: 'admin-users', label: 'Usuarios', icon: UserGroupIcon, route: '/admin/usuarios' },
-      { value: 'admin-roles', label: 'Roles', icon: Layers01Icon, route: '/admin/roles' }
+      { value: 'admin-pos-sale', label: 'Venta Presencial', icon: ShoppingBag01Icon, route: '/admin/caja/venta-presencial' }
     ]
   },
   {
-    label: 'Compras & Abastecimiento',
+    label: 'Taller & Reparaciones',
     children: [
-      { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' },
-      { value: 'purchases-suppliers', label: 'Gestión de Proveedores', icon: PackageReceiveIcon, route: '/admin/proveedores' },
-      { value: 'purchases-quotes', label: 'Solicitudes de Cotización', icon: Layers01Icon, route: '/admin/cotizaciones' },
-      { value: 'purchases-proposals', label: 'Gestionar Cotizaciones', icon: Coins01Icon, route: '/admin/gestionar-cotizaciones' },
-      { value: 'purchases-orders', label: 'Órdenes de Compra', icon: CheckmarkCircle01Icon, route: '/admin/ordenes-compra' }
+      { value: 'admin-repairs', label: 'Reparaciones', icon: Settings02Icon, route: '/admin/reparaciones' }
+    ]
+  },
+  {
+    label: 'Ventas & Facturación',
+    children: [
+      { value: 'sales-charges', label: 'Cobros y Pagos', icon: Coins01Icon, route: '/admin/caja/cobros' },
+      { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon, route: '/admin/medios-pago' }
+    ]
+  },
+  {
+    label: 'Métricas y Análisis',
+    children: [
+      { value: 'metrics-conversion', label: 'Conversión de Presupuestos', icon: Analytics01Icon, route: '/admin/metricas/conversion-presupuestos' },
+      { value: 'metrics-efficiency', label: 'Demanda y Eficiencia', icon: DashboardSquare01Icon, route: '/admin/metricas/demanda-eficiencia' },
+      { value: 'metrics-productivity', label: 'Productividad Técnica', icon: UserGroupIcon, route: '/admin/metricas/productividad-tecnica' },
+      { value: 'metrics-logistics', label: 'Distribución y Logística', icon: PackageReceiveIcon, route: '/admin/metricas/distribucion-logistica' },
+      { value: 'metrics-satisfaction', label: 'Satisfacción y Calidad', icon: CheckmarkCircle01Icon, route: '/admin/metricas/satisfaccion-calidad' }
     ]
   },
   {
@@ -74,15 +88,28 @@ export const ADMIN_MENU_ITEMS = [
     ]
   },
   {
-    label: 'Taller & Reparaciones',
+    label: 'Compras & Abastecimiento',
     children: [
-      { value: 'admin-repairs', label: 'Reparaciones', icon: Settings02Icon, route: '/admin/reparaciones' }
+      { value: 'purchases-direct', label: 'Recepción de Compras', icon: ShoppingBag01Icon, route: '/admin/recepcion-compras' },
+      { value: 'purchases-suppliers', label: 'Gestión de Proveedores', icon: PackageReceiveIcon, route: '/admin/proveedores' },
+      { value: 'purchases-quotes', label: 'Solicitudes de Cotización', icon: Layers01Icon, route: '/admin/cotizaciones' },
+      { value: 'purchases-proposals', label: 'Gestionar Cotizaciones', icon: Coins01Icon, route: '/admin/gestionar-cotizaciones' },
+      { value: 'purchases-orders', label: 'Órdenes de Compra', icon: CheckmarkCircle01Icon, route: '/admin/ordenes-compra' }
     ]
   },
   {
-    label: 'Ventas & Facturación',
+    label: 'Usuarios & Roles',
     children: [
-      { value: 'sales-payments', label: 'Medios de Pago', icon: Layers01Icon, route: '/admin/medios-pago' }
+      { value: 'admin-users', label: 'Usuarios', icon: UserGroupIcon, route: '/admin/usuarios' },
+      { value: 'admin-roles', label: 'Roles', icon: Layers01Icon, route: '/admin/roles' }
+    ]
+  },
+  {
+    label: 'Auditoría',
+    children: [
+      { value: 'admin-audit-logs', label: 'Logs del Sistema', icon: Clock01Icon, route: '/admin/auditoria/logs' },
+      { value: 'admin-benefits', label: 'Beneficios', icon: Coins01Icon, route: '/admin/beneficios' },
+      { value: 'admin-backups', label: 'Copias de Seguridad', icon: Database01Icon, route: '/admin/auditoria/copias-seguridad' }
     ]
   },
   {
@@ -135,8 +162,14 @@ export const TECH_MENU_ITEMS = [
     ]
   },
   {
-    label: '💰 Caja',
+    label: 'Caja',
     children: [
+      {
+        value: 'tech-pos-sale',
+        label: 'Venta Presencial',
+        icon: ShoppingBag01Icon,
+        route: '/tecnico/caja/venta-presencial'
+      },
       {
         value: 'tech-cash-charges',
         label: 'Cobrar Operación',

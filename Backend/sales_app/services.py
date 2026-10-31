@@ -183,7 +183,7 @@ def procesar_compra_virtual(
 
     # Auditoría en LogSistema
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Realizar Compra Virtual (CU-18)",
         detalle=(
             f"Venta #{venta.id_venta} registrada para el usuario {usuario_cliente.email}. "
@@ -849,7 +849,7 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
 
     # 7. Generar Log de Auditoría sobre la emisión del documento fiscal
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Generar Factura (CU-20)",
         detalle=(
             f"Factura PDF generada y almacenada exitosamente para Pago #{pago.id_pago} de {tipo_doc} #{id_ref}. "
@@ -983,7 +983,7 @@ def registrar_cobro_operacion(
     tipo_op = "Venta" if isinstance(operacion, Venta) else "Reparación"
     id_op = operacion.id_venta if isinstance(operacion, Venta) else operacion.id_reparacion
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Completar pago (CU-21)",
         detalle=(
             f"Cobro de ${monto_abonado} registrado por {usuario_ejecutor.email} para {tipo_op} #{id_op}. "
@@ -1022,12 +1022,16 @@ def registrar_auditoria_filtro_cobros(
     usuario_ejecutor: Usuario,
     filtros_aplicados: Dict[str, Any],
     cantidad_encontrada: int
-) -> LogSistema:
+) -> Optional[LogSistema]:
     """
     CU-38: Filtrar Cobros y Pagos.
-    Almacena el evento de auditoría interna sobre las consultas y filtros
-    aplicados en el módulo contable.
+    Almacena el evento de auditoría condicionado al parámetro 'log_operaciones_lectura'
+    (desactivado por defecto).
     """
+    from core_app.selectors import obtener_configuracion_bool
+    if not obtener_configuracion_bool('log_operaciones_lectura'):
+        return None
+
     filtros_legibles = {
         k: v for k, v in filtros_aplicados.items()
         if v not in [None, '', 'null']
@@ -1035,7 +1039,7 @@ def registrar_auditoria_filtro_cobros(
     filtros_resumen = ", ".join(f"{k}={v}" for k, v in filtros_legibles.items()) or "Sin filtros (listado completo)"
 
     return LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Filtrar Cobros y Pagos (CU-38)",
         detalle=(
             f"Auditoría de flujo de caja y transacciones financieras por {usuario_ejecutor.email}. "
@@ -1084,7 +1088,7 @@ def registrar_o_reactivar_medio_pago(
         medio_existente.save(update_fields=['estado', 'recargo'])
 
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Reactivar Medio de Pago (CU-82)",
             detalle=(
                 f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) reactivó el medio de pago: "
@@ -1106,7 +1110,7 @@ def registrar_o_reactivar_medio_pago(
     )
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Registrar Medio de Pago (CU-82)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) registró el nuevo medio de pago: "
@@ -1150,7 +1154,7 @@ def alternar_estado_medio_pago(
     accion_audit = "Activar Medio de Pago (CU-83)" if medio_pago.estado else "Desactivar Medio de Pago (CU-83)"
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion=accion_audit,
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) {accion_str} "
@@ -1204,12 +1208,12 @@ def crear_venta_presencial(
     *,
     usuario_cajero: Usuario,
     datos_validados: Dict[str, Any]
-) -> Tuple[Venta, List[str]]:
+) -> Tuple[Venta, List[str], Optional[str]]:
     """
     CU-67: Realizar Venta Presencial.
     Permite registrar la entrega física de mercadería a un cliente en mostrador,
     congelando precios vigentes en DetalleVenta, descontando inventario en MovimientoStock
-    y dejando la operación en estado 'PENDIENTE' para su liquidación en caja.
+    y soportando cobro atómico inmediato o dejando la operación en estado 'PENDIENTE' para su liquidación.
     """
     from sales_app.selectors import validar_productos_para_venta
 
@@ -1282,7 +1286,7 @@ def crear_venta_presencial(
 
     # Auditoría del evento en LogSistema
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Realizar Venta Presencial (CU-67)",
         detalle=(
             f"El operador {usuario_cajero.id_usuario} ({usuario_cajero.email}) registró una venta presencial "
@@ -1296,7 +1300,51 @@ def crear_venta_presencial(
         id_usuario=usuario_cajero
     )
 
-    return venta, warnings
+    # Si se proporcionaron datos de cobro directo (Cobro Atómico en Mostrador)
+    ruta_pdf = None
+    if datos_validados.get('medio_pago') and datos_validados.get('monto_pagado') is not None:
+        venta.estado_venta = 'PAGADA'
+        venta.save(update_fields=['estado_venta'])
+
+        nombre_medio = str(datos_validados['medio_pago']).strip()
+        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_medio).first()
+        if not medio_pago_obj:
+            medio_pago_obj, _ = MedioPago.objects.get_or_create(
+                nombre_medio_pago=nombre_medio,
+                defaults={'estado': True, 'recargo': Decimal('0.00')}
+            )
+
+        pago = Pago.objects.create(
+            id_venta=venta,
+            medio_pago=medio_pago_obj,
+            monto_pagado=Decimal(str(datos_validados['monto_pagado'])),
+            fecha_pago=timezone.now().date(),
+            cod_operacion=str(datos_validados.get('numero_operacion') or f"POS-{venta.codigo_sec}"),
+            detalle=datos_validados.get('detalle') or "Cobro directo atómico en caja mostrador"
+        )
+
+        try:
+            ruta_pdf = generar_comprobante_fiscal(pago, venta)
+            if usuario_cliente and usuario_cliente.email and 'consumidorfinal' not in usuario_cliente.email.lower():
+                enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
+        except Exception as e:
+            print(f"[Venta Presencial POS] Factura generada con advertencia: {e}")
+
+        LogSistema.objects.create(
+            fecha_hora=timezone.now(),
+            accion="Cobro Venta Presencial Atómica (CU-67/CU-21)",
+            detalle=(
+                f"Cobro completado para Venta Presencial #{venta.id_venta}. Medio: {nombre_medio}, "
+                f"Monto: ${pago.monto_pagado}, Comprobante: {ruta_pdf or 'N/A'}."
+            )[:1000],
+            tipo="AUDITORIA_VENTA",
+            modulo_origen="sales_app",
+            tabla_afectada="pago",
+            id_registro_afectado=str(pago.id_pago),
+            id_usuario=usuario_cajero
+        )
+
+    return venta, warnings, ruta_pdf
 
 
 # ==============================================================================
@@ -1315,27 +1363,29 @@ def auditar_inspeccion_beneficio(
     registrando la traza de auditoría en LogSistema sobre la revisión efectuada.
     """
     from sales_app.selectors import obtener_beneficio_para_auditoria
+    from core_app.selectors import obtener_configuracion_bool
 
     beneficio = obtener_beneficio_para_auditoria(id_beneficio)
 
-    cliente_email = beneficio.id_usuario.email if beneficio.id_usuario else "Desconocido"
-    prod_nom = beneficio.id_producto.nombre if beneficio.id_producto else "Desconocido"
+    # Asentar la traza de auditoría de la revisión gerencial solo si está activada la lectura pasiva
+    if obtener_configuracion_bool('log_operaciones_lectura'):
+        cliente_email = beneficio.id_usuario.email if beneficio.id_usuario else "Desconocido"
+        prod_nom = beneficio.id_producto.nombre if beneficio.id_producto else "Desconocido"
 
-    # Asentar la traza de auditoría de la revisión gerencial
-    LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
-        accion="Auditar Beneficio (CU-69)",
-        detalle=(
-            f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) realizó una inspección "
-            f"de auditoría sobre el beneficio #{beneficio.id_beneficio} otorgado al cliente '{cliente_email}' "
-            f"(Producto: '{prod_nom}', Descuento: {beneficio.por_desc}%)."
-        )[:1000],
-        tipo="CONSULTA_AUDITORIA",
-        modulo_origen="sales_app",
-        tabla_afectada="beneficio",
-        id_registro_afectado=str(beneficio.id_beneficio),
-        id_usuario=usuario_admin
-    )
+        LogSistema.objects.create(
+            fecha_hora=timezone.now(),
+            accion="Auditar Beneficio (CU-69)",
+            detalle=(
+                f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) realizó una inspección "
+                f"de auditoría sobre el beneficio #{beneficio.id_beneficio} otorgado al cliente '{cliente_email}' "
+                f"(Producto: '{prod_nom}', Descuento: {beneficio.por_desc}%)."
+            )[:1000],
+            tipo="CONSULTA_AUDITORIA",
+            modulo_origen="sales_app",
+            tabla_afectada="beneficio",
+            id_registro_afectado=str(beneficio.id_beneficio),
+            id_usuario=usuario_admin
+        )
 
     return beneficio
 
@@ -1380,7 +1430,7 @@ def revocar_beneficio_activo(
 
     # Paso 7: Asentar la traza de auditoría en LogSistema
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Revocar Beneficio (CU-71)",
         detalle=(
             f"El administrador {usuario_admin.id_usuario} ({usuario_admin.email}) revocó manualmente "
@@ -1429,7 +1479,7 @@ def generar_auditoria_logistica(
     email_admin = getattr(usuario_admin, 'email', '')
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Generar Reporte de Distribución Geográfica (CU-75)",
         detalle=(
             f"El administrador {id_admin} ({email_admin}) generó el Reporte de Distribución "
@@ -1641,7 +1691,7 @@ def crear_preferencia_mercadopago(
 
     # Guardar en LogSistema para auditoría y reutilización durante los 30 minutos de reserva
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Preferencia Mercado Pago Creada",
         detalle=f"{pref_id}|{init_point}|{sandbox_init_point}",
         tipo="MERCADOPAGO",
@@ -1684,6 +1734,57 @@ def procesar_webhook_mercadopago(
     if not payment_id:
         return {"status": "ignored", "motivo": "Sin payment_id en la notificación"}
 
+    if str(payment_id).startswith('SIMULADO-'):
+        try:
+            id_venta = int(str(payment_id).replace('SIMULADO-', ''))
+            venta = Venta.objects.select_for_update().get(id_venta=id_venta)
+        except (ValueError, Venta.DoesNotExist):
+            return {"status": "error", "motivo": f"Venta simulada {payment_id} no encontrada"}
+
+        if str(venta.estado_venta or '').upper() == "CANCELADA":
+            return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
+
+        medio_pago_mp, _ = MedioPago.objects.get_or_create(
+            nombre_medio_pago='Mercado Pago',
+            defaults={'estado': True, 'recargo': Decimal('0.00')}
+        )
+        monto_pagado = Decimal(str(venta.monto_total or (venta.monto_subtotal + venta.costo_envio)))
+        pago_existente = Pago.objects.filter(cod_operacion=str(payment_id)).first()
+        pago = pago_existente
+        if not pago:
+            pago = Pago.objects.create(
+                id_venta=venta,
+                medio_pago=medio_pago_mp,
+                monto_pagado=monto_pagado,
+                fecha_pago=timezone.now().date(),
+                cod_operacion=str(payment_id),
+                detalle="Acreditación de prueba/mostrador Mercado Pago QR"
+            )
+
+        if venta.estado_venta != "PAGADA":
+            venta.estado_venta = "PAGADA"
+            venta.save(update_fields=["estado_venta"])
+
+            LogSistema.objects.create(
+                fecha_hora=timezone.now(),
+                accion="Acreditación Mercado Pago Webhook",
+                detalle=f"Venta #{venta.id_venta} pagada con éxito vía Mercado Pago (Mostrador/QR). Operación #{payment_id}, Monto: ${monto_pagado}.",
+                tipo="AUDITORIA_VENTA",
+                modulo_origen="sales_app",
+                tabla_afectada="venta",
+                id_registro_afectado=str(venta.id_venta),
+                id_usuario=venta.id_usuario
+            )
+
+            try:
+                ruta_pdf = generar_comprobante_fiscal(pago, venta)
+                if venta.id_usuario and getattr(venta.id_usuario, 'email', None):
+                    enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
+            except Exception as e:
+                print(f"[Webhook MP Simulado] Advertencia al generar comprobante: {e}")
+
+        return {"status": "approved", "venta_id": venta.id_venta, "payment_id": payment_id}
+
     from core_app.selectors import obtener_mercadopago_access_token
     access_token = obtener_mercadopago_access_token()
     if not access_token or 'TU_ACCESS_TOKEN' in access_token:
@@ -1711,7 +1812,7 @@ def procesar_webhook_mercadopago(
     # Si la venta ya fue cancelada (por expiración de reserva o por el usuario), no acreditar
     if str(venta.estado_venta or '').upper() == "CANCELADA":
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Alerta: Pago recibido en Venta Cancelada/Expirada",
             detalle=f"Se recibió notificación de pago #{payment_id} para la Venta #{venta.id_venta}, pero la orden ya fue cancelada y su reserva expiró.",
             tipo="ALERTA_VENTA",
@@ -1748,7 +1849,7 @@ def procesar_webhook_mercadopago(
             venta.save(update_fields=["estado_venta"])
 
             LogSistema.objects.create(
-                fecha_hora=timezone.now().time(),
+                fecha_hora=timezone.now(),
                 accion="Acreditación Mercado Pago Webhook",
                 detalle=f"Venta #{venta.id_venta} pagada con éxito vía Mercado Pago. Operación #{payment_id}, Monto: ${monto_pagado}.",
                 tipo="AUDITORIA_VENTA",
@@ -1769,7 +1870,7 @@ def procesar_webhook_mercadopago(
 
     elif status_pago in ["rejected", "cancelled"]:
         LogSistema.objects.create(
-            fecha_hora=timezone.now().time(),
+            fecha_hora=timezone.now(),
             accion="Pago Rechazado Mercado Pago",
             detalle=f"Pago #{payment_id} para Venta #{venta.id_venta} en estado: {status_pago}.",
             tipo="AUDITORIA_VENTA",
@@ -1864,7 +1965,7 @@ def cancelar_venta_y_restituir_stock(
             invalidar_preferencia_mercadopago(pref_id_cancelar)
 
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Cancelación de Venta y Restitución de Stock",
         detalle=(
             f"Venta #{venta.id_venta} cancelada. "
@@ -2149,7 +2250,7 @@ def enviar_correo_confirmacion_compra(
 
     # 3. Auditoría en LogSistema
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Envío de Factura y Confirmación de Compra",
         detalle=(
             f"Correo de confirmación con factura PDF y código {codigo_orden} ({'Retiro' if es_retiro else 'Envío'}) "

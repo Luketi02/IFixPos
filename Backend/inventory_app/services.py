@@ -81,7 +81,7 @@ def actualizar_stock_manual(
     # 5. Generar auditoría de seguridad en LogSistema
     email_admin = getattr(usuario_admin, 'email', str(usuario_admin))
     LogSistema.objects.create(
-        fecha_hora=timezone.now().time(),
+        fecha_hora=timezone.now(),
         accion="Actualizar Stock (CU-13)",
         detalle=(
             f"Ajuste manual de {tipo_operacion} por {email_admin}: {cantidad} unidades para "

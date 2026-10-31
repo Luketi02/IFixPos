@@ -1,3 +1,4 @@
+
 from typing import Any
 from typing import Optional
 from django.db.models import QuerySet
@@ -196,7 +197,8 @@ def filtrar_logs_auditoria(
 
     rol = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
     codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
-    if codigo_rol != 'ADMIN':
+    nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+    if codigo_rol not in ['ADMIN', 'ADMINISTRADOR'] and nombre_rol not in ['administrador', 'admin']:
         raise PermissionDenied("Se requiere rol de Administrador para auditar los registros de log del sistema.")
 
     qs = LogSistema.objects.select_related(
@@ -213,7 +215,7 @@ def filtrar_logs_auditoria(
             Q(id_registro_afectado__icontains=texto_busqueda)
         )
 
-    tipo = str(filtros.get('tipo') or '').strip()
+    tipo = str(filtros.get('tipo') or filtros.get('accion_tipo') or '').strip()
     if tipo:
         qs = qs.filter(tipo__iexact=tipo)
 
@@ -237,6 +239,22 @@ def filtrar_logs_auditoria(
             Q(id_usuario__perfilusuario__apellido__icontains=usuario_query) |
             Q(id_usuario__perfilusuario__dni__icontains=usuario_query)
         )
+
+    fecha_desde = filtros.get('fecha_desde')
+    if fecha_desde:
+        qs = qs.filter(fecha_hora__date__gte=fecha_desde)
+
+    fecha_hasta = filtros.get('fecha_hasta')
+    if fecha_hasta:
+        qs = qs.filter(fecha_hora__date__lte=fecha_hasta)
+
+    hora_desde = filtros.get('hora_desde')
+    if hora_desde:
+        qs = qs.filter(fecha_hora__time__gte=hora_desde)
+
+    hora_hasta = filtros.get('hora_hasta')
+    if hora_hasta:
+        qs = qs.filter(fecha_hora__time__lte=hora_hasta)
 
     return qs
 
@@ -281,4 +299,49 @@ def obtener_copia_seguridad(id_backup: int) -> CopiaSeguridad:
         raise ValidationError(f"El archivo físico de respaldo no existe en la ruta configurada: {copia.ubicacion_archivo}")
 
     return copia
+
+
+def obtener_estado_almacenamiento() -> dict:
+    """
+    CU-22: Verifica en tiempo real el espacio libre en el disco del servidor,
+    los permisos de escritura en la carpeta de respaldos y el resumen de copias.
+    """
+    import os
+    import shutil
+    from django.conf import settings
+    from core_app.models import CopiaSeguridad
+    from core_app.serializers import CopiaSeguridadOutputSerializer
+
+    backup_dir = os.path.join(settings.BASE_DIR, 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+
+    free_bytes = 0
+    total_bytes = 0
+    try:
+        total, _, free = shutil.disk_usage(backup_dir)
+        total_bytes = total
+        free_bytes = free
+    except OSError:
+        pass
+
+    espacio_minimo_bytes = 50 * 1024 * 1024  # 50 MB
+    espacio_suficiente = free_bytes >= espacio_minimo_bytes
+    permisos_escritura = os.access(backup_dir, os.W_OK)
+
+    total_copias = CopiaSeguridad.objects.count()
+    ultima_copia = CopiaSeguridad.objects.order_by('-id_backup').first()
+    ultima_data = CopiaSeguridadOutputSerializer(ultima_copia).data if ultima_copia else None
+
+    return {
+        "directorio": backup_dir,
+        "espacio_libre_mb": round(free_bytes / (1024 * 1024), 2),
+        "espacio_libre_gb": round(free_bytes / (1024 * 1024 * 1024), 2),
+        "espacio_total_gb": round(total_bytes / (1024 * 1024 * 1024), 2),
+        "porcentaje_libre": round((free_bytes / total_bytes * 100), 1) if total_bytes > 0 else 0,
+        "espacio_suficiente": espacio_suficiente,
+        "permisos_escritura": permisos_escritura,
+        "total_copias": total_copias,
+        "ultima_copia": ultima_data
+    }
+
 

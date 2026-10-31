@@ -3617,12 +3617,28 @@ class FiltrarOrdenesCompraTestCase(TestCase):
         )
 
     def test_filtrar_ordenes_sin_filtros_retorna_todas_y_audita_log(self):
-        """Paso 1 y 5: Consulta sin filtros retorna todas las órdenes y registra auditoría en LogSistema."""
+        """Paso 1 y 5: Consulta sin filtros retorna todas las órdenes y valida la política de logs."""
+        from core_app.models import ConfiguracionSistema
+        # Por defecto no se generan logs al filtrar para alto rendimiento
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
+        self.assertFalse(
+            LogSistema.objects.filter(
+                id_usuario=self.admin,
+                accion__icontains="CU-37"
+            ).exists()
+        )
+
+        # Si el flag 'log_operaciones_lectura' está activo, sí se registra la traza
+        ConfiguracionSistema.objects.update_or_create(
+            clave='log_operaciones_lectura',
+            defaults={'valor': 'True', 'descripcion': 'Lectura pasiva'}
+        )
+        response_con_log = self.client.get(self.url)
+        self.assertEqual(response_con_log.status_code, status.HTTP_200_OK)
         self.assertTrue(
             LogSistema.objects.filter(
                 id_usuario=self.admin,

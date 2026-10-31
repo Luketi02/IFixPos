@@ -9,6 +9,7 @@ from core_app.apis import (
     EliminarNotificacionApi,
     EliminarTodasNotificacionesApi,
     FiltrarLogsAuditoriaApi,
+    EstadoAlmacenamientoApi,
     ListarCopiasSeguridadApi,
     GenerarCopiaSeguridadApi,
     DescargarCopiaSeguridadApi,
@@ -34,6 +35,7 @@ urlpatterns = [
     path('logs/filtrar/', FiltrarLogsAuditoriaApi.as_view(), name='api_filtrar_logs_query'),
 
     # CU-22: Realizar Copia de Seguridad
+    path('backups/estado/', EstadoAlmacenamientoApi.as_view(), name='api_estado_almacenamiento'),
     path('backups/', ListarCopiasSeguridadApi.as_view(), name='api_listar_backups'),
     path('backups/manual/', GenerarCopiaSeguridadApi.as_view(), name='api_generar_backup_manual'),
     path('backups/<int:id_backup>/descargar/', DescargarCopiaSeguridadApi.as_view(), name='api_descargar_backup'),
