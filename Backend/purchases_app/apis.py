@@ -12,6 +12,8 @@ from django.core.exceptions import (
 )
 
 from purchases_app.selectors import (
+    obtener_estado_motor_abastecimiento,
+    obtener_articulos_deficitarios_con_transito,
     filtrar_proveedores,
     filtrar_ordenes_compra,
     filtrar_solicitudes_cotizacion,
@@ -59,6 +61,7 @@ from purchases_app.serializers import (
     RegistroCompraOutputSerializer
 )
 from purchases_app.services import (
+    ejecutar_ciclo_abastecimiento_automatico,
     registrar_proveedor,
     modificar_proveedor,
     generar_solicitud_cotizacion,
@@ -1020,3 +1023,52 @@ class RegistrarCompraDirectaApi(APIView):
 
 
 
+
+
+# ==============================================================================
+# MOTOR AUTÓNOMO DE ABASTECIMIENTO INTELIGENTE (APIS)
+# ==============================================================================
+
+class EjecutarMotorAbastecimientoApi(APIView):
+    """
+    Disparo manual del Motor Autónomo de Abastecimiento por parte del Administrador.
+    Permite forzar la ejecución inmediata para evaluar faltantes, generar órdenes de compra
+    y despachar solicitudes de cotización.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        _exigir_rol_admin(request.user)
+
+        forzar = bool(request.data.get('forzar', True))
+        try:
+            resultado = ejecutar_ciclo_abastecimiento_automatico(
+                usuario_ejecutor=request.user,
+                forzar_ejecucion=forzar,
+                origen_disparo='MANUAL'
+            )
+        except (DjangoValidationError, DRFValidationError) as e:
+            err_msg = e.messages[0] if hasattr(e, 'messages') else str(e)
+            return Response({"error": err_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(resultado, status=status.HTTP_200_OK)
+
+
+class EstadoMotorAbastecimientoApi(APIView):
+    """
+    Consulta en tiempo real del estado del Motor de Abastecimiento:
+    parámetros activos, órdenes en tránsito, reparaciones en espera y artículos deficitarios.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _exigir_rol_admin(request.user)
+
+        estado = obtener_estado_motor_abastecimiento()
+        articulos_deficitarios = obtener_articulos_deficitarios_con_transito()
+
+        return Response({
+            **estado,
+            "total_articulos_deficitarios": len(articulos_deficitarios),
+            "articulos_deficitarios": articulos_deficitarios
+        }, status=status.HTTP_200_OK)

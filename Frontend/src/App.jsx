@@ -13,6 +13,7 @@ import RecoverPasswordScreen from './pages/auth/RecoverPasswordScreen';
 import CompleteProfileScreen from './pages/auth/CompleteProfileScreen';
 import EditProfileScreen from './pages/auth/EditProfileScreen';
 import UserAddressesScreen from './pages/profile/UserAddressesScreen';
+import UserPreferencesScreen from './pages/profile/UserPreferencesScreen';
 
 import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
 import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
@@ -162,6 +163,7 @@ function App() {
               {/* Edición de Perfil (CU-05) y Libreta de Direcciones (CU-47, CU-48, CU-49): Accesible para todo usuario autenticado */}
               <Route path="/editar-perfil" element={<EditProfileScreen />} />
               <Route path="/perfil/direcciones" element={<UserAddressesScreen />} />
+              <Route path="/perfil/preferencias" element={<UserPreferencesScreen />} />
             </Route>
 
             {/* Ruta comodín / fallback */}

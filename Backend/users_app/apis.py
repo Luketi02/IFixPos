@@ -529,3 +529,51 @@ class CambiarSesionDevApi(APIView):
             }
         }, status=status.HTTP_200_OK)
 
+
+
+class PreferenciasUsuarioApi(APIView):
+    """
+    Frontera HTTP para consultar y actualizar las preferencias personales del usuario autenticado.
+    Cumple la arquitectura estricta HackSoftware:
+    - Verificación de permisos (IsAuthenticated)
+    - Cero lógica de base de datos directa
+    - InputSerializer para validar entradas
+    - Invocación a Selector para lecturas
+    - Invocación a Service para escrituras
+    - OutputSerializer para respuestas
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from users_app.selectors import obtener_preferencias_usuario
+        from users_app.serializers import PreferenciasUsuarioOutputSerializer
+
+        usuario = request.user
+        id_usuario = getattr(usuario, 'id_usuario', getattr(usuario, 'id', None))
+        if not id_usuario:
+            return Response({"detail": "Usuario no autenticado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        preferencias = obtener_preferencias_usuario(id_usuario=id_usuario)
+        output_serializer = PreferenciasUsuarioOutputSerializer(preferencias)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        from users_app.serializers import PreferenciasUsuarioInputSerializer, PreferenciasUsuarioOutputSerializer
+        from users_app.services import guardar_preferencias_usuario
+
+        usuario = request.user
+        id_usuario = getattr(usuario, 'id_usuario', getattr(usuario, 'id', None))
+        if not id_usuario:
+            return Response({"detail": "Usuario no autenticado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        serializer = PreferenciasUsuarioInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        pref = guardar_preferencias_usuario(
+            usuario=usuario,
+            datos_validados=serializer.validated_data
+        )
+
+        output_serializer = PreferenciasUsuarioOutputSerializer(pref)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)

@@ -3734,3 +3734,416 @@ class FiltrarOrdenesCompraTestCase(TestCase):
 
 
 
+
+
+# ==============================================================================
+# MOTOR AUTÓNOMO DE ABASTECIMIENTO INTELIGENTE (TESTS)
+# ==============================================================================
+
+class MotorAbastecimientoAutomaticoTestCase(TestCase):
+    """
+    Pruebas unitarias y de integración para el Motor Autónomo de Abastecimiento:
+      - Matriz de Decisión Multicriterio (CU-54).
+      - Regla de Sondeo Selectivo: Exclusión de proveedores con cotización vigente (CU-14).
+      - Auditoría de Stock en Tránsito y Demanda Urgente de Taller.
+      - Protocolo de Cancelación por Incumplimiento de Proveedores.
+      - Endpoints de Ejecución Manual y Consulta de Estado.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # Rol y Usuarios
+        self.rol_admin = RolUsuario.objects.create(codigo='ADMIN', nombre_rol='Administrador')
+        self.rol_tec = RolUsuario.objects.create(codigo='TECNICO', nombre_rol='Técnico')
+        self.rol_cli = RolUsuario.objects.create(codigo='CLIENTE', nombre_rol='Cliente')
+
+        self.admin = Usuario.objects.create(
+            email='admin.motor@ifixpos.com',
+            contrasena='Test1234!',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.motor@ifixpos.com',
+            contrasena='Test1234!',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_tec,
+            is_active=True
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente.motor@ifixpos.com',
+            contrasena='Test1234!',
+            fecha_registro=timezone.now().date(),
+            id_rol=self.rol_cli,
+            is_active=True
+        )
+
+        # Geografía
+        self.pais = Pais.objects.create(nombre_pais='Argentina', cobertura_habilitada=True)
+        self.provincia = Provincia.objects.create(nombre_provincia='Misiones', id_pais=self.pais, cobertura_habilitada=True)
+        self.ciudad = Ciudad.objects.create(nombre_ciudad='Posadas', id_provincia=self.provincia, cobertura_habilitada=True)
+        self.direccion = Direccion.objects.create(
+            alias='Sede Central',
+            nro_calle='Av. Corrientes 100',
+            id_ciudad=self.ciudad,
+            id_usuario=self.admin
+        )
+
+        # Configuración Global
+        from core_app.models import ConfiguracionSistema
+        ConfiguracionSistema.objects.update_or_create(
+            clave='autoAbastecimientoActivo', defaults={'valor': 'True'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='modoDisparadorAbastecimiento', defaults={'valor': 'HIBRIDO'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='estrategiaLoteReposicion', defaults={'valor': 'BRECHA_MINIMO'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='frecuenciaGeneracionOC_dias', defaults={'valor': '5'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='esperaUrgenciaTecnicaHoras', defaults={'valor': '0'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='criterioObligatorio_Envio', defaults={'valor': 'False'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='diasToleranciaIncumplimientoProveedor', defaults={'valor': '3'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='toleranciaHorasIncumplimientoUrgente', defaults={'valor': '24'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='pesoEvaluacion_Economico', defaults={'valor': '20'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='pesoEvaluacion_Confiabilidad', defaults={'valor': '20'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='pesoEvaluacion_Tiempo', defaults={'valor': '20'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='pesoEvaluacion_Nivel', defaults={'valor': '20'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='pesoEvaluacion_Envio', defaults={'valor': '20'}
+        )
+
+        # Catálogo
+        self.cat_prod = CategoriaProducto.objects.create(nombre='Pantallas Test', estado=True)
+        self.producto = Producto.objects.create(
+            nombre='Display OLED Test A1',
+            descripcion='Pantalla de repuesto test',
+            precio_venta=Decimal('50000.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=True,
+            apto_consumible=False,
+            modulo_automatico=True,
+            id_categoria=self.cat_prod
+        )
+
+        from inventory_app.models import Stock, MovimientoStock
+        self.stock = Stock.objects.create(id_producto=self.producto, stock_minimo=10)
+
+        # Proveedores
+        self.prov_a = Proveedor.objects.create(
+            cuit_prov='30-11111111-1',
+            nombre_proveedor='Distribuidora Económica A',
+            correo='contacto@prova.com',
+            telefono='+54 11 1111-1111',
+            estado=True,
+            ofrece_envio=False,
+            indice_confiabilidad=Decimal('40.00'),
+            tiempo_promedio_entrega=7,
+            nivel='Distribuidor Local'
+        )
+        self.prov_b = Proveedor.objects.create(
+            cuit_prov='30-22222222-2',
+            nombre_proveedor='Mayorista Premium B',
+            correo='ventas@provb.com',
+            telefono='+54 11 2222-2222',
+            estado=True,
+            ofrece_envio=True,
+            indice_confiabilidad=Decimal('95.00'),
+            tiempo_promedio_entrega=1,
+            nivel='Mayorista Oficial'
+        )
+        self.prov_c = Proveedor.objects.create(
+            cuit_prov='30-33333333-3',
+            nombre_proveedor='Importador Regional C',
+            correo='info@provc.com',
+            telefono='+54 11 3333-3333',
+            estado=True,
+            ofrece_envio=True,
+            indice_confiabilidad=Decimal('70.00'),
+            tiempo_promedio_entrega=3,
+            nivel='Distribuidor Regional'
+        )
+
+    def test_calcular_mejores_ofertas_multicriterio(self):
+        """
+        CU-54: Evalúa la matriz multicriterio.
+        Aunque Prov A tenga un precio ligeramente menor ($20.000 vs $22.000),
+        Prov B supera ampliamente en confiabilidad (95 vs 40), entrega (1 día vs 7),
+        ofrece envío y es Mayorista Oficial, ganando la adjudicación.
+        """
+        from purchases_app.selectors import calcular_mejores_ofertas
+
+        hoy = timezone.now().date()
+
+        # Oferta A
+        sol_a = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_a = InvitacionCotizar.objects.create(id_solicitud=sol_a, cuit_prov=self.prov_a, token_acceso='tok-a', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_a = Cotizacion.objects.create(
+            id_invitacion=inv_a,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=10),
+            tiempo_promesa=7
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_a, id_producto=self.producto, precio_ofrecido=Decimal('20000.00'))
+
+        # Oferta B
+        sol_b = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_b = InvitacionCotizar.objects.create(id_solicitud=sol_b, cuit_prov=self.prov_b, token_acceso='tok-b', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_b = Cotizacion.objects.create(
+            id_invitacion=inv_b,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=10),
+            tiempo_promesa=1
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_b, id_producto=self.producto, precio_ofrecido=Decimal('22000.00'))
+
+        resultado = calcular_mejores_ofertas(
+            productos_solicitados=[{'id_producto': self.producto.id_producto, 'cantidad': 5}]
+        )
+
+        self.assertEqual(len(resultado['borradores']), 1)
+        borrador = resultado['borradores'][0]
+        # Prov B debe ser el ganador por su puntaje ponderado global superior
+        self.assertEqual(borrador['cuit_prov'], self.prov_b.cuit_prov)
+        self.assertEqual(borrador['nombre_proveedor'], self.prov_b.nombre_proveedor)
+        self.assertIn('evaluacion_multicriterio', borrador['items'][0])
+
+    def test_calcular_mejores_ofertas_criterio_envio_obligatorio(self):
+        """
+        CU-54: Si se exige envío a domicilio obligatorio, descarta a proveedores que no ofrecen envío.
+        """
+        from purchases_app.selectors import calcular_mejores_ofertas
+        from core_app.models import ConfiguracionSistema
+
+        ConfiguracionSistema.objects.filter(clave='criterioObligatorio_Envio').update(valor='True')
+        hoy = timezone.now().date()
+
+        # Oferta A (precio muy bajo $10.000, pero NO ofrece envío)
+        sol_a = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_a = InvitacionCotizar.objects.create(id_solicitud=sol_a, cuit_prov=self.prov_a, token_acceso='tok-a2', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_a = Cotizacion.objects.create(
+            id_invitacion=inv_a,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=10),
+            tiempo_promesa=2
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_a, id_producto=self.producto, precio_ofrecido=Decimal('10000.00'))
+
+        # Oferta B (precio $25.000, pero SÍ ofrece envío)
+        sol_b = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_b = InvitacionCotizar.objects.create(id_solicitud=sol_b, cuit_prov=self.prov_b, token_acceso='tok-b2', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_b = Cotizacion.objects.create(
+            id_invitacion=inv_b,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=10),
+            tiempo_promesa=3
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_b, id_producto=self.producto, precio_ofrecido=Decimal('25000.00'))
+
+        resultado = calcular_mejores_ofertas(
+            productos_solicitados=[{'id_producto': self.producto.id_producto, 'cantidad': 2}],
+            requiere_envio=True
+        )
+
+        self.assertEqual(len(resultado['borradores']), 1)
+        self.assertEqual(resultado['borradores'][0]['cuit_prov'], self.prov_b.cuit_prov)
+
+    def test_obtener_proveedores_candidatos_para_cotizacion_regla_exclusion(self):
+        """
+        CU-14 (Regla de Sondeo Selectivo):
+        NO se envían solicitudes a proveedores que YA cuentan con cotización vigente para el producto.
+        Solo se incluyen proveedores que NO han cotizado ese producto o cuya cotización ha expirado.
+        """
+        from purchases_app.selectors import obtener_proveedores_candidatos_para_cotizacion
+
+        hoy = timezone.now().date()
+
+        # Prov A tiene cotización VIGENTE para el producto -> DEBE SER EXCLUIDO
+        sol_a = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_a = InvitacionCotizar.objects.create(id_solicitud=sol_a, cuit_prov=self.prov_a, token_acceso='tok-vigente', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_a = Cotizacion.objects.create(
+            id_invitacion=inv_a,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=15),
+            tiempo_promesa=2
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_a, id_producto=self.producto, precio_ofrecido=Decimal('30000.00'))
+
+        # Prov B NO TIENE cotización para este producto -> DEBE SER INCLUIDO
+
+        # Prov C tiene cotización EXPIRADA para este producto -> DEBE SER INCLUIDO para renovar precio
+        sol_c = SolicitudCotizacion.objects.create(fecha_emision=hoy - timezone.timedelta(days=40), estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv_c = InvitacionCotizar.objects.create(id_solicitud=sol_c, cuit_prov=self.prov_c, token_acceso='tok-vencido', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot_c = Cotizacion.objects.create(
+            id_invitacion=inv_c,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy - timezone.timedelta(days=5),  # VENCIDA
+            tiempo_promesa=4
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot_c, id_producto=self.producto, precio_ofrecido=Decimal('32000.00'))
+
+        candidatos = list(obtener_proveedores_candidatos_para_cotizacion(self.producto.id_producto))
+        candidatos_cuits = [c.cuit_prov for c in candidatos]
+
+        # Prov A no debe estar (su oferta está vigente)
+        self.assertNotIn(self.prov_a.cuit_prov, candidatos_cuits)
+        # Prov B debe estar (nunca cotizó)
+        self.assertIn(self.prov_b.cuit_prov, candidatos_cuits)
+        # Prov C debe estar (su oferta venció)
+        self.assertIn(self.prov_c.cuit_prov, candidatos_cuits)
+
+    def test_obtener_articulos_deficitarios_con_transito_y_lotes(self):
+        """
+        Detección de stock crítico considerando el stock en tránsito no vencido
+        y las diferentes estrategias de cálculo de lote.
+        """
+        from purchases_app.selectors import obtener_articulos_deficitarios_con_transito
+        from inventory_app.models import MovimientoStock
+
+        # 1. Con stock 0 y stock_minimo 10 -> déficit detectado
+        deficit = obtener_articulos_deficitarios_con_transito()
+        self.assertTrue(any(d['id_producto'] == self.producto.id_producto for d in deficit))
+        item_def = next(d for d in deficit if d['id_producto'] == self.producto.id_producto)
+        self.assertEqual(item_def['cantidad_a_pedir'], 10)  # BRECHA_MINIMO: 10 - 0 = 10
+
+        # 2. Si se emite una orden de compra por 10 unidades que está en tránsito vigente:
+        orden_transito = OrdenCompra.objects.create(
+            fecha_emision=timezone.now().date(),
+            estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA,
+            sol_tec=False,
+            tipo_entrega=OrdenCompra.TIPO_ENTREGA_RETIRO,
+            cuit_prov=self.prov_b
+        )
+        DetalleOrdenCompra.objects.create(
+            id_orden=orden_transito,
+            id_producto=self.producto,
+            cantidad=10,
+            precio_unitario=Decimal('20000.00')
+        )
+
+        # El stock proyectado ahora es 0 + 10 = 10, cubriendo el mínimo de 10 -> Ya no es deficitario
+        deficit_con_transito = obtener_articulos_deficitarios_con_transito()
+        self.assertFalse(any(d['id_producto'] == self.producto.id_producto for d in deficit_con_transito))
+
+    def test_ejecutar_ciclo_abastecimiento_completo(self):
+        """
+        Prueba de extremo a extremo de la ejecución autónoma del motor.
+        Genera automáticamente la Orden de Compra formal con ReportLab y asiento en LogSistema.
+        """
+        from purchases_app.services import ejecutar_ciclo_abastecimiento_automatico
+
+        hoy = timezone.now().date()
+
+        # Asegurar cotización vigente para que avance a la Fase 2 y 3
+        sol = SolicitudCotizacion.objects.create(fecha_emision=hoy, estado_solicitud=SolicitudCotizacion.ESTADO_COTIZADA)
+        inv = InvitacionCotizar.objects.create(id_solicitud=sol, cuit_prov=self.prov_b, token_acceso='tok-auto', estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE)
+        cot = Cotizacion.objects.create(
+            id_invitacion=inv,
+            estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+            fecha_validez=hoy + timezone.timedelta(days=15),
+            tiempo_promesa=2
+        )
+        CotizacionProducto.objects.create(id_cotizacion=cot, id_producto=self.producto, precio_ofrecido=Decimal('24000.00'))
+
+        resultado = ejecutar_ciclo_abastecimiento_automatico(
+            usuario_ejecutor=self.admin,
+            forzar_ejecucion=True,
+            origen_disparo='TEST'
+        )
+
+        self.assertEqual(resultado['status'], 'COMPLETADO')
+        self.assertTrue(len(resultado['ordenes_emitidas']) >= 1)
+        orden_info = resultado['ordenes_emitidas'][0]
+        self.assertEqual(orden_info['proveedor'], self.prov_b.nombre_proveedor)
+
+        # Verificar que la orden exista físicamente en la BD en estado Esperando Entrega
+        orden_db = OrdenCompra.objects.get(pk=orden_info['id_orden'])
+        self.assertEqual(orden_db.estado_orden, OrdenCompra.ESTADO_ESPERANDO_ENTREGA)
+        self.assertTrue(orden_db.detalles.filter(id_producto=self.producto).exists())
+
+    def test_protocolo_incumplimiento_proveedor_timeout(self):
+        """
+        Verifica que una orden esperando entrega con sol_tec=True que superó su límite de tolerancia
+        urgente sea cancelada por incumplimiento y penalice el índice de confiabilidad del proveedor.
+        """
+        from purchases_app.services import ejecutar_ciclo_abastecimiento_automatico
+
+        hoy = timezone.now().date()
+
+        # Orden urgente emitida hace 10 días por Prov A (demora esperada 7 días + 1 día tolerancia = 8 días límite < 10)
+        conf_inicial = self.prov_a.indice_confiabilidad or Decimal('40.00')
+        orden_vencida = OrdenCompra.objects.create(
+            fecha_emision=hoy - timezone.timedelta(days=10),
+            estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA,
+            sol_tec=True,
+            tipo_entrega=OrdenCompra.TIPO_ENTREGA_RETIRO,
+            cuit_prov=self.prov_a
+        )
+        DetalleOrdenCompra.objects.create(
+            id_orden=orden_vencida,
+            id_producto=self.producto,
+            cantidad=3,
+            precio_unitario=Decimal('20000.00')
+        )
+
+        resultado = ejecutar_ciclo_abastecimiento_automatico(
+            usuario_ejecutor=self.admin,
+            forzar_ejecucion=True,
+            origen_disparo='TEST'
+        )
+
+        # La orden debe haber sido cancelada por incumplimiento
+        orden_vencida.refresh_from_db()
+        self.assertEqual(orden_vencida.estado_orden, OrdenCompra.ESTADO_CANCELADA)
+
+        # El proveedor A debe haber recibido la penalización
+        self.prov_a.refresh_from_db()
+        self.assertEqual(self.prov_a.indice_confiabilidad, max(Decimal('0.00'), conf_inicial - Decimal('10.00')))
+
+    def test_endpoints_api_ejecutar_y_estado(self):
+        """
+        Verifica el acceso y respuesta de los endpoints:
+          POST /api/purchases/motor-abastecimiento/ejecutar/
+          GET  /api/purchases/motor-abastecimiento/estado/
+        """
+        # 1. No autenticado -> 401
+        res = self.client.post('/api/purchases/motor-abastecimiento/ejecutar/', {})
+        self.assertIn(res.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+        # 2. Autenticado como Técnico -> 403
+        self.client.force_authenticate(user=self.tecnico)
+        res = self.client.post('/api/purchases/motor-abastecimiento/ejecutar/', {})
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 3. Autenticado como Administrador -> 200
+        self.client.force_authenticate(user=self.admin)
+        res_ejecutar = self.client.post('/api/purchases/motor-abastecimiento/ejecutar/', {'forzar': True})
+        self.assertEqual(res_ejecutar.status_code, status.HTTP_200_OK)
+        self.assertIn('status', res_ejecutar.data)
+
+        # 4. Consulta de estado -> 200
+        res_estado = self.client.get('/api/purchases/motor-abastecimiento/estado/')
+        self.assertEqual(res_estado.status_code, status.HTTP_200_OK)
+        self.assertIn('auto_abastecimiento_activo', res_estado.data)
+        self.assertIn('articulos_deficitarios', res_estado.data)

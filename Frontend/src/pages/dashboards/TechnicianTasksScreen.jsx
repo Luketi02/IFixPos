@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import { formatearNombreConInicial } from '../../utils/roleRoutes';
 
@@ -96,22 +97,12 @@ export default function TechnicianTasksScreen() {
 
       {/* 2. Área de Contenido Principal (Columna Derecha) */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Header Superior del Taller */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Estación de Trabajo • Taller Técnico: <span className="text-emerald-400 font-semibold">Operativo</span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full hidden sm:inline-block">
-              Modo Especialista
-            </span>
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Header Superior Unificado del Taller */}
+        <AdminHeader
+          category="Taller & Servicio Técnico"
+          pageName="Panel de Operaciones"
+          title="Panel de Operaciones Técnicas"
+        />
 
         {/* Contenido Principal */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">

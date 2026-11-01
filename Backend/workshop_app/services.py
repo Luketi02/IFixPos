@@ -7,11 +7,13 @@ import string
 from django.conf import settings
 from django.utils import timezone as django_timezone
 from django.db import transaction
+from django.db.models import Avg
 from rest_framework.exceptions import ValidationError, PermissionDenied
-from workshop_app.models import Dispositivo, CategoriaReparacion, Reparacion, BitacoraReparacion
+from workshop_app.models import Dispositivo, CategoriaReparacion, Reparacion, BitacoraReparacion, Calificacion
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
-from core_app.models import LogSistema
+from core_app.models import LogSistema, Notificacion
+from core_app.selectors import obtener_configuracion_bool, obtener_configuracion_int
 
 UMBRAL_ACTIVACION_AUTOMATICA = 8
 
@@ -553,6 +555,175 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
         print(f"[CU-26 Remito] Advertencia al generar o despachar remito: {e}")
 
 
+def seleccionar_mejor_tecnico_para_reparacion(
+    *,
+    reparacion: Reparacion
+) -> tuple[Any, dict]:
+    """
+    Algoritmo Inteligente de Asignación de Reparaciones a Técnicos.
+    Evalúa a todos los técnicos activos del sistema según las 5 ponderaciones configurables:
+      1. Carga Laboral Activa (menor carga = mayor puntaje)
+      2. Calificación de Clientes (mayor promedio de estrellas = mayor puntaje)
+      3. Rapidez de Resolución (menor promedio de días = mayor puntaje)
+      4. Especialidad en Categoría (más reparaciones resueltas de la misma categoría = mayor puntaje)
+      5. Tasa de Efectividad (mayor porcentaje de reparaciones exitosas vs canceladas = mayor puntaje)
+    
+    Retorna una tupla: (Usuario_tecnico_ganador, dict_detalle_metricas)
+    """
+    tecnicos = list(Usuario.objects.filter(id_rol__codigo='TECNICO', is_active=True))
+    if not tecnicos:
+        return None, {"razon": "No hay técnicos activos registrados en el sistema."}
+
+    if len(tecnicos) == 1:
+        return tecnicos[0], {
+            "tecnico_id": tecnicos[0].id_usuario,
+            "email": tecnicos[0].email,
+            "razon": "Único técnico activo disponible en el sistema.",
+            "score_final": 100.0
+        }
+
+    peso_carga = obtener_configuracion_int('pesoAsignacion_CargaLaboral', 30)
+    peso_calif = obtener_configuracion_int('pesoAsignacion_Calificacion', 25)
+    peso_rapidez = obtener_configuracion_int('pesoAsignacion_Rapidez', 20)
+    peso_especialidad = obtener_configuracion_int('pesoAsignacion_Especialidad', 15)
+    peso_efectividad = obtener_configuracion_int('pesoAsignacion_Efectividad', 10)
+
+    suma_pesos = peso_carga + peso_calif + peso_rapidez + peso_especialidad + peso_efectividad
+    if suma_pesos <= 0:
+        peso_carga, peso_calif, peso_rapidez, peso_especialidad, peso_efectividad = 30, 25, 20, 15, 10
+        suma_pesos = 100
+
+    etapas_activas = [
+        'ESPERANDO_DIAGNOSTICO',
+        'EN_DIAGNOSTICO',
+        'ESPERANDO_CONFIRMACION',
+        'ESPERANDO_REPUESTOS',
+        'EN_REPARACION'
+    ]
+
+    cats_reparacion = list(reparacion.categorias.all().values_list('id_categoria', flat=True))
+    candidatos_metricas = []
+
+    for tec in tecnicos:
+        carga_raw = Reparacion.objects.filter(id_usuario=tec, etapa__in=etapas_activas).count()
+        calif_aggr = Calificacion.objects.filter(id_reparacion__id_usuario=tec).aggregate(prom=Avg('puntuacion'))['prom']
+        if calif_aggr is not None:
+            calif_promedio = float(calif_aggr)
+            calif_score = min(100.0, max(0.0, (calif_promedio / 5.0) * 100.0))
+        else:
+            calif_promedio = 3.5
+            calif_score = 70.0
+
+        resueltas = Reparacion.objects.filter(
+            id_usuario=tec,
+            etapa__in=['FINALIZADO', 'ENTREGADO'],
+            fecha_entrega__isnull=False
+        ).only('fecha_inicio', 'fecha_entrega')
+
+        if resueltas.exists():
+            dias_totales = [max(1, (r.fecha_entrega - r.fecha_inicio).days) for r in resueltas]
+            prom_dias = sum(dias_totales) / len(dias_totales)
+        else:
+            prom_dias = 3.0
+
+        if cats_reparacion:
+            esp_raw = Reparacion.objects.filter(
+                id_usuario=tec,
+                etapa__in=['FINALIZADO', 'ENTREGADO'],
+                categorias__in=cats_reparacion
+            ).distinct().count()
+        else:
+            esp_raw = 0
+
+        exitosas = Reparacion.objects.filter(id_usuario=tec, etapa__in=['FINALIZADO', 'ENTREGADO']).count()
+        canceladas = Reparacion.objects.filter(id_usuario=tec, etapa__in=['CANCELADA', 'CANCELADO', 'RECHAZADO', 'RECHAZADA']).count()
+        total_term = exitosas + canceladas
+        if total_term > 0:
+            efectividad_score = (exitosas / total_term) * 100.0
+        else:
+            efectividad_score = 85.0
+
+        candidatos_metricas.append({
+            'usuario': tec,
+            'carga_raw': carga_raw,
+            'calif_promedio': round(calif_promedio, 2),
+            'calif_score': calif_score,
+            'prom_dias': round(prom_dias, 2),
+            'esp_raw': esp_raw,
+            'efectividad_score': efectividad_score,
+            'exitosas': exitosas,
+            'total_term': total_term
+        })
+
+    min_carga = min(c['carga_raw'] for c in candidatos_metricas)
+    max_carga = max(c['carga_raw'] for c in candidatos_metricas)
+    min_dias = min(c['prom_dias'] for c in candidatos_metricas)
+    max_dias = max(c['prom_dias'] for c in candidatos_metricas)
+    min_esp = min(c['esp_raw'] for c in candidatos_metricas)
+    max_esp = max(c['esp_raw'] for c in candidatos_metricas)
+
+    for c in candidatos_metricas:
+        if min_carga == max_carga:
+            c['score_carga'] = 100.0
+        else:
+            c['score_carga'] = ((max_carga - c['carga_raw']) / (max_carga - min_carga)) * 100.0
+
+        if min_dias == max_dias:
+            c['score_rapidez'] = 100.0
+        else:
+            c['score_rapidez'] = ((max_dias - c['prom_dias']) / (max_dias - min_dias)) * 100.0
+
+        if max_esp == 0:
+            c['score_esp'] = 50.0
+        elif min_esp == max_esp:
+            c['score_esp'] = 100.0
+        else:
+            c['score_esp'] = ((c['esp_raw'] - min_esp) / (max_esp - min_esp)) * 100.0
+
+        c['score_final'] = round((
+            c['score_carga'] * (peso_carga / suma_pesos) +
+            c['calif_score'] * (peso_calif / suma_pesos) +
+            c['score_rapidez'] * (peso_rapidez / suma_pesos) +
+            c['score_esp'] * (peso_especialidad / suma_pesos) +
+            c['efectividad_score'] * (peso_efectividad / suma_pesos)
+        ), 2)
+
+    candidatos_metricas.sort(
+        key=lambda x: (-x['score_final'], x['carga_raw'], x['usuario'].id_usuario)
+    )
+
+    ganador = candidatos_metricas[0]
+    detalle = {
+        'tecnico_ganador_id': ganador['usuario'].id_usuario,
+        'tecnico_ganador_email': ganador['usuario'].email,
+        'score_final': ganador['score_final'],
+        'puntajes': {
+            'carga_laboral': round(ganador['score_carga'], 1),
+            'calificacion': round(ganador['calif_score'], 1),
+            'rapidez': round(ganador['score_rapidez'], 1),
+            'especialidad': round(ganador['score_esp'], 1),
+            'efectividad': round(ganador['efectividad_score'], 1)
+        },
+        'metricas_reales': {
+            'reparaciones_activas': ganador['carga_raw'],
+            'promedio_estrellas': ganador['calif_promedio'],
+            'dias_promedio_resolucion': ganador['prom_dias'],
+            'reparaciones_en_categoria': ganador['esp_raw'],
+            'tasa_efectividad_pct': round(ganador['efectividad_score'], 1)
+        },
+        'ponderaciones_aplicadas': {
+            'carga_laboral_pct': peso_carga,
+            'calificacion_pct': peso_calif,
+            'rapidez_pct': peso_rapidez,
+            'especialidad_pct': peso_especialidad,
+            'efectividad_pct': peso_efectividad
+        },
+        'total_tecnicos_evaluados': len(tecnicos)
+    }
+
+    return ganador['usuario'], detalle
+
+
 @transaction.atomic
 def iniciar_reparacion(
     *,
@@ -609,14 +780,43 @@ def iniciar_reparacion(
     ids_categorias = datos_validados.get('ids_categorias', [])
     reparacion.categorias.set(ids_categorias)
 
+    # Paso 6.1: Algoritmo Inteligente de Asignación a Técnico
+    auto_asignar = obtener_configuracion_bool('autoAsignacionTecnicosActiva')
+    tecnico_asignado = None
+    detalle_asignacion = None
+
+    if auto_asignar:
+        tecnico_asignado, detalle_asignacion = seleccionar_mejor_tecnico_para_reparacion(reparacion=reparacion)
+        if tecnico_asignado:
+            reparacion.id_usuario = tecnico_asignado
+            reparacion.save(update_fields=['id_usuario'])
+
     # Paso 7: Registro en Bitácora Técnica
+    comentario_apertura = "Apertura de orden de servicio"
+    if tecnico_asignado:
+        comentario_apertura += f" (Asignado automáticamente al técnico {tecnico_asignado.email} - Score: {detalle_asignacion.get('score_final', 100)} pts)"
+
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
-        id_usuario=usuario_ejecutor,
+        id_usuario=tecnico_asignado or usuario_ejecutor,
         fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_alcanzado_int,
-        comentario="Apertura de orden de servicio"
+        comentario=comentario_apertura
     )
+
+    if tecnico_asignado:
+        try:
+            nombre_equipo = dispositivo.id_modelo.nombre if dispositivo.id_modelo else "Dispositivo"
+            Notificacion.objects.create(
+                mensaje=f"Se te ha asignado la nueva reparación #{reparacion.id_reparacion} ({nombre_equipo}) mediante el algoritmo inteligente de taller.",
+                tipo="ASIGNACION_REPARACION",
+                fecha_envio=django_timezone.now().date(),
+                leida=False,
+                id_usuario=tecnico_asignado,
+                id_dispositivo=dispositivo
+            )
+        except Exception as e:
+            print(f"[Notificación Asignación CU-26] Advertencia: {e}")
 
     # Paso 8: Auditoría y Despacho de Remito de Ingreso
     email_ejecutor = getattr(usuario_ejecutor, 'email', str(usuario_ejecutor))
@@ -745,22 +945,50 @@ def recepcionar_dispositivo_taller(
     reparacion.credencial_acceso = datos_validados.get('credencial_acceso') or 'Ninguna'
     reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
     reparacion.hora_recepcion = django_timezone.now().time()
-    reparacion.id_usuario = usuario_tecnico
-    reparacion.save()
 
     # Actualizar relación M2M de categorías si fueron especificadas
     if 'ids_categorias' in datos_validados:
         reparacion.categorias.set(datos_validados['ids_categorias'])
 
-    # Paso 6: Registro en Bitácora de Reparación (único lugar donde persisten las observaciones físicas)
+    # Paso 5.1: Asignación de técnico responsable (Algoritmo Inteligente vs Recepcionista)
+    auto_asignar = obtener_configuracion_bool('autoAsignacionTecnicosActiva')
+    tecnico_final = usuario_tecnico
+    detalle_auto = None
+
+    if auto_asignar:
+        tecnico_sel, detalle_auto = seleccionar_mejor_tecnico_para_reparacion(reparacion=reparacion)
+        if tecnico_sel:
+            tecnico_final = tecnico_sel
+
+    reparacion.id_usuario = tecnico_final
+    reparacion.save()
+
+    # Paso 6: Registro en Bitácora de Reparación
     comentario_bitacora = f"Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    if auto_asignar and tecnico_final != usuario_tecnico:
+        comentario_bitacora += f" | Asignado para diagnóstico a {tecnico_final.email} mediante distribución inteligente (Score: {detalle_auto.get('score_final', 100)} pts)."
+
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
-        id_usuario=usuario_tecnico,
+        id_usuario=tecnico_final,
         fecha_hora=django_timezone.now(),
         estado_alcanzado=2,  # 2: ESPERANDO_DIAGNOSTICO
         comentario=comentario_bitacora
     )
+
+    if auto_asignar and tecnico_final != usuario_tecnico:
+        try:
+            nombre_equipo = reparacion.id_dispositivo.id_modelo.nombre if reparacion.id_dispositivo.id_modelo else "Dispositivo"
+            Notificacion.objects.create(
+                mensaje=f"Se te ha asignado la reparación #{reparacion.id_reparacion} ({nombre_equipo}) recepcionada en mostrador.",
+                tipo="ASIGNACION_REPARACION",
+                fecha_envio=django_timezone.now().date(),
+                leida=False,
+                id_usuario=tecnico_final,
+                id_dispositivo=reparacion.id_dispositivo
+            )
+        except Exception as e:
+            print(f"[Notificación Asignación CU-45] Advertencia: {e}")
 
     # Paso 7: Auditoría en LogSistema y Despacho de Comprobante
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
@@ -1536,6 +1764,18 @@ def cambiar_estado_reparacion(
         estado_alcanzado=estado_int,
         comentario=comentario
     )
+
+    # Hook Transaccional: Disparo del Motor de Abastecimiento Automático para urgencia de taller
+    if nuevo_estado == 'ESPERANDO_REPUESTOS':
+        try:
+            from purchases_app.services import ejecutar_ciclo_abastecimiento_automatico
+            ejecutar_ciclo_abastecimiento_automatico(
+                usuario_ejecutor=usuario_tecnico,
+                forzar_ejecucion=False,
+                origen_disparo='TRANSACCIONAL'
+            )
+        except Exception:
+            pass
 
     # Paso 7: Notificación automática por correo y campanita al cliente con link
     generar_y_enviar_notificacion_cambio_estado(

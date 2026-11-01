@@ -1014,3 +1014,53 @@ def modificar_rol_sistema(
     return rol
 
 
+
+
+@transaction.atomic
+def guardar_preferencias_usuario(
+    *,
+    usuario: Usuario,
+    datos_validados: dict
+) -> PreferenciasUsuario:
+    """
+    Motor de escritura para actualizar o inicializar las preferencias personales del usuario.
+    Envuelto en @transaction.atomic. Prohibido recibir request como parámetro.
+    Registra auditoría en LogSistema.
+    """
+    from users_app.models import PreferenciasUsuario
+    from core_app.models import LogSistema
+
+    pref, _ = PreferenciasUsuario.objects.select_for_update().get_or_create(
+        id_usuario=usuario,
+        defaults={
+            'noti_c': True,
+            'noti_w': False,
+            'modo_oscuro': True
+        }
+    )
+
+    if 'noti_c' in datos_validados:
+        pref.noti_c = bool(datos_validados['noti_c'])
+    if 'noti_w' in datos_validados:
+        pref.noti_w = bool(datos_validados['noti_w'])
+    if 'modo_oscuro' in datos_validados:
+        pref.modo_oscuro = bool(datos_validados['modo_oscuro'])
+
+    pref.save()
+
+    # Registro de auditoría
+    LogSistema.objects.create(
+        fecha_hora=datetime.now(timezone.utc),
+        accion="Actualización de preferencias personales",
+        detalle=(
+            f"El usuario {usuario.email} actualizó sus preferencias personales. "
+            f"Email: {pref.noti_c}, WhatsApp: {pref.noti_w}, Modo Oscuro: {pref.modo_oscuro}."
+        ),
+        tipo="ACCESO",
+        modulo_origen="Usuarios",
+        tabla_afectada="preferencias_usuario",
+        id_registro_afectado=usuario.id_usuario,
+        id_usuario=usuario
+    )
+
+    return pref

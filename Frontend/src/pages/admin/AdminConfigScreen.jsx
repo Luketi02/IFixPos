@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,14 +7,16 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import AddressManagementModal from '../../components/geo/AddressManagementModal';
 import CyberNumberInput from '../../components/common/CyberNumberInput';
+import CyberTooltip from '../../components/common/CyberTooltip';
+import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Catálogo de categorías para pestañas de navegación rápida
 const CATEGORIAS_CONFIG = [
-  { id: 'all', label: 'Todas las Categorías', badge: '46' },
-  { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '8' },
-  { id: 'taller', label: 'Taller & Servicio Técnico', badge: '2' },
+  { id: 'all', label: 'Todas las Categorías', badge: '58' },
+  { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '14' },
+  { id: 'taller', label: 'Taller & Servicio Técnico', badge: '8' },
   { id: 'fidelizacion', label: 'Fidelización, Descuentos & Tarifas', badge: '11' },
   { id: 'institucional', label: 'Institucional (Master Data)', badge: '12' },
   { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '8' },
@@ -22,7 +24,7 @@ const CATEGORIAS_CONFIG = [
 ];
 
 export default function AdminConfigScreen() {
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -76,6 +78,12 @@ export default function AdminConfigScreen() {
     pesoEvaluacion_Nivel: '20',
     pesoEvaluacion_Economico: '20',
     pesoEvaluacion_Envio: '20',
+    criterioObligatorio_Envio: 'False',
+    modoDisparadorAbastecimiento: 'HIBRIDO',
+    estrategiaLoteReposicion: 'BRECHA_MINIMO',
+    esperaUrgenciaTecnicaHoras: '0',
+    toleranciaHorasIncumplimientoUrgente: '24',
+    diasToleranciaIncumplimientoProveedor: '3',
 
     // 🔍 Auditoría (Logs Master Switch)
     log_seguridad_accesos: 'True',
@@ -93,7 +101,13 @@ export default function AdminConfigScreen() {
 
     // 🔧 Taller y Servicio Técnico
     costoManoDeObra: '30000.0',
-    permitirCostoManoDeObraPropio: 'False'
+    permitirCostoManoDeObraPropio: 'False',
+    autoAsignacionTecnicosActiva: 'True',
+    pesoAsignacion_CargaLaboral: '30',
+    pesoAsignacion_Calificacion: '25',
+    pesoAsignacion_Rapidez: '20',
+    pesoAsignacion_Especialidad: '15',
+    pesoAsignacion_Efectividad: '10'
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -109,7 +123,6 @@ export default function AdminConfigScreen() {
       setSelectedCategory(cat);
     }
   }, [searchParams, location.state]);
-  const [searchFilter, setSearchFilter] = useState('');
 
   // Estados para alternar visibilidad de credenciales privadas de Mercado Pago
   const [mostrarAccessTokenMP, setMostrarAccessTokenMP] = useState(false);
@@ -134,10 +147,9 @@ export default function AdminConfigScreen() {
       setIsLoading(true);
       setServerError('');
       try {
+        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
         const response = await axios.get(`${API_BASE_URL}/api/core/configuraciones/`, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
+          headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         });
 
         if (isMounted && response.data && typeof response.data === 'object') {
@@ -173,9 +185,10 @@ export default function AdminConfigScreen() {
 
     if (idDir && idDir !== 'S/N' && !isNaN(Number(idDir)) && Number(idDir) > 0) {
       setIsLoadingDireccion(true);
+      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
       axios
         .get(`${API_BASE_URL}/api/geo/direccion-sede/`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         })
         .then((res) => {
           if (isMounted && res.data) {
@@ -228,9 +241,10 @@ export default function AdminConfigScreen() {
     setIsUploadingLogo(true);
     setServerError('');
     try {
+      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
       const response = await axios.post(`${API_BASE_URL}/api/core/configuraciones/logo/`, uploadData, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
           'Content-Type': 'multipart/form-data'
         }
       });
@@ -275,15 +289,43 @@ export default function AdminConfigScreen() {
     }
   }, [successMsg]);
 
+
+  const isBooleanActive = (clave) => {
+    return String(formData[clave]).toLowerCase() === 'true';
+  };
+
   // 2. Contador en tiempo real del 100% del Algoritmo
+  const envioEsObligatorio = String(formData.criterioObligatorio_Envio).toLowerCase() === 'true';
+
   const pesoConf = parseInt(formData.pesoEvaluacion_Confiabilidad, 10) || 0;
   const pesoTiem = parseInt(formData.pesoEvaluacion_Tiempo, 10) || 0;
   const pesoNive = parseInt(formData.pesoEvaluacion_Nivel, 10) || 0;
   const pesoEcon = parseInt(formData.pesoEvaluacion_Economico, 10) || 0;
-  const pesoEnvi = parseInt(formData.pesoEvaluacion_Envio, 10) || 0;
+  const pesoEnvi = envioEsObligatorio ? 0 : (parseInt(formData.pesoEvaluacion_Envio, 10) || 0);
 
   const sumaAlgoritmo = pesoConf + pesoTiem + pesoNive + pesoEcon + pesoEnvi;
   const isAlgoritmoBalanceado = sumaAlgoritmo === 100;
+
+  // 2.1 Contador en tiempo real del 100% del Algoritmo de Asignación a Técnicos
+  const pesoTecCarga = parseInt(formData.pesoAsignacion_CargaLaboral, 10) || 0;
+  const pesoTecCalif = parseInt(formData.pesoAsignacion_Calificacion, 10) || 0;
+  const pesoTecRapi = parseInt(formData.pesoAsignacion_Rapidez, 10) || 0;
+  const pesoTecEspe = parseInt(formData.pesoAsignacion_Especialidad, 10) || 0;
+  const pesoTecEfec = parseInt(formData.pesoAsignacion_Efectividad, 10) || 0;
+
+  const sumaAlgoritmoTecnicos = pesoTecCarga + pesoTecCalif + pesoTecRapi + pesoTecEspe + pesoTecEfec;
+  const isAlgoritmoTecnicosBalanceado = sumaAlgoritmoTecnicos === 100;
+
+  const handleAutoBalancearTecnicos = () => {
+    setFormData((prev) => ({
+      ...prev,
+      pesoAsignacion_CargaLaboral: '30',
+      pesoAsignacion_Calificacion: '25',
+      pesoAsignacion_Rapidez: '20',
+      pesoAsignacion_Especialidad: '15',
+      pesoAsignacion_Efectividad: '10',
+    }));
+  };
 
   // Manejo de porcentajes enteros (0 - 100)
   const handlePercentageChange = (clave, rawValue) => {
@@ -325,17 +367,56 @@ export default function AdminConfigScreen() {
     setFormData((prev) => ({ ...prev, [clave]: value }));
   };
 
+  // Función para auto-balancear los pesos del algoritmo al 100% de forma inteligente y equitativa
+  const handleAutoBalancearAlgoritmo = () => {
+    if (envioEsObligatorio) {
+      setFormData((prev) => ({
+        ...prev,
+        pesoEvaluacion_Confiabilidad: '25',
+        pesoEvaluacion_Tiempo: '25',
+        pesoEvaluacion_Nivel: '25',
+        pesoEvaluacion_Economico: '25',
+        pesoEvaluacion_Envio: '0',
+      }));
+    } else {
+      setFormData((prev) => ({
+        ...prev,
+        pesoEvaluacion_Confiabilidad: '20',
+        pesoEvaluacion_Tiempo: '20',
+        pesoEvaluacion_Nivel: '20',
+        pesoEvaluacion_Economico: '20',
+        pesoEvaluacion_Envio: '20',
+      }));
+    }
+  };
+
   // Conmutador de interruptores booleanos ('True' / 'False')
   const handleToggleBoolean = (clave) => {
     setFormData((prev) => {
       const current = String(prev[clave]).toLowerCase() === 'true';
-      return { ...prev, [clave]: current ? 'False' : 'True' };
+      const nuevo = current ? 'False' : 'True';
+      const updated = { ...prev, [clave]: nuevo };
+
+      // Si se activa o desactiva Envío Obligatorio, auto-redistribuir factores para mantener el 100%
+      if (clave === 'criterioObligatorio_Envio') {
+        if (nuevo === 'True') {
+          updated.pesoEvaluacion_Envio = '0';
+          updated.pesoEvaluacion_Confiabilidad = '25';
+          updated.pesoEvaluacion_Tiempo = '25';
+          updated.pesoEvaluacion_Nivel = '25';
+          updated.pesoEvaluacion_Economico = '25';
+        } else {
+          updated.pesoEvaluacion_Envio = '20';
+          updated.pesoEvaluacion_Confiabilidad = '20';
+          updated.pesoEvaluacion_Tiempo = '20';
+          updated.pesoEvaluacion_Nivel = '20';
+          updated.pesoEvaluacion_Economico = '20';
+        }
+      }
+      return updated;
     });
   };
 
-  const isBooleanActive = (clave) => {
-    return String(formData[clave]).toLowerCase() === 'true';
-  };
 
   // Verificación de inputs obligatorios vacíos
   const tieneCamposCriticosVacios = [
@@ -343,7 +424,12 @@ export default function AdminConfigScreen() {
     formData.pesoEvaluacion_Tiempo,
     formData.pesoEvaluacion_Nivel,
     formData.pesoEvaluacion_Economico,
-    formData.pesoEvaluacion_Envio,
+    ...(envioEsObligatorio ? [] : [formData.pesoEvaluacion_Envio]),
+    formData.pesoAsignacion_CargaLaboral,
+    formData.pesoAsignacion_Calificacion,
+    formData.pesoAsignacion_Rapidez,
+    formData.pesoAsignacion_Especialidad,
+    formData.pesoAsignacion_Efectividad,
     formData.porcentajeDescuentoMaximo,
     formData.tiempoSesionInactiva,
     formData.maxIntentosLogin,
@@ -351,7 +437,7 @@ export default function AdminConfigScreen() {
     formData.backupRetencionCopias
   ].some((v) => v === '' || v === null || v === undefined);
 
-  const isGuardarDeshabilitado = !isAlgoritmoBalanceado || tieneCamposCriticosVacios || isSaving || isLoading;
+  const isGuardarDeshabilitado = !isAlgoritmoBalanceado || !isAlgoritmoTecnicosBalanceado || tieneCamposCriticosVacios || isSaving || isLoading;
 
   // 3. Envío y persistencia de todos los cambios en PostgreSQL
   const handleSubmit = async (e) => {
@@ -363,9 +449,10 @@ export default function AdminConfigScreen() {
     setSuccessMsg('');
 
     try {
+      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
       const response = await axios.put(`${API_BASE_URL}/api/core/configuraciones/`, formData, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -583,7 +670,7 @@ export default function AdminConfigScreen() {
                         </h2>
                       </div>
                       <p className="text-xs text-slate-400 mt-1">
-                        Ponderación para adjudicar automáticamente cotizaciones a proveedores. La suma debe ser exactamente 100%.
+                        Ponderación para adjudicar automáticamente cotizaciones a proveedores. {envioEsObligatorio ? 'Al requerir Envío como condición obligatoria, el 100% se distribuye entre los 4 factores restantes.' : 'La suma de los 5 factores debe ser exactamente 100%.'}
                       </p>
                     </div>
 
@@ -629,10 +716,16 @@ export default function AdminConfigScreen() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
                     {/* Confiabilidad */}
                     <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#06B6D4]" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#06B6D4]" />
+                          <label className="text-xs font-semibold text-slate-200">Confiabilidad (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Factor Confiabilidad"
+                          text="Mide el desempeño histórico del proveedor: tasa de cumplimiento en plazos de entrega pactados, calidad de artículos y tasa nula de reclamos."
+                        />
                       </div>
-                      <label className="block text-xs font-semibold text-slate-200">Confiabilidad (%)</label>
                       <div className="relative">
                         <input
                           type="text"
@@ -644,15 +737,21 @@ export default function AdminConfigScreen() {
                         />
                         <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
                       </div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Historial y cumplimiento del proveedor.</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">Historial de cumplimiento y reputación del proveedor.</p>
                     </div>
 
                     {/* Tiempo */}
                     <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6]" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6]" />
+                          <label className="text-xs font-semibold text-slate-200">Tiempo Entrega (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Factor Tiempo de Entrega"
+                          text="Premia la celeridad prometida por el proveedor para despachar y entregar los insumos en el taller o sucursal."
+                        />
                       </div>
-                      <label className="block text-xs font-semibold text-slate-200">Tiempo de Entrega (%)</label>
                       <div className="relative">
                         <input
                           type="text"
@@ -664,15 +763,21 @@ export default function AdminConfigScreen() {
                         />
                         <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
                       </div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Velocidad de entrega prometida.</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">Velocidad y días estimados de entrega.</p>
                     </div>
 
                     {/* Nivel */}
                     <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                          <label className="text-xs font-semibold text-slate-200">Nivel Comercial (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Factor Nivel Comercial"
+                          text="Evalúa la jerarquía comercial, volumen habitual de aprovisionamiento, solvencia y solidez postventa del proveedor."
+                        />
                       </div>
-                      <label className="block text-xs font-semibold text-slate-200">Nivel Comercial (%)</label>
                       <div className="relative">
                         <input
                           type="text"
@@ -684,15 +789,21 @@ export default function AdminConfigScreen() {
                         />
                         <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
                       </div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Categoría o envergadura del proveedor.</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">Categoría o envergadura comercial del proveedor.</p>
                     </div>
 
                     {/* Económico */}
                     <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                          <label className="text-xs font-semibold text-slate-200">Oferta Económica (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Factor Oferta Económica"
+                          text="Pondera el valor del precio cotizado por ítem o total. A menor precio global, mayor puntuación relativa asignada."
+                        />
                       </div>
-                      <label className="block text-xs font-semibold text-slate-200">Oferta Económica (%)</label>
                       <div className="relative">
                         <input
                           type="text"
@@ -704,27 +815,82 @@ export default function AdminConfigScreen() {
                         />
                         <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
                       </div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Precio total de la cotización.</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">Precio unitario y total presupuestado.</p>
                     </div>
 
                     {/* Envío */}
-                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                    <div className={`p-4 rounded-xl border space-y-3 transition-all ${
+                      envioEsObligatorio
+                        ? 'bg-rose-950/20 border-rose-500/40'
+                        : 'bg-slate-900/70 border-slate-800'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                          <label className="text-xs font-semibold text-slate-200">Condición Envío</label>
+                          <CyberTooltip
+                            title="Condición de Logística y Envío"
+                            text="Pondera si el proveedor incluye flete a taller o cobertura de despacho. Si se configura como Obligatorio, se descartan automáticamente cotizaciones sin entrega a taller y este porcentaje pasa a 0%."
+                          />
+                        </div>
+                        {envioEsObligatorio && (
+                          <span className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 uppercase font-mono">
+                            Excluyente
+                          </span>
+                        )}
                       </div>
-                      <label className="block text-xs font-semibold text-slate-200">Condición Envío (%)</label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={formData.pesoEvaluacion_Envio}
-                          onChange={(e) => handlePercentageChange('pesoEvaluacion_Envio', e.target.value)}
-                          placeholder="20"
-                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
-                        />
-                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+
+                      {envioEsObligatorio ? (
+                        <div className="py-2.5 px-3 bg-slate-950/90 rounded-lg border border-rose-500/30 text-[11px] text-rose-300 font-mono flex items-center justify-between">
+                          <span>✓ Requisito Excluyente</span>
+                          <span className="text-[10px] text-rose-400">0%</span>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={formData.pesoEvaluacion_Envio}
+                            onChange={(e) => handlePercentageChange('pesoEvaluacion_Envio', e.target.value)}
+                            placeholder="20"
+                            className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                          />
+                          <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-slate-400 leading-tight">
+                        {envioEsObligatorio
+                          ? 'Se exige entrega obligatoria; proveedores sin logística son descartados.'
+                          : 'Ponderación porcentual de cobertura y logística.'}
+                      </p>
+
+                      {/* Conmutador de Envío Obligatorio - Ubicado DEBAJO de la condición de envío */}
+                      <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-semibold text-white">¿Envío Obligatorio?</span>
+                          <CyberTooltip
+                            title="Requisito Obligatorio de Despacho"
+                            text="Al activarlo, el algoritmo descarta inmediatamente cualquier oferta donde el proveedor no realice flete a taller. El factor pasa a 0% y el 100% se reparte entre los 4 factores restantes."
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('criterioObligatorio_Envio')}
+                          className={`w-10 h-5 rounded-full transition-colors relative p-0.5 border shrink-0 ${
+                            isBooleanActive('criterioObligatorio_Envio')
+                              ? 'bg-rose-500 border-rose-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                          title="Alternar obligatoriedad de envío a taller"
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                              isBooleanActive('criterioObligatorio_Envio') ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
                       </div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Categoría de envío y cobertura.</p>
                     </div>
                   </div>
                 </div>
@@ -734,16 +900,23 @@ export default function AdminConfigScreen() {
                   <h3 className="text-base font-bold text-white mb-1">Parámetros Operativos de Abastecimiento</h3>
                   <p className="text-xs text-slate-400 mb-6">Reglas de generación automática de Órdenes de Compra y presupuestos.</p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {/* autoAbastecimientoActivo */}
                     <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800 flex items-center justify-between">
                       <div>
-                        <span className="text-xs font-bold text-white block">Auto-Abastecimiento Activo</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-white block">Auto-Abastecimiento Activo</span>
+                          <CyberTooltip
+                            title="Interruptor de Auto-Abastecimiento"
+                            text="Control maestro que habilita o suspende la generación autónoma de solicitudes de cotización y órdenes de compra ante quiebres de inventario."
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-400">Interruptor maestro de compras automáticas</span>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleToggleBoolean('autoAbastecimientoActivo')}
-                        className={`w-12 h-6 rounded-full transition-colors relative p-0.5 border ${
+                        className={`w-12 h-6 rounded-full transition-colors relative p-0.5 border shrink-0 ${
                           isBooleanActive('autoAbastecimientoActivo')
                             ? 'bg-[#06B6D4] border-cyan-400'
                             : 'bg-slate-800 border-slate-700'
@@ -757,30 +930,145 @@ export default function AdminConfigScreen() {
                       </button>
                     </div>
 
+                    {/* modoDisparadorAbastecimiento */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Modo Disparador del Motor
+                        </label>
+                        <CyberTooltip
+                          title="Modo Disparador del Motor"
+                          text="Criterio de activación: 'Híbrido' (combina eventos inmediatos y consolidación periódica), 'Transaccional' (inmediato al registrarse quiebre o insumo de taller) o 'Programado' (exclusivamente por rutina de fondo)."
+                        />
+                      </div>
+                      <select
+                        value={formData.modoDisparadorAbastecimiento}
+                        onChange={(e) => handleInputChange('modoDisparadorAbastecimiento', e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:outline-none"
+                      >
+                        <option value="HIBRIDO">Híbrido (Tiempo Real + Rutina Periódica)</option>
+                        <option value="TRANSACCIONAL">Transaccional (Quiebres de Stock y Taller)</option>
+                        <option value="PROGRAMADO">Programado Periódico (Cron / Daemon)</option>
+                      </select>
+                      <p className="text-[10px] text-slate-400">Determina cuándo se disparan las evaluaciones de compra.</p>
+                    </div>
+
+                    {/* estrategiaLoteReposicion */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Estrategia de Lote de Reposición
+                        </label>
+                        <CyberTooltip
+                          title="Estrategia de Lote de Reposición"
+                          text="Método para calcular el volumen a comprar: 'Brecha al Stock Mínimo' (compra lo faltante para alcanzar el mínimo), 'Doble del Mínimo' (establece un buffer o colchón de seguridad) o 'Lote Fijo' (compra una cantidad equivalente al stock mínimo)."
+                        />
+                      </div>
+                      <select
+                        value={formData.estrategiaLoteReposicion}
+                        onChange={(e) => handleInputChange('estrategiaLoteReposicion', e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:outline-none"
+                      >
+                        <option value="BRECHA_MINIMO">Brecha al Stock Mínimo (Mínimo - Actual)</option>
+                        <option value="DOBLE_MINIMO">Doble del Mínimo ((Mínimo × 2) - Actual)</option>
+                        <option value="STOCK_MINIMO_FIJO">Lote Fijo Equivalente al Mínimo</option>
+                      </select>
+                      <p className="text-[10px] text-slate-400">Fórmula para computar el volumen de compra sugerido.</p>
+                    </div>
+
                     {/* frecuenciaGeneracionOC_dias */}
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-200">
-                        Frecuencia Generación OC (Días)
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Frecuencia Agrupación Rutinaria (Días)
+                        </label>
+                        <CyberTooltip
+                          title="Frecuencia de Agrupación Periódica"
+                          text="Número de días que el motor espera para acumular pedidos de reposición en una orden de compra conjunta, reduciendo costos de envío y accediendo a mejores precios."
+                        />
+                      </div>
                       <CyberNumberInput
                         min="1"
                         value={formData.frecuenciaGeneracionOC_dias}
                         onChange={(e) => handleInputChange('frecuenciaGeneracionOC_dias', e.target.value)}
                       />
-                      <p className="text-[10px] text-slate-400">Días para agrupar faltantes antes de enviar la OC.</p>
+                      <p className="text-[10px] text-slate-400">Ventana temporal para consolidar pedidos de inventario general.</p>
+                    </div>
+
+                    {/* esperaUrgenciaTecnicaHoras */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Espera Insumos Taller (Horas)
+                        </label>
+                        <CyberTooltip
+                          title="Espera de Repuestos Urgentes de Taller"
+                          text="Tiempo de consolidación de insumos para diagnósticos técnicos. Configurado en 0 horas, el sistema emite la orden de compra o cotización de manera instantánea."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="0"
+                        value={formData.esperaUrgenciaTecnicaHoras}
+                        onChange={(e) => handleInputChange('esperaUrgenciaTecnicaHoras', e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-400">0 horas = Emisión al instante para reparaciones urgentes.</p>
                     </div>
 
                     {/* diasEsperaCotizacion */}
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-200">
-                        Días Espera Cotizaciones
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Días Espera Cotizaciones
+                        </label>
+                        <CyberTooltip
+                          title="Plazo para Cotizaciones"
+                          text="Días hábiles otorgados a los proveedores invitados para cargar ofertas económicas antes de cerrar la solicitud y evaluar al ganador."
+                        />
+                      </div>
                       <CyberNumberInput
                         min="1"
                         value={formData.diasEsperaCotizacion}
                         onChange={(e) => handleInputChange('diasEsperaCotizacion', e.target.value)}
                       />
                       <p className="text-[10px] text-slate-400">Plazo hábil a proveedores para cargar presupuestos.</p>
+                    </div>
+
+                    {/* toleranciaHorasIncumplimientoUrgente */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Tolerancia Incumplimiento Taller (Horas)
+                        </label>
+                        <CyberTooltip
+                          title="Tolerancia de Urgencia en Taller"
+                          text="Horas de gracia tras vencer la fecha comprometida de entrega en reparaciones. Superado este plazo, la orden se cancela y se penaliza la confiabilidad del proveedor con -10 puntos."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="1"
+                        value={formData.toleranciaHorasIncumplimientoUrgente}
+                        onChange={(e) => handleInputChange('toleranciaHorasIncumplimientoUrgente', e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-400">Horas tras la promesa antes de cancelar orden de taller y penalizar (-10 pts).</p>
+                    </div>
+
+                    {/* diasToleranciaIncumplimientoProveedor */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Tolerancia Incumplimiento Proveedor (Días)
+                        </label>
+                        <CyberTooltip
+                          title="Tolerancia Comercial Ordinaria"
+                          text="Días de gracia concedidos a pedidos comerciales de almacén antes de registrar retraso y aplicar una penalización de -5 puntos en el historial del proveedor."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="1"
+                        value={formData.diasToleranciaIncumplimientoProveedor}
+                        onChange={(e) => handleInputChange('diasToleranciaIncumplimientoProveedor', e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-400">Días de gracia para órdenes comerciales normales antes de penalizar (-5 pts).</p>
                     </div>
                   </div>
                 </div>
@@ -810,9 +1098,15 @@ export default function AdminConfigScreen() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* costoManoDeObra */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Costo de Mano de Obra Base ($ ARS)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Costo de Mano de Obra Base ($ ARS)
+                      </label>
+                      <CyberTooltip
+                        title="Tarifa Base de Mano de Obra"
+                        text="Importe estándar sugerido que se precarga de manera automática en cada nuevo diagnóstico técnico de reparación."
+                      />
+                    </div>
                     <CyberNumberInput
                       id="costoManoDeObra"
                       name="costoManoDeObra"
@@ -831,9 +1125,15 @@ export default function AdminConfigScreen() {
                   {/* permitirCostoManoDeObraPropio */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">
-                        Permitir Costo de Mano de Obra Propio
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">
+                          Permitir Costo de Mano de Obra Propio
+                        </span>
+                        <CyberTooltip
+                          title="Edición de Mano de Obra por Técnico"
+                          text="Si está habilitado, el personal técnico puede ajustar libremente el costo de mano de obra según la complejidad del trabajo. Si se desactiva, queda bloqueado al valor base institucional."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Si está activado, el técnico podrá modificar manualmente el costo de mano de obra al cargar un diagnóstico. Si está desactivado, el valor base quedará fijado y bloqueado para su edición.
                       </p>
@@ -855,6 +1155,230 @@ export default function AdminConfigScreen() {
                     </button>
                   </div>
                 </div>
+
+                {/* Subtarjeta: Algoritmo Inteligente de Asignación a Técnicos */}
+                <div className="mt-8 pt-8 border-t border-slate-700/60 space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6] shadow-[0_0_10px_rgba(139,92,246,0.6)]" />
+                        <h3 className="text-base font-bold text-white tracking-tight">
+                          Algoritmo de Asignación Inteligente a Técnicos
+                        </h3>
+                        <CyberTooltip
+                          title="Distribución Inteligente de Reparaciones"
+                          text="Motor matemático que evalúa en tiempo real a los técnicos activos y adjudica automáticamente las nuevas órdenes de trabajo balanceando carga laboral, reputación de clientes, rapidez de resolución, especialidad y tasa de efectividad."
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Ponderación para distribuir órdenes de servicio. La suma de los 5 parámetros debe ser exactamente 100%.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {/* Switch Maestro de Auto-Asignación */}
+                      <div className="flex items-center gap-2 bg-slate-900/90 px-3.5 py-2 rounded-xl border border-slate-800">
+                        <span className="text-xs font-semibold text-slate-200">Auto-Asignación:</span>
+                        <CyberTooltip
+                          title="Auto-Asignación Activa"
+                          text="Al estar habilitado, las reparaciones iniciadas virtualmente o recepcionadas en mostrador se distribuyen de inmediato al técnico con mejor puntaje ponderado. Al desactivarse, quedan asignadas manualmente al personal recepcionista."
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('autoAsignacionTecnicosActiva')}
+                          className={`w-11 h-6 rounded-full transition-colors relative p-0.5 border shrink-0 ${
+                            isBooleanActive('autoAsignacionTecnicosActiva')
+                              ? 'bg-[#06B6D4] border-cyan-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                              isBooleanActive('autoAsignacionTecnicosActiva') ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Badge del 100% */}
+                      <div className="shrink-0">
+                        {isAlgoritmoTecnicosBalanceado ? (
+                          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-purple-500/10 border border-purple-500/40 text-purple-300 font-mono text-xs shadow-[0_0_15px_rgba(139,92,246,0.25)]">
+                            <span className="text-emerald-400 font-bold text-sm">✔</span>
+                            <span className="font-semibold tracking-wide">Ponderación balanceada (100%)</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-300 font-mono text-xs shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+                            <span className="text-sm leading-none">⚠️</span>
+                            <span>
+                              Suma: <strong className="text-white">{sumaAlgoritmoTecnicos}%</strong> —{' '}
+                              <span className="text-amber-400 font-bold">
+                                {100 - sumaAlgoritmoTecnicos > 0 ? `Faltan ${100 - sumaAlgoritmoTecnicos}%` : `Sobran ${sumaAlgoritmoTecnicos - 100}%`}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleAutoBalancearTecnicos}
+                              className="ml-1 px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/40 text-[10px] font-bold transition-colors"
+                            >
+                              ⚡ Auto-Balancear
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Barra de Distribución Visual Multicolor */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center text-[11px] font-mono text-slate-400">
+                      <span>Distribución de Parámetros de Asignación</span>
+                      <span className={isAlgoritmoTecnicosBalanceado ? 'text-purple-400 font-bold' : 'text-amber-400 font-bold'}>
+                        Total: {sumaAlgoritmoTecnicos}% / 100%
+                      </span>
+                    </div>
+                    <div className="w-full h-3 bg-slate-900 rounded-full overflow-hidden flex p-0.5 border border-slate-700/80">
+                      <div style={{ width: `${Math.min(pesoTecCarga, 100)}%` }} className="bg-[#06B6D4] h-full transition-all duration-300 rounded-l-full" title={`Carga Laboral: ${pesoTecCarga}%`} />
+                      <div style={{ width: `${Math.min(pesoTecCalif, 100)}%` }} className="bg-[#8B5CF6] h-full transition-all duration-300" title={`Calificación: ${pesoTecCalif}%`} />
+                      <div style={{ width: `${Math.min(pesoTecRapi, 100)}%` }} className="bg-emerald-500 h-full transition-all duration-300" title={`Rapidez: ${pesoTecRapi}%`} />
+                      <div style={{ width: `${Math.min(pesoTecEspe, 100)}%` }} className="bg-amber-500 h-full transition-all duration-300" title={`Especialidad: ${pesoTecEspe}%`} />
+                      <div style={{ width: `${Math.min(pesoTecEfec, 100)}%` }} className="bg-rose-500 h-full transition-all duration-300 rounded-r-full" title={`Efectividad: ${pesoTecEfec}%`} />
+                    </div>
+                  </div>
+
+                  {/* Grid de los 5 Inputs de Ponderación de Técnicos */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    {/* Carga Laboral */}
+                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#06B6D4]" />
+                          <label className="text-xs font-semibold text-slate-200">Carga Laboral (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Ponderación: Carga Laboral"
+                          text="Asigna mayor prioridad a técnicos con menor cantidad de reparaciones activas en taller, evitando sobrecarga y tiempos de espera ociosos."
+                        />
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.pesoAsignacion_CargaLaboral}
+                          onChange={(e) => handlePercentageChange('pesoAsignacion_CargaLaboral', e.target.value)}
+                          placeholder="30"
+                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Menor volumen de órdenes en curso = Mayor prioridad.</p>
+                    </div>
+
+                    {/* Calificación de Clientes */}
+                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6]" />
+                          <label className="text-xs font-semibold text-slate-200">Calificación (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Ponderación: Calificación de Clientes"
+                          text="Premia con mayor volumen de trabajos a los técnicos que obtienen mejores promedios históricos en las calificaciones y reseñas de los clientes."
+                        />
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.pesoAsignacion_Calificacion}
+                          onChange={(e) => handlePercentageChange('pesoAsignacion_Calificacion', e.target.value)}
+                          placeholder="25"
+                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Promedio de satisfacción y estrellas otorgadas por clientes.</p>
+                    </div>
+
+                    {/* Rapidez de Reparación */}
+                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                          <label className="text-xs font-semibold text-slate-200">Rapidez (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Ponderación: Rapidez de Reparación"
+                          text="Premia la celeridad y agilidad técnica evaluando el promedio de días hábiles transcurridos desde la recepción del equipo hasta su finalización."
+                        />
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.pesoAsignacion_Rapidez}
+                          onChange={(e) => handlePercentageChange('pesoAsignacion_Rapidez', e.target.value)}
+                          placeholder="20"
+                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Menor promedio de días de resolución por reparación.</p>
+                    </div>
+
+                    {/* Especialidad en Categoría */}
+                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                          <label className="text-xs font-semibold text-slate-200">Especialidad (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Ponderación: Especialidad en Categoría"
+                          text="Privilegia al técnico con mayor experiencia comprobada y cantidad de reparaciones resueltas con éxito en la categoría específica del dispositivo."
+                        />
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.pesoAsignacion_Especialidad}
+                          onChange={(e) => handlePercentageChange('pesoAsignacion_Especialidad', e.target.value)}
+                          placeholder="15"
+                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Historial de órdenes resueltas en la misma categoría técnica.</p>
+                    </div>
+
+                    {/* Tasa de Efectividad */}
+                    <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                          <label className="text-xs font-semibold text-slate-200">Efectividad (%)</label>
+                        </div>
+                        <CyberTooltip
+                          title="Ponderación: Tasa de Efectividad"
+                          text="Proporción de reparaciones exitosamente concluidas frente al total de órdenes asignadas (penaliza cancelaciones o rechazos)."
+                        />
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.pesoAsignacion_Efectividad}
+                          onChange={(e) => handlePercentageChange('pesoAsignacion_Efectividad', e.target.value)}
+                          placeholder="10"
+                          className="w-full bg-slate-950/80 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm pr-8 focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                        />
+                        <span className="absolute right-3 top-2 text-slate-400 font-mono text-sm">%</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Porcentaje de resoluciones exitosas vs cancelaciones.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -874,7 +1398,13 @@ export default function AdminConfigScreen() {
                   </div>
                   {/* motorBeneficiosActivo */}
                   <div className="flex items-center gap-3 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800">
-                    <span className="text-xs font-semibold text-slate-200">Motor de Beneficios:</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-slate-200">Motor de Beneficios:</span>
+                      <CyberTooltip
+                        title="Motor de Beneficios"
+                        text="Habilita o suspende la asignación automática de cupones de descuento y promociones de fidelización para clientes recurrentes."
+                      />
+                    </div>
                     <button
                       type="button"
                       onClick={() => handleToggleBoolean('motorBeneficiosActivo')}
@@ -896,9 +1426,15 @@ export default function AdminConfigScreen() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   {/* porcentajeDescuentoMaximo */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Descuento Máximo (%)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Descuento Máximo (%)
+                      </label>
+                      <CyberTooltip
+                        title="Tope Máximo de Descuento"
+                        text="Porcentaje tope admisible que puede otorgar cualquier beneficio o cupón generado para proteger los márgenes del negocio."
+                      />
+                    </div>
                     <div className="relative">
                       <input
                         type="text"
@@ -915,9 +1451,15 @@ export default function AdminConfigScreen() {
 
                   {/* limitePromocionesMensual */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Límite Promociones Mensuales
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Límite Promociones Mensuales
+                      </label>
+                      <CyberTooltip
+                        title="Límite Mensual de Promociones"
+                        text="Tope máximo de beneficios y promociones que un cliente individual puede recibir o acumular en un mes calendario."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="0"
                       value={formData.limitePromocionesMensual}
@@ -928,9 +1470,15 @@ export default function AdminConfigScreen() {
 
                   {/* periodoRefrigerioCliente */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Período de Refrigerio (Días)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Período de Refrigerio (Días)
+                      </label>
+                      <CyberTooltip
+                        title="Período de Refrigerio"
+                        text="Días de espera obligatorios tras usar un cupón antes de que el cliente sea elegible para recibir un nuevo beneficio."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="0"
                       value={formData.periodoRefrigerioCliente}
@@ -941,9 +1489,15 @@ export default function AdminConfigScreen() {
 
                   {/* vigenciaBeneficioDefecto */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Vigencia Beneficio (Horas)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Vigencia Beneficio (Horas)
+                      </label>
+                      <CyberTooltip
+                        title="Vigencia del Beneficio"
+                        text="Horas de vida activa del cupón promocional antes de caducar si el cliente no lo aplica en su compra."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="1"
                       value={formData.vigenciaBeneficioDefecto}
@@ -960,7 +1514,10 @@ export default function AdminConfigScreen() {
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Envío Local ($)</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Envío Local ($)</label>
+                        <CyberTooltip title="Tarifa Envío Local" text="Tarifa plana de despacho para direcciones dentro del radio urbano de la ciudad sede." />
+                      </div>
                       <CyberNumberInput
                         min="0"
                         prefix="$"
@@ -971,7 +1528,10 @@ export default function AdminConfigScreen() {
                       <p className="text-[10px] text-slate-400">Entrega dentro de la ciudad sede.</p>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Envío Regional ($)</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Envío Regional ($)</label>
+                        <CyberTooltip title="Tarifa Envío Regional" text="Tarifa para destinos fuera de la ciudad pero dentro del territorio provincial." />
+                      </div>
                       <CyberNumberInput
                         min="0"
                         prefix="$"
@@ -982,7 +1542,10 @@ export default function AdminConfigScreen() {
                       <p className="text-[10px] text-slate-400">Fuera de la ciudad, en la provincia.</p>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Envío Nacional ($)</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Envío Nacional ($)</label>
+                        <CyberTooltip title="Tarifa Envío Nacional" text="Tarifa logística de envío hacia cualquier otra provincia del país." />
+                      </div>
                       <CyberNumberInput
                         min="0"
                         prefix="$"
@@ -1083,9 +1646,12 @@ export default function AdminConfigScreen() {
                     {/* Public Key */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">
-                          Public Key (Pública)
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label className="block text-xs font-semibold text-slate-300">
+                            Public Key (Pública)
+                          </label>
+                          <CyberTooltip title="Public Key MP" text="Clave pública empleada por el SDK del frontend para inicializar el formulario seguro de pago." />
+                        </div>
                         <span className="text-[10px] text-cyan-400 font-mono">Frontend / Checkout</span>
                       </div>
                       <input
@@ -1103,9 +1669,12 @@ export default function AdminConfigScreen() {
                     {/* Access Token */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">
-                          Access Token (Privado)
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label className="block text-xs font-semibold text-slate-300">
+                            Access Token (Privado)
+                          </label>
+                          <CyberTooltip title="Access Token MP" text="Token privado del comercio para registrar pagos, emitir preferencias y procesar reembolsos en el servidor." />
+                        </div>
                         <span className="text-[10px] text-violet-400 font-mono">Backend DRF</span>
                       </div>
                       <div className="relative">
@@ -1142,9 +1711,12 @@ export default function AdminConfigScreen() {
                     {/* Webhook Secret */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">
-                          Webhook Secret (Firma)
-                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label className="block text-xs font-semibold text-slate-300">
+                            Webhook Secret (Firma)
+                          </label>
+                          <CyberTooltip title="Secreto Webhook MP" text="Firma criptográfica HMAC SHA-256 para verificar la autenticidad de las notificaciones enviadas por Mercado Pago." />
+                        </div>
                         <span className="text-[10px] text-violet-400 font-mono">HMAC SHA-256</span>
                       </div>
                       <div className="relative">
@@ -1200,7 +1772,10 @@ export default function AdminConfigScreen() {
                 {/* Datos de la Empresa */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-slate-300">Nombre Comercial</label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-300">Nombre Comercial</label>
+                      <CyberTooltip title="Nombre Comercial" text="Denominación o razón social mostrada en tickets, facturas, presupuestos y cabecera de la aplicación." />
+                    </div>
                     <input
                       type="text"
                       value={formData.nombreLocal}
@@ -1211,7 +1786,10 @@ export default function AdminConfigScreen() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-slate-300">CUIT / CUIL Fiscal</label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-300">CUIT / CUIL Fiscal</label>
+                      <CyberTooltip title="Identificación Fiscal" text="Número de CUIT/CUIL institucional impreso en comprobantes oficiales e informes impositivos." />
+                    </div>
                     <input
                       type="text"
                       value={formData.cuilLocal}
@@ -1222,7 +1800,10 @@ export default function AdminConfigScreen() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-slate-300">Teléfono Comercial</label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-300">Teléfono Comercial</label>
+                      <CyberTooltip title="Teléfono Institucional" text="Línea de contacto oficial expuesta en comprobantes y disponible para atención al cliente." />
+                    </div>
                     <input
                       type="text"
                       value={formData.telefonoLocal}
@@ -1256,9 +1837,12 @@ export default function AdminConfigScreen() {
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
                       <div>
-                        <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
-                          Logo Institucional de la Empresa
-                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
+                            Logo Institucional de la Empresa
+                          </label>
+                          <CyberTooltip title="Logo Institucional" text="Identidad visual que encabeza las pantallas del sistema, comprobantes PDF descargables y correos electrónicos despachados." />
+                        </div>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           Identidad gráfica oficial utilizada en comprobantes, tickets fiscales, reportes PDF y navegación.
                         </p>
@@ -1356,9 +1940,12 @@ export default function AdminConfigScreen() {
                           </svg>
                         </div>
                         <div>
-                          <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
-                            Dirección Física de la Sede
-                          </h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
+                              Dirección Física de la Sede
+                            </h3>
+                            <CyberTooltip title="Sede Central" text="Ubicación física principal registrada en el módulo geo_app para cálculo de distancias y radicación oficial." />
+                          </div>
                           <p className="text-[11px] text-slate-400">
                             Ubicación legal y logística de la empresa para cálculo de distancias y comprobantes oficiales.
                           </p>
@@ -1468,7 +2055,10 @@ export default function AdminConfigScreen() {
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Correo Oficial de la Empresa</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Correo Oficial de la Empresa</label>
+                        <CyberTooltip title="Correo Institucional" text="Casilla principal de correspondencia comercial de la empresa." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailLocal}
@@ -1478,7 +2068,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Soporte Técnico</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Soporte Técnico</label>
+                        <CyberTooltip title="Casilla de Soporte" text="Dirección visible en estados de reparación para atención a clientes." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailSoporte}
@@ -1488,7 +2081,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Emisor de Notificaciones Automáticas</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Emisor de Notificaciones</label>
+                        <CyberTooltip title="Emisor de Notificaciones" text="Remitente de avisos de estado, cotizaciones automáticas y confirmaciones de pago." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailInfo}
@@ -1498,7 +2094,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Administración General</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Administración General</label>
+                        <CyberTooltip title="Casilla de Administración" text="Canal de comunicación para compras, cobranzas e informes contables." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailAdministracion}
@@ -1508,7 +2107,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Recursos Humanos</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Recursos Humanos</label>
+                        <CyberTooltip title="Casilla de RRHH" text="Casilla para comunicaciones de altas de personal y legajos laborales." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailRRHH}
@@ -1518,7 +2120,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Prensa y Difusión</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Prensa y Difusión</label>
+                        <CyberTooltip title="Casilla de Prensa" text="Dirección de contacto institucional para medios y publicaciones." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailPrensa}
@@ -1528,7 +2133,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Asuntos Legales</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Asuntos Legales</label>
+                        <CyberTooltip title="Casilla de Legales" text="Casilla para recepción de comunicaciones legales y términos de servicio." />
+                      </div>
                       <input
                         type="text"
                         value={formData.emailLegal}
@@ -1559,9 +2167,15 @@ export default function AdminConfigScreen() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   {/* tiempoSesionInactiva */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Sesión Inactiva (Horas)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Sesión Inactiva (Horas)
+                      </label>
+                      <CyberTooltip
+                        title="Tiempo de Inactividad de Sesión"
+                        text="Horas de inactividad tras las cuales el token de acceso es invalidado forzosamente para proteger la sesión del usuario."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="1"
                       value={formData.tiempoSesionInactiva}
@@ -1572,9 +2186,15 @@ export default function AdminConfigScreen() {
 
                   {/* maxIntentosLogin */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Max. Intentos Login
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Max. Intentos Login
+                      </label>
+                      <CyberTooltip
+                        title="Intentos de Acceso Fallidos"
+                        text="Cantidad consecutiva de contraseñas erróneas toleradas antes de bloquear temporalmente la cuenta por seguridad."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="1"
                       value={formData.maxIntentosLogin}
@@ -1585,9 +2205,15 @@ export default function AdminConfigScreen() {
 
                   {/* tamanoMaxArchivoMB */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Tamaño Máx. Archivos (MB)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Tamaño Máx. Archivos (MB)
+                      </label>
+                      <CyberTooltip
+                        title="Límite de Archivos"
+                        text="Tope máximo en megabytes admitido para adjuntos técnicos en diagnósticos, fotos de equipos o comprobantes."
+                      />
+                    </div>
                     <CyberNumberInput
                       min="1"
                       value={formData.tamanoMaxArchivoMB}
@@ -1598,9 +2224,15 @@ export default function AdminConfigScreen() {
 
                   {/* emailAlertasSistema */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      Correo Alertas Críticas
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Correo Alertas Críticas
+                      </label>
+                      <CyberTooltip
+                        title="Casilla de Alertas Críticas"
+                        text="Destinatario que recibe advertencias automáticas ante incidencias graves, fallos de respaldo o intentos de intrusión."
+                      />
+                    </div>
                     <input
                       type="text"
                       value={formData.emailAlertasSistema}
@@ -1620,7 +2252,13 @@ export default function AdminConfigScreen() {
                     </h3>
                     {/* backupAutomatico */}
                     <div className="flex items-center gap-3 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800">
-                      <span className="text-xs font-semibold text-slate-200">Backup Automático:</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-slate-200">Backup Automático:</span>
+                        <CyberTooltip
+                          title="Respaldo Automático"
+                          text="Activa o desactiva la generación programada de volcados de seguridad de la base de datos PostgreSQL."
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() => handleToggleBoolean('backupAutomatico')}
@@ -1641,7 +2279,10 @@ export default function AdminConfigScreen() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Frecuencia (Horas)</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Frecuencia (Horas)</label>
+                        <CyberTooltip title="Frecuencia de Backup" text="Intervalo en horas entre cada volcado programado de la base de datos." />
+                      </div>
                       <CyberNumberInput
                         min="24"
                         value={formData.backupFrecuenciaHoras}
@@ -1650,7 +2291,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Hora de Ejecución (24h)</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Hora de Ejecución (24h)</label>
+                        <CyberTooltip title="Hora de Ejecución" text="Horario del día preferido (formato 24h) para disparar el respaldo con menor impacto operativo." />
+                      </div>
                       <input
                         type="text"
                         value={formData.backupHoraEjecucion}
@@ -1661,7 +2305,10 @@ export default function AdminConfigScreen() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-300">Retención de Copias</label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Retención de Copias</label>
+                        <CyberTooltip title="Retención de Copias" text="Cantidad de archivos de copia de seguridad preservados en el servidor antes de rotar y descartar los más antiguos." />
+                      </div>
                       <CyberNumberInput
                         min="1"
                         max="30"
@@ -1693,7 +2340,13 @@ export default function AdminConfigScreen() {
                   {/* log_seguridad_accesos */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">Log de Accesos y Seguridad</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">Log de Accesos y Seguridad</span>
+                        <CyberTooltip
+                          title="Auditoría de Accesos"
+                          text="Registra inicios de sesión, intentos denegados, bloqueos de seguridad y cambios de credenciales."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Registra inicios de sesión fallidos, bloqueos y recuperaciones de contraseña.
                       </p>
@@ -1718,7 +2371,13 @@ export default function AdminConfigScreen() {
                   {/* log_caja_anulaciones */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">Log de Anulaciones de Caja</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">Log de Anulaciones de Caja</span>
+                        <CyberTooltip
+                          title="Auditoría de Cobros y Caja"
+                          text="Registra de manera auditada anulaciones de comprobantes, reversiones y devoluciones financieras."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Registra anulaciones de cobros o eliminación de comprobantes físicos contra fraudes.
                       </p>
@@ -1743,7 +2402,13 @@ export default function AdminConfigScreen() {
                   {/* log_stock_ajustes_manuales */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">Log de Ajustes de Stock</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">Log de Ajustes de Stock</span>
+                        <CyberTooltip
+                          title="Auditoría de Inventario"
+                          text="Registra variaciones manuales de existencias en almacén por mermas, pérdidas o ingresos excepcionales."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Registra alteraciones manuales de inventario que no proceden de ventas (mermas, roturas).
                       </p>
@@ -1768,7 +2433,13 @@ export default function AdminConfigScreen() {
                   {/* log_roles_permisos */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">Log de Roles y Privilegios</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">Log de Roles y Privilegios</span>
+                        <CyberTooltip
+                          title="Auditoría de Roles y Permisos"
+                          text="Registra cada vez que un administrador modifica los permisos o roles de cualquier usuario del sistema."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Registra cuando un Administrador altera privilegios de sistema a otro usuario.
                       </p>
@@ -1793,7 +2464,13 @@ export default function AdminConfigScreen() {
                   {/* log_operaciones_lectura */}
                   <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-800 flex items-center justify-between md:col-span-2">
                     <div className="pr-4">
-                      <span className="text-sm font-bold text-white block">Log de Operaciones de Lectura Pasiva</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-bold text-white block">Log de Operaciones de Lectura Pasiva</span>
+                        <CyberTooltip
+                          title="Auditoría de Lectura Pasiva"
+                          text="Registra consultas de visualización de datos sensibles. Recomendado mantener desactivado para no degradar el rendimiento."
+                        />
+                      </div>
                       <p className="text-xs text-slate-400 mt-0.5">
                         Determina si el sistema registra visualizaciones masivas (Desactivado por defecto para alto rendimiento).
                       </p>
@@ -1827,15 +2504,38 @@ export default function AdminConfigScreen() {
               <div className="flex items-center gap-3">
                 <div
                   className={`w-3.5 h-3.5 rounded-full ${
-                    isAlgoritmoBalanceado ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                    (isAlgoritmoBalanceado && isAlgoritmoTecnicosBalanceado) ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
                   }`}
                 />
                 <span className="text-xs font-mono text-slate-300">
-                  Estado: {isAlgoritmoBalanceado ? (
-                    <span className="text-cyan-400 font-semibold">Listo para guardar cambios (Algoritmo 100%)</span>
+                  Estado: {(isAlgoritmoBalanceado && isAlgoritmoTecnicosBalanceado) ? (
+                    <span className="text-cyan-400 font-semibold">Listo para guardar cambios (Algoritmos 100%)</span>
                   ) : (
-                    <span className="text-amber-400 font-semibold">
-                      Desbalanceado (Suma actual: {sumaAlgoritmo}%)
+                    <span className="text-amber-400 font-semibold flex flex-wrap items-center gap-2">
+                      {!isAlgoritmoBalanceado && (
+                        <span className="flex items-center gap-1.5">
+                          <span>Compras: {sumaAlgoritmo}%</span>
+                          <button
+                            type="button"
+                            onClick={handleAutoBalancearAlgoritmo}
+                            className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 border border-cyan-500/40 text-[10px] font-bold"
+                          >
+                            Balancear Compras
+                          </button>
+                        </span>
+                      )}
+                      {!isAlgoritmoTecnicosBalanceado && (
+                        <span className="flex items-center gap-1.5">
+                          <span>Técnicos: {sumaAlgoritmoTecnicos}%</span>
+                          <button
+                            type="button"
+                            onClick={handleAutoBalancearTecnicos}
+                            className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/40 text-[10px] font-bold"
+                          >
+                            Balancear Técnicos
+                          </button>
+                        </span>
+                      )}
                     </span>
                   )}
                   {tieneCamposCriticosVacios && (

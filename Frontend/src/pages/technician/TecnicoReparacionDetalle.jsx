@@ -4,6 +4,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import NotificationBell from '../../components/navigation/NotificationBell';
 import { resolverUrlImagen } from '../../utils/imagenes';
@@ -132,37 +133,14 @@ export default function TecnicoReparacionDetalle() {
       <AdminSidebar />
 
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Barra Superior con Notificaciones y Perfil */}
-        <header className="sticky top-0 z-30 bg-[#0F172A]/90 backdrop-blur-md border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => navigate('/tecnico/dispositivos/en-curso')}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="Volver al listado"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-              </svg>
-            </button>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                <span className="text-[11px] font-mono text-cyan-400 uppercase tracking-wider font-semibold">
-                  Radiografía Técnica Taller
-                </span>
-              </div>
-              <h1 className="text-xl font-bold text-white tracking-tight">
-                Orden #{reparacion?.id_reparacion} &bull; {disp?.marca} {disp?.modelo}
-              </h1>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <NotificationBell />
-            <UserProfileDropdown />
-          </div>
-        </header>
+        {/* Header Superior Unificado del Taller */}
+        <AdminHeader
+          category="Taller & Servicio Técnico"
+          subcategory="Reparaciones"
+          pageName={`Orden #${reparacion?.id_reparacion || ''}`}
+          title={`Radiografía Técnica • ${disp?.marca || ''} ${disp?.modelo || ''}`}
+          onBack={() => navigate('/tecnico/dispositivos/en-curso')}
+        />
 
         {/* Feedback Alerts */}
         <AnimatePresence>

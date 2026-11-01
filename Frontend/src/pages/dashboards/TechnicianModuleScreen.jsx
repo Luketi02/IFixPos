@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
+import AdminHeader from '../../components/navigation/AdminHeader';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import NuevaReparacionTaller from '../../components/workshop/NuevaReparacionTaller';
 import RecepcionarDispositivo from '../../components/workshop/RecepcionarDispositivo';
@@ -86,23 +87,22 @@ export default function TechnicianModuleScreen({ forcedModule }) {
 
       {/* 2. Área de Contenido Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        
-        {/* Header Superior del Taller */}
-        <header className="h-16 border-b border-slate-800 bg-[#1E293B]/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-xs font-mono text-slate-300">
-              Módulo de Técnico: <span className="text-[#06B6D4] font-semibold uppercase">{activeModule.replace('-', ' ')}</span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-3 py-1 rounded-full hidden sm:inline-block">
-              Taller Especializado
-            </span>
-            <UserProfileDropdown align="right" />
-          </div>
-        </header>
+        {/* Header Superior Unificado del Taller */}
+        <AdminHeader
+          category="Taller & Servicio Técnico"
+          subcategory="Operaciones"
+          pageName={
+            activeModule === 'nueva-reparacion' ? 'Nueva Reparación' :
+            activeModule === 'en-curso' ? 'Reparaciones en Curso' :
+            activeModule === 'finalizadas' ? 'Reparaciones Finalizadas' :
+            activeModule === 'cobros' ? 'Caja y Cobros' :
+            activeModule === 'entregar-dispositivo' ? 'Entrega de Dispositivo' :
+            activeModule === 'registrar-compra' ? 'Registrar Compra' :
+            activeModule === 'recepcionar-dispositivo' ? 'Recepción de Dispositivo' :
+            activeModule === 'recepcionar-compra' ? 'Recepción de Insumos' :
+            'Taller Técnico'
+          }
+        />
 
         {/* Notificación Cyber-Tech flotante con fade-out a los 6s */}
         <AnimatePresence>

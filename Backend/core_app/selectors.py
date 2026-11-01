@@ -22,6 +22,15 @@ def obtener_configuracion_bool(clave: str) -> bool:
     except ConfiguracionSistema.DoesNotExist:
         return False
 
+def obtener_configuracion_int(clave: str, fallback: int = 0) -> int:
+    """Obtiene un valor numérico entero de ConfiguracionSistema. Fail-safe a fallback."""
+    try:
+        config = ConfiguracionSistema.objects.get(clave=clave)
+        val = str(config.valor).strip()
+        return int(val) if val.isdigit() or (val.startswith('-') and val[1:].isdigit()) else fallback
+    except (ConfiguracionSistema.DoesNotExist, ValueError):
+        return fallback
+
 def obtener_email_emisor() -> str:
     """Obtiene la casilla de correo configurada para envíos del sistema con fallback."""
     from django.conf import settings

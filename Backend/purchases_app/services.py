@@ -2,6 +2,7 @@ import secrets
 from typing import Dict, Any, Optional, List
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
@@ -1452,3 +1453,352 @@ def registrar_auditoria_filtro_ordenes_compra(
     )
 
 
+
+
+# ==============================================================================
+# MOTOR AUTÓNOMO DE ABASTECIMIENTO INTELIGENTE (ORQUESTADOR CENTRAL)
+# ==============================================================================
+
+@transaction.atomic
+def ejecutar_ciclo_abastecimiento_automatico(
+    *,
+    usuario_ejecutor: Optional[Usuario] = None,
+    forzar_ejecucion: bool = False,
+    origen_disparo: str = 'PROGRAMADO'
+) -> Dict[str, Any]:
+    """
+    Motor Autónomo de Reabastecimiento e Inteligencia de Compras.
+    Orquesta de extremo a extremo las fases del ciclo de abastecimiento:
+      1. Auditoría de Incumplimientos (Protocolo de Tolerancia Acelerada en solTec vs Ordinarias).
+      2. Detección de Faltantes y Stock en Tránsito (obtener_articulos_deficitarios_con_transito).
+      3. Fase 1: Sondeo Selectivo Inteligente (CU-14) para insumos huérfanos sin ofertas vigentes.
+      4. Fase 2 y 3: Algoritmo Multicriterio (CU-54), Emisión Legal Autónoma con ReportLab y Despacho de Correo.
+      5. Integración con Urgencias de Taller (solTec=True) con resolución al instante si esperaUrgenciaTecnicaHoras == 0.
+    """
+    from datetime import timedelta
+    from core_app.models import ConfiguracionSistema, LogSistema, Notificacion
+    from purchases_app.selectors import (
+        obtener_articulos_deficitarios_con_transito,
+        obtener_proveedores_candidatos_para_cotizacion,
+        calcular_mejores_ofertas
+    )
+
+    if usuario_ejecutor is None:
+        usuario_ejecutor = Usuario.objects.filter(
+            Q(id_rol__codigo='ADMIN') | Q(id_rol__nombre_rol__icontains='admin'),
+            is_active=True
+        ).first()
+        if not usuario_ejecutor:
+            usuario_ejecutor = Usuario.objects.filter(is_active=True).first()
+
+    def _cfg_str(clave: str, default: str) -> str:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        return str(cfg.valor).strip() if cfg and cfg.valor is not None else default
+
+    def _cfg_int(clave: str, default: int) -> int:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        try:
+            return int(str(cfg.valor).strip()) if cfg and cfg.valor else default
+        except (ValueError, TypeError):
+            return default
+
+    def _cfg_bool(clave: str, default: bool) -> bool:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        if not cfg or cfg.valor is None:
+            return default
+        return str(cfg.valor).strip().lower() in ('true', '1', 't', 'yes', 'si')
+
+    auto_activo = _cfg_bool('autoAbastecimientoActivo', True)
+    if not auto_activo and not forzar_ejecucion:
+        return {
+            "status": "PAUSADO",
+            "mensaje": "El motor de abastecimiento automático se encuentra desactivado globalmente.",
+            "origen_disparo": origen_disparo
+        }
+
+    modo_disparador = _cfg_str('modoDisparadorAbastecimiento', 'HIBRIDO').upper()
+    if not forzar_ejecucion:
+        if origen_disparo == 'TRANSACCIONAL' and modo_disparador == 'PROGRAMADO':
+            return {
+                "status": "OMITIDO",
+                "mensaje": "Modo configurado exclusivamente para rutinas programadas (Daemon/Cron).",
+                "origen_disparo": origen_disparo
+            }
+        if origen_disparo == 'PROGRAMADO' and modo_disparador == 'TRANSACCIONAL':
+            return {
+                "status": "OMITIDO",
+                "mensaje": "Modo configurado exclusivamente para eventos transaccionales.",
+                "origen_disparo": origen_disparo
+            }
+
+    frecuencia_oc_dias = _cfg_int('frecuenciaGeneracionOC_dias', 5)
+    espera_urgencia_horas = _cfg_int('esperaUrgenciaTecnicaHoras', 0)
+    dias_espera_cotiz = _cfg_int('diasEsperaCotizacion', 5)
+    dias_tol_com = _cfg_int('diasToleranciaIncumplimientoProveedor', 3)
+    horas_tol_urg = _cfg_int('toleranciaHorasIncumplimientoUrgente', 24)
+
+    hoy = timezone.now().date()
+
+    # ==========================================================================
+    # 1. PROTOCOLO DE INCUMPLIMIENTO DE PROVEEDORES (ÓRDENES DEMORADAS)
+    # ==========================================================================
+    ordenes_canceladas: List[Dict[str, Any]] = []
+    ordenes_espera = OrdenCompra.objects.filter(
+        estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA
+    ).select_related('cuit_prov')
+
+    for ord_esp in ordenes_espera:
+        prov = ord_esp.cuit_prov
+        dias_promesa = prov.tiempo_promedio_entrega or 5
+
+        if ord_esp.sol_tec:
+            # Tolerancia urgente de taller (en horas)
+            dias_extra = max(horas_tol_urg // 24, 1)
+            limite_entrega = ord_esp.fecha_emision + timedelta(days=dias_promesa + dias_extra)
+            penalizacion = Decimal('10.00')
+            tipo_orden_str = "urgente de taller (solTec)"
+        else:
+            # Tolerancia comercial regular en días
+            limite_entrega = ord_esp.fecha_emision + timedelta(days=dias_promesa + dias_tol_com)
+            penalizacion = Decimal('5.00')
+            tipo_orden_str = "comercial ordinaria"
+
+        if hoy > limite_entrega:
+            ord_esp.estado_orden = OrdenCompra.ESTADO_CANCELADA
+            ord_esp.save(update_fields=['estado_orden'])
+
+            base_conf = prov.indice_confiabilidad if prov.indice_confiabilidad is not None else Decimal('60.00')
+            prov.indice_confiabilidad = max(Decimal('0.00'), base_conf - penalizacion)
+            prov.save(update_fields=['indice_confiabilidad'])
+
+            detalle_canc = (
+                f"Orden de compra #{ord_esp.id_orden} ({tipo_orden_str}) cancelada por incumplimiento del proveedor "
+                f"'{prov.nombre_proveedor}' (CUIT {prov.cuit_prov}). Superó fecha límite {limite_entrega}. "
+                f"Penalización de confiabilidad aplicada: -{penalizacion} puntos."
+            )
+            LogSistema.objects.create(
+                fecha_hora=timezone.now(),
+                accion="Cancelación por Incumplimiento de Proveedor",
+                detalle=detalle_canc[:1000],
+                tipo="INCUMPLIMIENTO_COMPRAS",
+                modulo_origen="purchases_app",
+                tabla_afectada="orden_compra",
+                id_registro_afectado=str(ord_esp.id_orden),
+                id_usuario=usuario_ejecutor
+            )
+
+            if ord_esp.sol_tec:
+                tecnicos_activos = Usuario.objects.filter(
+                    is_active=True,
+                    id_rol__codigo='TECNICO'
+                )
+                msg_alerta = (
+                    f"Alerta de Abastecimiento: El proveedor '{prov.nombre_proveedor}' no entregó el pedido urgente #{ord_esp.id_orden}. "
+                    f"La orden fue cancelada por incumplimiento y el sistema re-adjudicará los repuestos de inmediato."
+                )
+                for t in tecnicos_activos:
+                    Notificacion.objects.create(
+                        id_usuario=t,
+                        mensaje=msg_alerta[:1000],
+                        tipo="TALLER_INCUMPLIMIENTO_INSUMOS",
+                        fecha_envio=hoy,
+                        leida=False
+                    )
+
+            ordenes_canceladas.append({
+                "id_orden": ord_esp.id_orden,
+                "proveedor": prov.nombre_proveedor,
+                "sol_tec": ord_esp.sol_tec,
+                "motivo": "Superó fecha límite de entrega acordada"
+            })
+
+    # ==========================================================================
+    # 2. AUDITORÍA DE FALTANTES Y DEMANDA TÉCNICA
+    # ==========================================================================
+    articulos_deficitarios = obtener_articulos_deficitarios_con_transito()
+    if not articulos_deficitarios:
+        LogSistema.objects.create(
+            fecha_hora=timezone.now(),
+            accion="Motor de Abastecimiento Automático",
+            detalle=f"Ciclo ejecutado exitosamente ({origen_disparo}). Inventario saludable: 0 faltantes detectados.",
+            tipo="ABASTECIMIENTO_MOTOR",
+            modulo_origen="purchases_app",
+            id_usuario=usuario_ejecutor
+        )
+        return {
+            "status": "OK",
+            "mensaje": "Inventario en niveles óptimos. No se detectaron insumos deficitarios.",
+            "articulos_escaneados": 0,
+            "ordenes_emitidas": [],
+            "solicitudes_cotizacion": [],
+            "ordenes_canceladas_por_incumplimiento": ordenes_canceladas,
+            "origen_disparo": origen_disparo
+        }
+
+    # Separar insumos con cotización vigente vs huérfanos para sondeo
+    items_con_cotizacion = [it for it in articulos_deficitarios if it['tiene_cotizacion_vigente']]
+    items_huerfanos = [it for it in articulos_deficitarios if not it['tiene_cotizacion_vigente']]
+
+    solicitudes_creadas: List[Dict[str, Any]] = []
+    ordenes_emitidas: List[Dict[str, Any]] = []
+
+    # ==========================================================================
+    # 3. FASE 1: SONDEO SELECTIVO INTELIGENTE (CU-14)
+    # ==========================================================================
+    if items_huerfanos:
+        candidatos_totales = set()
+        for it in items_huerfanos:
+            cands = obtener_proveedores_candidatos_para_cotizacion(it['id_producto'])
+            for c in cands:
+                candidatos_totales.add(c)
+
+        if candidatos_totales:
+            sol_tec_sondeo = any(it['es_urgencia_taller'] for it in items_huerfanos)
+            solicitud = SolicitudCotizacion.objects.create(
+                fecha_emision=hoy,
+                estado_solicitud=SolicitudCotizacion.ESTADO_ENVIADA,
+                sol_tec=sol_tec_sondeo
+            )
+
+            for it in items_huerfanos:
+                SolicitudCotizacionProducto.objects.create(
+                    id_solicitud=solicitud,
+                    id_producto_id=it['id_producto'],
+                    cantidad=it['cantidad_a_pedir']
+                )
+
+            for prov in candidatos_totales:
+                token_acceso = secrets.token_urlsafe(32)
+                invitacion = InvitacionCotizar.objects.create(
+                    id_solicitud=solicitud,
+                    cuit_prov=prov,
+                    token_acceso=token_acceso,
+                    estado_invitacion=InvitacionCotizar.ESTADO_PENDIENTE
+                )
+                cotizacion = Cotizacion.objects.create(
+                    id_invitacion=invitacion,
+                    tiempo_promesa=0,
+                    estado_cotizacion=Cotizacion.ESTADO_PENDIENTE,
+                    fecha_validez=hoy + timedelta(days=dias_espera_cotiz),
+                    comentarios="Sondeo selectivo generado automáticamente por el Motor de Abastecimiento",
+                    archivo_adjunto=None
+                )
+                despachar_correo_cotizacion(cotizacion=cotizacion, token_acceso=token_acceso)
+
+            solicitudes_creadas.append({
+                "id_solicitud": solicitud.id_solicitud,
+                "sol_tec": solicitud.sol_tec,
+                "items_solicitados": len(items_huerfanos),
+                "proveedores_invitados": len(candidatos_totales)
+            })
+
+            LogSistema.objects.create(
+                fecha_hora=timezone.now(),
+                accion="Sondeo Automático de Cotización (CU-14)",
+                detalle=(
+                    f"El motor emitió la Solicitud #{solicitud.id_solicitud} para {len(items_huerfanos)} insumos huérfanos. "
+                    f"Invitaciones despachadas a {len(candidatos_totales)} proveedores sin oferta activa para estos ítems. "
+                    f"Urgencia técnica: {sol_tec_sondeo}."
+                )[:1000],
+                tipo="ABASTECIMIENTO_MOTOR",
+                modulo_origen="purchases_app",
+                tabla_afectada="solicitud_cotizacion",
+                id_registro_afectado=str(solicitud.id_solicitud),
+                id_usuario=usuario_ejecutor
+            )
+
+    # ==========================================================================
+    # 4. FASE 2 Y 3: ALGORITMO MULTICRITERIO Y EMISIÓN AUTÓNOMA (CU-54)
+    # ==========================================================================
+    if items_con_cotizacion:
+        hay_urgencia_taller = any(it['es_urgencia_taller'] for it in items_con_cotizacion)
+        proceder_emision = False
+
+        if hay_urgencia_taller and espera_urgencia_horas == 0:
+            # Reabastecimiento urgente de taller al instante
+            proceder_emision = True
+        elif forzar_ejecucion:
+            proceder_emision = True
+        else:
+            # Evaluar ventana de frecuencia para compras comerciales
+            ultima_emision = OrdenCompra.objects.filter(
+                sol_tec=False
+            ).order_by('-id_orden').first()
+
+            if not ultima_emision:
+                proceder_emision = True
+            else:
+                dias_desde_ultima = (hoy - ultima_emision.fecha_emision).days
+                if dias_desde_ultima >= frecuencia_oc_dias:
+                    proceder_emision = True
+
+        if proceder_emision:
+            productos_para_ofertas = [
+                {"id_producto": it["id_producto"], "cantidad": it["cantidad_a_pedir"]}
+                for it in items_con_cotizacion
+            ]
+            resultado_ofertas = calcular_mejores_ofertas(
+                productos_solicitados=productos_para_ofertas
+            )
+            borradores = resultado_ofertas.get('borradores', [])
+
+            for b in borradores:
+                ids_items_borrador = {it['id_producto'] for it in b.get('items', [])}
+                b['sol_tec'] = any(
+                    it['es_urgencia_taller']
+                    for it in items_con_cotizacion
+                    if it['id_producto'] in ids_items_borrador
+                )
+
+            if borradores:
+                ordenes_emitidas_instancias = emitir_ordenes_compra(
+                    usuario_admin=usuario_ejecutor,
+                    borradores_aprobados=borradores
+                )
+                for o in ordenes_emitidas_instancias:
+                    ordenes_emitidas.append({
+                        "id_orden": o.id_orden,
+                        "proveedor": o.cuit_prov.nombre_proveedor,
+                        "sol_tec": o.sol_tec,
+                        "total_items": o.detalles.count(),
+                        "ruta_pdf": getattr(o, 'ruta_pdf', None)
+                    })
+
+    # ==========================================================================
+    # 5. ASENTAMIENTO DE TRAZA Y NOTIFICACIÓN GERENCIAL
+    # ==========================================================================
+    resumen_detalle = (
+        f"Motor de Abastecimiento ejecutado ({origen_disparo}). "
+        f"Faltantes escaneados: {len(articulos_deficitarios)}. "
+        f"Órdenes de compra emitidas: {len(ordenes_emitidas)}. "
+        f"Sondeos de cotización despachados: {len(solicitudes_creadas)}. "
+        f"Órdenes canceladas por incumplimiento: {len(ordenes_canceladas)}."
+    )
+    LogSistema.objects.create(
+        fecha_hora=timezone.now(),
+        accion="Motor de Abastecimiento Automático",
+        detalle=resumen_detalle[:1000],
+        tipo="ABASTECIMIENTO_MOTOR",
+        modulo_origen="purchases_app",
+        id_usuario=usuario_ejecutor
+    )
+
+    if ordenes_emitidas or solicitudes_creadas or ordenes_canceladas:
+        Notificacion.objects.create(
+            id_usuario=usuario_ejecutor,
+            mensaje=resumen_detalle[:1000],
+            tipo="MOTOR_ABASTECIMIENTO",
+            fecha_envio=hoy,
+            leida=False
+        )
+
+    return {
+        "status": "COMPLETADO",
+        "mensaje": resumen_detalle,
+        "articulos_escaneados": len(articulos_deficitarios),
+        "ordenes_emitidas": ordenes_emitidas,
+        "solicitudes_cotizacion": solicitudes_creadas,
+        "ordenes_canceladas_por_incumplimiento": ordenes_canceladas,
+        "origen_disparo": origen_disparo,
+        "fecha_hora": timezone.now()
+    }

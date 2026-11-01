@@ -532,13 +532,21 @@ def calcular_mejores_ofertas(
     requiere_envio: bool = False
 ) -> Dict[str, Any]:
     """
-    CU-54: Algoritmo de Mejor Compra.
-    Analiza renglón por renglón los insumos requeridos. Para cada uno, localiza la mejor
-    oferta en CotizacionProducto de cotizaciones ACEPTADAS y vigentes (fecha_validez >= hoy).
-    Si requiere_envio es True, prioriza/exige que el proveedor ofrezca envíos a domicilio.
+    CU-54: Algoritmo de Mejor Compra con Ponderación Multicriterio Parametrizable.
+    Evalúa renglón por renglón los insumos requeridos aplicando una matriz de decisión
+    multicriterio basada en 5 variables desde ConfiguracionSistema:
+      1. Económico (Precio Ofrecido)
+      2. Índice de Confiabilidad del Proveedor (0 - 100)
+      3. Tiempo Promedio / Promesa de Entrega (en días)
+      4. Políticas de Envío (Domicilio vs Retiro)
+      5. Nivel Comercial del Proveedor (Mayorista Oficial vs Distribuidor Regional)
+    Si 'criterioObligatorio_Envio' o 'requiere_envio' es True, descarta a proveedores que no
+    ofrezcan envío a domicilio y re-normaliza la matriz al 100% entre las variables restantes.
     Agrupa los insumos ganadores por Proveedor, generando la estructura de 'Borradores de Órdenes de Compra'.
-    Si un producto no posee precio histórico formal vigente, lo cataloga en 'productos_huerfanos'.
+    Si un producto no posee precio formal vigente, lo cataloga en 'productos_huerfanos'.
     """
+    from core_app.models import ConfiguracionSistema
+
     if not productos_solicitados:
         raise ValidationError("Debe especificar al menos un producto para calcular la mejor compra.")
 
@@ -546,10 +554,54 @@ def calcular_mejores_ofertas(
     ids_productos = [item['id_producto'] for item in productos_solicitados]
     productos_db = {p.id_producto: p for p in Producto.objects.filter(id_producto__in=ids_productos)}
 
-    # Verificar que los productos existan
     for item in productos_solicitados:
         if item['id_producto'] not in productos_db:
             raise ValidationError(f"El producto con ID {item['id_producto']} no existe en el catálogo.")
+
+    # 1. Recuperar ponderaciones dinámicas de la Configuración Global
+    def _get_cfg_int(clave: str, default: int) -> int:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        try:
+            return int(str(cfg.valor).strip()) if cfg and cfg.valor else default
+        except (ValueError, TypeError):
+            return default
+
+    def _get_cfg_bool(clave: str, default: bool) -> bool:
+        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
+        if not cfg or cfg.valor is None:
+            return default
+        return str(cfg.valor).strip().lower() in ('true', '1', 't', 'yes', 'si')
+
+    peso_econ = _get_cfg_int('pesoEvaluacion_Economico', 20)
+    peso_conf = _get_cfg_int('pesoEvaluacion_Confiabilidad', 20)
+    peso_tiempo = _get_cfg_int('pesoEvaluacion_Tiempo', 20)
+    peso_nivel = _get_cfg_int('pesoEvaluacion_Nivel', 20)
+    peso_envio = _get_cfg_int('pesoEvaluacion_Envio', 20)
+
+    envio_obligatorio = requiere_envio or _get_cfg_bool('criterioObligatorio_Envio', False)
+
+    # Re-normalización dinámica de pesos si el envío es excluyente
+    if envio_obligatorio:
+        peso_envio = 0
+        suma_restante = peso_econ + peso_conf + peso_tiempo + peso_nivel
+        if suma_restante <= 0:
+            suma_restante = 100
+            peso_econ = peso_conf = peso_tiempo = peso_nivel = 25
+        w_econ = Decimal(str(peso_econ)) / Decimal(str(suma_restante))
+        w_conf = Decimal(str(peso_conf)) / Decimal(str(suma_restante))
+        w_tiempo = Decimal(str(peso_tiempo)) / Decimal(str(suma_restante))
+        w_nivel = Decimal(str(peso_nivel)) / Decimal(str(suma_restante))
+        w_envio = Decimal('0.00')
+    else:
+        suma_total = peso_econ + peso_conf + peso_tiempo + peso_nivel + peso_envio
+        if suma_total <= 0:
+            suma_total = 100
+            peso_econ = peso_conf = peso_tiempo = peso_nivel = peso_envio = 20
+        w_econ = Decimal(str(peso_econ)) / Decimal(str(suma_total))
+        w_conf = Decimal(str(peso_conf)) / Decimal(str(suma_total))
+        w_tiempo = Decimal(str(peso_tiempo)) / Decimal(str(suma_total))
+        w_nivel = Decimal(str(peso_nivel)) / Decimal(str(suma_total))
+        w_envio = Decimal(str(peso_envio)) / Decimal(str(suma_total))
 
     proveedores_agrupados: Dict[str, Dict[str, Any]] = {}
     productos_huerfanos: List[Dict[str, Any]] = []
@@ -560,7 +612,7 @@ def calcular_mejores_ofertas(
         producto = productos_db[id_prod]
 
         # Query base: Cotizaciones Aceptadas y no vencidas
-        qs_ofertas = CotizacionProducto.objects.select_related(
+        qs_ofertas = list(CotizacionProducto.objects.select_related(
             'id_cotizacion',
             'id_cotizacion__id_invitacion',
             'id_cotizacion__id_invitacion__cuit_prov'
@@ -569,23 +621,15 @@ def calcular_mejores_ofertas(
             id_cotizacion__estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
             id_cotizacion__fecha_validez__gte=hoy,
             precio_ofrecido__gt=Decimal("0.00")
-        )
+        ))
 
-        if requiere_envio:
-            qs_ofertas = qs_ofertas.filter(
-                id_cotizacion__id_invitacion__cuit_prov__ofrece_envio=True
-            )
+        if envio_obligatorio:
+            qs_ofertas = [o for o in qs_ofertas if getattr(o.id_cotizacion.id_invitacion.cuit_prov, 'ofrece_envio', False)]
 
-        # Seleccionar la oferta ganadora con el menor precio ofrecido
-        oferta_ganadora = qs_ofertas.order_by(
-            'precio_ofrecido',
-            '-id_cotizacion__fecha_validez'
-        ).first()
-
-        if not oferta_ganadora:
+        if not qs_ofertas:
             motivo = (
-                "No existe cotización aceptada y vigente con servicio de envío para este insumo."
-                if requiere_envio
+                "No existe cotización aceptada y vigente con servicio de envío obligatorio para este insumo."
+                if envio_obligatorio
                 else "No existe cotización aceptada y vigente para este insumo en el historial."
             )
             productos_huerfanos.append({
@@ -596,6 +640,74 @@ def calcular_mejores_ofertas(
             })
             continue
 
+        # Calcular mínimos entre los candidatos para normalizar a escala (0 - 100)
+        min_precio = min(Decimal(str(o.precio_ofrecido)) for o in qs_ofertas)
+        min_dias = min(
+            max(int(o.id_cotizacion.tiempo_promesa or getattr(o.id_cotizacion.id_invitacion.cuit_prov, 'tiempo_promedio_entrega', 5) or 5), 1)
+            for o in qs_ofertas
+        )
+
+        ofertas_puntuadas = []
+        for oferta in qs_ofertas:
+            prov = oferta.id_cotizacion.id_invitacion.cuit_prov
+            precio_oferta = Decimal(str(oferta.precio_ofrecido))
+            dias_oferta = max(int(oferta.id_cotizacion.tiempo_promesa or prov.tiempo_promedio_entrega or 5), 1)
+
+            # 1. Puntuación Precio (Inverso: a menor precio, más puntos de 0 a 100)
+            puntaje_precio = (min_precio / precio_oferta) * Decimal('100.00')
+
+            # 2. Puntuación Confiabilidad (Directo: 0 - 100)
+            conf_val = Decimal(str(prov.indice_confiabilidad if prov.indice_confiabilidad is not None else '60.00'))
+            puntaje_conf = min(max(conf_val, Decimal('0.00')), Decimal('100.00'))
+
+            # 3. Puntuación Tiempo (Inverso: a menos días, más puntos de 0 a 100)
+            puntaje_tiempo = (Decimal(str(min_dias)) / Decimal(str(dias_oferta))) * Decimal('100.00')
+
+            # 4. Puntuación Envío (100 si ofrece envío, 40 si retiro en mostrador)
+            puntaje_envio = Decimal('100.00') if prov.ofrece_envio else Decimal('40.00')
+
+            # 5. Puntuación Nivel Comercial (100 Mayorista, 75 Distribuidor, 50 Otros)
+            nivel_str = (prov.nivel or '').lower()
+            if 'mayorista' in nivel_str:
+                puntaje_nivel = Decimal('100.00')
+            elif 'distribuidor' in nivel_str:
+                puntaje_nivel = Decimal('75.00')
+            else:
+                puntaje_nivel = Decimal('50.00')
+
+            # Puntaje Ponderado Total según matriz de decisión
+            puntaje_total = (
+                (puntaje_precio * w_econ) +
+                (puntaje_conf * w_conf) +
+                (puntaje_tiempo * w_tiempo) +
+                (puntaje_envio * w_envio) +
+                (puntaje_nivel * w_nivel)
+            )
+
+            ofertas_puntuadas.append({
+                'oferta': oferta,
+                'puntaje_total': puntaje_total,
+                'precio_ofrecido': precio_oferta,
+                'fecha_validez': oferta.id_cotizacion.fecha_validez,
+                'desglose_scores': {
+                    'precio': round(float(puntaje_precio), 2),
+                    'confiabilidad': round(float(puntaje_conf), 2),
+                    'tiempo': round(float(puntaje_tiempo), 2),
+                    'envio': round(float(puntaje_envio), 2),
+                    'nivel': round(float(puntaje_nivel), 2),
+                    'puntaje_total': round(float(puntaje_total), 2)
+                }
+            })
+
+        # Seleccionar la oferta ganadora por mayor puntaje ponderado
+        # Criterios de desempate deterministas: menor precio, luego mayor fecha de validez
+        ofertas_puntuadas.sort(
+            key=lambda x: (x['puntaje_total'], -x['precio_ofrecido'], x['fecha_validez']),
+            reverse=True
+        )
+        mejor = ofertas_puntuadas[0]
+        oferta_ganadora = mejor['oferta']
+
         prov = oferta_ganadora.id_cotizacion.id_invitacion.cuit_prov
         cuit_prov = prov.cuit_prov
 
@@ -605,8 +717,8 @@ def calcular_mejores_ofertas(
         if cuit_prov not in proveedores_agrupados:
             tipo_entrega = (
                 OrdenCompra.TIPO_ENTREGA_ENVIO
-                if (requiere_envio and prov.ofrece_envio)
-                else OrdenCompra.TIPO_ENTREGA_RETIRO
+                if (envio_obligatorio and prov.ofrece_envio)
+                else (OrdenCompra.TIPO_ENTREGA_ENVIO if prov.ofrece_envio else OrdenCompra.TIPO_ENTREGA_RETIRO)
             )
             proveedores_agrupados[cuit_prov] = {
                 "cuit_prov": cuit_prov,
@@ -626,7 +738,8 @@ def calcular_mejores_ofertas(
             "cantidad": cantidad,
             "precio_unitario": precio_unitario,
             "subtotal": subtotal,
-            "id_cotizacion": oferta_ganadora.id_cotizacion_id
+            "id_cotizacion": oferta_ganadora.id_cotizacion_id,
+            "evaluacion_multicriterio": mejor['desglose_scores']
         })
         proveedores_agrupados[cuit_prov]["monto_total"] += subtotal
 
@@ -636,13 +749,209 @@ def calcular_mejores_ofertas(
         "borradores": borradores_list,
         "total_borradores": len(borradores_list),
         "productos_huerfanos": productos_huerfanos,
-        "requiere_envio": requiere_envio
+        "requiere_envio": envio_obligatorio,
+        "matriz_ponderacion": {
+            "economico": float(w_econ * 100),
+            "confiabilidad": float(w_conf * 100),
+            "tiempo": float(w_tiempo * 100),
+            "nivel": float(w_nivel * 100),
+            "envio": float(w_envio * 100),
+            "envio_obligatorio": envio_obligatorio
+        }
     }
 
 
-# ==============================================================================
-# CU-55: RECEPCIONAR COMPRA (SELECTORS)
-# ==============================================================================
+def obtener_proveedores_candidatos_para_cotizacion(id_producto: int) -> QuerySet[Proveedor]:
+    """
+    Fase 1: Sondeo Selectivo Inteligente (CU-14).
+    Localiza los proveedores activos (estado=True) a los cuales debe enviarse la solicitud de cotización.
+    EXCLUYE estrictamente a aquellos proveedores que YA cuenten con una cotización ACEPTADA y VIGENTE
+    (fecha_validez >= hoy) para este producto específico en el sistema.
+    INCLUYE a proveedores que nunca hayan cotizado el producto o cuya cotización ya haya expirado (fecha_validez < hoy).
+    """
+    hoy = timezone.now().date()
+    cuits_con_oferta_vigente = Proveedor.objects.filter(
+        estado=True,
+        invitacioncotizar__cotizacion__estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+        invitacioncotizar__cotizacion__fecha_validez__gte=hoy,
+        invitacioncotizar__cotizacion__cotizacionproducto__id_producto_id=id_producto
+    ).values_list('cuit_prov', flat=True).distinct()
+
+    return Proveedor.objects.filter(
+        estado=True
+    ).exclude(
+        cuit_prov__in=cuits_con_oferta_vigente
+    ).distinct()
+
+
+def obtener_articulos_deficitarios_con_transito() -> List[Dict[str, Any]]:
+    """
+    Motor de Detección de Faltantes y Stock en Tránsito.
+    Escanea todos los productos con modulo_automatico=True y estado=True.
+    Para cada producto:
+      - Calcula el stock físico real disponible en inventario.
+      - Computa el stock en tránsito (órdenes en 'Esperando Entrega' no vencidas).
+      - Evalúa la demanda urgente de taller (reparaciones en ESPERANDO_REPUESTOS o ESPERANDO_INSUMOS).
+      - Aplica la estrategia de cálculo de lote (ConfiguracionSistema.estrategiaLoteReposicion):
+          * BRECHA_MINIMO: max(stock_minimo - stock_proyectado, 0) + faltante_taller
+          * DOBLE_MINIMO: max((stock_minimo * 2) - stock_proyectado, 0) + faltante_taller
+          * STOCK_MINIMO_FIJO: stock_minimo + faltante_taller
+    Retorna la lista de insumos en déficit que requieren acción de abastecimiento.
+    """
+    from core_app.models import ConfiguracionSistema
+    from inventory_app.models import Stock
+    from inventory_app.selectors import obtener_stock_actual_producto
+    from workshop_app.models import Reparacion, DetalleInsumoReparacion
+    from datetime import timedelta
+
+    hoy = timezone.now().date()
+
+    # 1. Parámetros de estrategia y tolerancia
+    cfg_est = ConfiguracionSistema.objects.filter(clave='estrategiaLoteReposicion').first()
+    estrategia = str(cfg_est.valor).strip().upper() if cfg_est and cfg_est.valor else 'BRECHA_MINIMO'
+
+    cfg_tol_com = ConfiguracionSistema.objects.filter(clave='diasToleranciaIncumplimientoProveedor').first()
+    try:
+        dias_tol_com = int(str(cfg_tol_com.valor).strip()) if cfg_tol_com and cfg_tol_com.valor else 3
+    except (ValueError, TypeError):
+        dias_tol_com = 3
+
+    productos_habilitados = Producto.objects.filter(
+        modulo_automatico=True,
+        estado=True
+    ).select_related('id_categoria')
+
+    articulos_deficitarios = []
+
+    for producto in productos_habilitados:
+        id_prod = producto.id_producto
+
+        # A. Stock físico actual
+        stock_fisico = obtener_stock_actual_producto(id_prod)
+
+        # B. Stock mínimo configurado
+        stk_obj = Stock.objects.filter(id_producto=producto).first()
+        stock_minimo = stk_obj.stock_minimo if stk_obj else 0
+
+        # C. Stock en Tránsito (Órdenes en Esperando Entrega dentro del plazo esperado)
+        detalles_transito = DetalleOrdenCompra.objects.filter(
+            id_producto_id=id_prod,
+            id_orden__estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA
+        ).select_related('id_orden', 'id_orden__cuit_prov')
+
+        stock_transito = 0
+        for det in detalles_transito:
+            orden = det.id_orden
+            dias_prov = orden.cuit_prov.tiempo_promedio_entrega or 5
+            limite_orden = orden.fecha_emision + timedelta(days=dias_prov + dias_tol_com)
+            if hoy <= limite_orden:
+                stock_transito += det.cantidad
+
+        stock_proyectado = stock_fisico + stock_transito
+
+        # D. Demanda técnica de taller (Reparaciones pausadas por falta de repuestos)
+        reparaciones_taller = Reparacion.objects.filter(
+            etapa__in=['ESPERANDO_REPUESTOS', 'ESPERANDO_INSUMOS'],
+            detalleinsumoreparacion__id_producto_id=id_prod
+        ).distinct()
+
+        demanda_taller = 0
+        for rep in reparaciones_taller:
+            cant_rep = sum(
+                d.cantidad for d in rep.detalleinsumoreparacion_set.filter(id_producto_id=id_prod)
+            ) or 1
+            demanda_taller += cant_rep
+
+        # E. Evaluación de déficit
+        requiere_taller = (demanda_taller > stock_proyectado)
+        requiere_comercial = (stock_proyectado < stock_minimo)
+
+        if requiere_taller or requiere_comercial:
+            # Calcular cantidad según la estrategia seleccionada
+            faltante_taller = max(demanda_taller - max(stock_proyectado, 0), 0)
+
+            if estrategia == 'DOBLE_MINIMO':
+                base_reposicion = max((stock_minimo * 2) - stock_proyectado, 0)
+            elif estrategia == 'STOCK_MINIMO_FIJO':
+                base_reposicion = stock_minimo
+            else:  # 'BRECHA_MINIMO'
+                base_reposicion = max(stock_minimo - stock_proyectado, 0)
+
+            cantidad_total_a_pedir = base_reposicion + faltante_taller
+            if cantidad_total_a_pedir <= 0:
+                cantidad_total_a_pedir = 1
+
+            # Verificar si existen cotizaciones vigentes para este producto
+            tiene_cotizacion_vigente = CotizacionProducto.objects.filter(
+                id_producto_id=id_prod,
+                id_cotizacion__estado_cotizacion=Cotizacion.ESTADO_ACEPTADA,
+                id_cotizacion__fecha_validez__gte=hoy,
+                precio_ofrecido__gt=Decimal("0.00")
+            ).exists()
+
+            articulos_deficitarios.append({
+                "id_producto": id_prod,
+                "nombre_producto": producto.nombre,
+                "stock_fisico": stock_fisico,
+                "stock_minimo": stock_minimo,
+                "stock_transito": stock_transito,
+                "stock_proyectado": stock_proyectado,
+                "demanda_taller": demanda_taller,
+                "cantidad_a_pedir": cantidad_total_a_pedir,
+                "es_urgencia_taller": requiere_taller,
+                "tiene_cotizacion_vigente": tiene_cotizacion_vigente,
+                "estrategia_utilizada": estrategia
+            })
+
+    return articulos_deficitarios
+
+
+def obtener_estado_motor_abastecimiento() -> Dict[str, Any]:
+    """
+    Diagnóstico en tiempo real del Motor de Abastecimiento Inteligente.
+    Recupera interruptores maestros, estrategias, colas de órdenes activas y déficit de stock.
+    """
+    from core_app.models import ConfiguracionSistema, LogSistema
+
+    def _cfg_val(clave, default):
+        c = ConfiguracionSistema.objects.filter(clave=clave).first()
+        return c.valor if c and c.valor is not None else default
+
+    auto_activo = str(_cfg_val('autoAbastecimientoActivo', 'True')).strip().lower() in ('true', '1')
+    modo = str(_cfg_val('modoDisparadorAbastecimiento', 'HIBRIDO')).strip().upper()
+    estrategia = str(_cfg_val('estrategiaLoteReposicion', 'BRECHA_MINIMO')).strip().upper()
+    frecuencia_dias = int(_cfg_val('frecuenciaGeneracionOC_dias', '5'))
+    espera_urgencia = int(_cfg_val('esperaUrgenciaTecnicaHoras', '0'))
+    envio_obligatorio = str(_cfg_val('criterioObligatorio_Envio', 'False')).strip().lower() in ('true', '1')
+
+    # Órdenes activas en tránsito
+    ordenes_esperando = OrdenCompra.objects.filter(estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA).count()
+    ordenes_taller = OrdenCompra.objects.filter(estado_orden=OrdenCompra.ESTADO_ESPERANDO_ENTREGA, sol_tec=True).count()
+
+    # Solicitudes de cotización pendientes
+    solicitudes_pendientes = SolicitudCotizacion.objects.filter(estado_solicitud=SolicitudCotizacion.ESTADO_ENVIADA).count()
+
+    # Última ejecución registrada en LogSistema
+    ultimo_log = LogSistema.objects.filter(
+        accion__icontains="Motor de Abastecimiento"
+    ).order_by('-id_log').first()
+
+    return {
+        "auto_abastecimiento_activo": auto_activo,
+        "modo_disparador": modo,
+        "estrategia_lote": estrategia,
+        "frecuencia_generacion_oc_dias": frecuencia_dias,
+        "espera_urgencia_tecnica_horas": espera_urgencia,
+        "criterio_obligatorio_envio": envio_obligatorio,
+        "ordenes_esperando_entrega": ordenes_esperando,
+        "ordenes_urgencia_taller": ordenes_taller,
+        "solicitudes_cotizacion_enviadas": solicitudes_pendientes,
+        "ultima_ejecucion": {
+            "fecha_hora": ultimo_log.fecha_hora if ultimo_log else None,
+            "detalle": ultimo_log.detalle if ultimo_log else "Sin ejecuciones previas registradas"
+        }
+    }
+
 
 def obtener_orden_esperando_entrega(id_orden: int) -> OrdenCompra:
     """

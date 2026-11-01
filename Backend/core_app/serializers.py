@@ -39,6 +39,14 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'pesoEvaluacion_Envio',
             'limitePromocionesMensual',
             'periodoRefrigerioCliente',
+            'esperaUrgenciaTecnicaHoras',
+            'toleranciaHorasIncumplimientoUrgente',
+            'diasToleranciaIncumplimientoProveedor',
+            'pesoAsignacion_CargaLaboral',
+            'pesoAsignacion_Calificacion',
+            'pesoAsignacion_Rapidez',
+            'pesoAsignacion_Especialidad',
+            'pesoAsignacion_Efectividad',
         }
 
         # Campos que requieren casteo numérico decimal / float
@@ -64,6 +72,8 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'log_operaciones_lectura',
             'motorBeneficiosActivo',
             'permitirCostoManoDeObraPropio',
+            'criterioObligatorio_Envio',
+            'autoAsignacionTecnicosActiva',
         }
 
         for campo in CAMPOS_BOOLEANOS:
@@ -115,17 +125,55 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                     'porcentajeDescuentoMaximo': "El porcentaje de descuento máximo no puede ser menor a 0 ni mayor a 100."
                 })
 
-        # 3. Suma 100% del Algoritmo de Abastecimiento y Compras
+        # 3. Validación de opciones del Motor de Abastecimiento
+        if 'estrategiaLoteReposicion' in attrs and attrs['estrategiaLoteReposicion']:
+            estrategias_validas = {'BRECHA_MINIMO', 'DOBLE_MINIMO', 'STOCK_MINIMO_FIJO'}
+            val_est = str(attrs['estrategiaLoteReposicion']).strip().upper()
+            if val_est not in estrategias_validas:
+                raise serializers.ValidationError({
+                    'estrategiaLoteReposicion': f"Estrategia inválida. Opciones permitidas: {', '.join(sorted(estrategias_validas))}."
+                })
+            attrs['estrategiaLoteReposicion'] = val_est
+
+        if 'modoDisparadorAbastecimiento' in attrs and attrs['modoDisparadorAbastecimiento']:
+            modos_validos = {'HIBRIDO', 'TRANSACCIONAL', 'PROGRAMADO'}
+            val_modo = str(attrs['modoDisparadorAbastecimiento']).strip().upper()
+            if val_modo not in modos_validos:
+                raise serializers.ValidationError({
+                    'modoDisparadorAbastecimiento': f"Modo inválido. Opciones permitidas: {', '.join(sorted(modos_validos))}."
+                })
+            attrs['modoDisparadorAbastecimiento'] = val_modo
+
+        # 4. Suma 100% del Algoritmo de Abastecimiento y Compras (con soporte de criterio obligatorio de envío)
+        envio_obligatorio = False
+        if 'criterioObligatorio_Envio' in attrs:
+            envio_obligatorio = str(attrs['criterioObligatorio_Envio']).strip().lower() in ('true', '1')
+        else:
+            cfg_envio = ConfiguracionSistema.objects.filter(clave='criterioObligatorio_Envio').first()
+            if cfg_envio and cfg_envio.valor:
+                envio_obligatorio = str(cfg_envio.valor).strip().lower() in ('true', '1')
+
         pesos_claves = [
             'pesoEvaluacion_Confiabilidad',
             'pesoEvaluacion_Tiempo',
             'pesoEvaluacion_Nivel',
+            'pesoEvaluacion_Economico'
+        ]
+        if not envio_obligatorio:
+            pesos_claves.append('pesoEvaluacion_Envio')
+        else:
+            attrs['pesoEvaluacion_Envio'] = '0'
+
+        claves_a_verificar = [
+            'pesoEvaluacion_Confiabilidad',
+            'pesoEvaluacion_Tiempo',
+            'pesoEvaluacion_Nivel',
             'pesoEvaluacion_Economico',
-            'pesoEvaluacion_Envio'
+            'pesoEvaluacion_Envio',
+            'criterioObligatorio_Envio'
         ]
 
-        # Si alguna de las claves de ponderación del algoritmo está en la solicitud:
-        tiene_pesos = any(k in attrs for k in pesos_claves)
+        tiene_pesos = any(k in attrs for k in claves_a_verificar)
         if tiene_pesos:
             suma_pesos = 0
             for k in pesos_claves:
@@ -137,7 +185,6 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                             k: f"El peso '{k}' debe ser un número entero válido."
                         })
                 else:
-                    # Si no se incluyó en la petición parcial, rescatar valor actual en BD
                     config_bd = ConfiguracionSistema.objects.filter(clave=k).first()
                     try:
                         val_peso = int(str(config_bd.valor).strip()) if config_bd and config_bd.valor else 0
@@ -152,9 +199,49 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                 suma_pesos += val_peso
 
             if suma_pesos != 100:
+                detalle_criterios = " (Envío marcado como Obligatorio, peso 100% distribuido entre los otros 4 criterios)" if envio_obligatorio else ""
                 raise serializers.ValidationError(
-                    f"La suma de los pesos de evaluación ({', '.join(pesos_claves)}) DEBE ser exactamente 100%. "
+                    f"La suma de los pesos de evaluación ({', '.join(pesos_claves)}) DEBE ser exactamente 100%{detalle_criterios}. "
                     f"Suma actual: {suma_pesos}%."
+                )
+
+        # 5. Suma 100% del Algoritmo de Asignación de Reparaciones a Técnicos
+        pesos_tecnicos_claves = [
+            'pesoAsignacion_CargaLaboral',
+            'pesoAsignacion_Calificacion',
+            'pesoAsignacion_Rapidez',
+            'pesoAsignacion_Especialidad',
+            'pesoAsignacion_Efectividad',
+        ]
+        tiene_pesos_tecnicos = any(k in attrs for k in pesos_tecnicos_claves)
+        if tiene_pesos_tecnicos:
+            suma_pesos_tec = 0
+            for k in pesos_tecnicos_claves:
+                if k in attrs and attrs[k] is not None:
+                    try:
+                        val_peso = int(str(attrs[k]).strip())
+                    except (ValueError, TypeError):
+                        raise serializers.ValidationError({
+                            k: f"El peso '{k}' debe ser un número entero válido."
+                        })
+                else:
+                    config_bd = ConfiguracionSistema.objects.filter(clave=k).first()
+                    try:
+                        val_peso = int(str(config_bd.valor).strip()) if config_bd and config_bd.valor else 0
+                    except (ValueError, TypeError):
+                        val_peso = 0
+
+                if val_peso < 0:
+                    raise serializers.ValidationError({
+                        k: f"El peso '{k}' no puede ser un número negativo."
+                    })
+
+                suma_pesos_tec += val_peso
+
+            if suma_pesos_tec != 100:
+                raise serializers.ValidationError(
+                    f"La suma de los pesos del Algoritmo de Asignación a Técnicos ({', '.join(pesos_tecnicos_claves)}) "
+                    f"DEBE ser exactamente 100%. Suma actual: {suma_pesos_tec}%."
                 )
 
         return attrs

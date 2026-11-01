@@ -162,3 +162,27 @@ def obtener_rol_para_edicion(id_rol: int) -> RolUsuario:
     except RolUsuario.DoesNotExist:
         raise ValidationError(f"El rol con ID {id_rol} no existe en el sistema.")
 
+
+
+def obtener_preferencias_usuario(*, id_usuario: int) -> dict:
+    """
+    Obtiene las preferencias del usuario indicado sin alterar la base de datos (solo lectura).
+    Si el usuario aún no posee un registro físico en PreferenciasUsuario,
+    retorna los valores predeterminados del sistema:
+      - noti_c = True (Notificaciones por correo habilitadas)
+      - noti_w = False (WhatsApp opcional deshabilitado inicialmente)
+      - modo_oscuro = True (Modo Cyber-Tech oscuro por defecto)
+    """
+    from users_app.models import PreferenciasUsuario
+    pref = PreferenciasUsuario.objects.filter(id_usuario_id=id_usuario).first()
+    if pref:
+        return {
+            'noti_c': pref.noti_c,
+            'noti_w': pref.noti_w,
+            'modo_oscuro': pref.modo_oscuro,
+        }
+    return {
+        'noti_c': True,
+        'noti_w': False,
+        'modo_oscuro': True,
+    }

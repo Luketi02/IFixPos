@@ -19,7 +19,9 @@ from purchases_app.apis import (
     EmitirOrdenesCompraApi,
     RecepcionarCompraApi,
     ConsultarOrdenCompraApi,
-    RegistrarCompraDirectaApi
+    RegistrarCompraDirectaApi,
+    EjecutarMotorAbastecimientoApi,
+    EstadoMotorAbastecimientoApi
 )
 
 app_name = 'purchases_app'
@@ -84,5 +86,8 @@ urlpatterns = [
     # CU-31: Registrar Compra (Compra Directa)
     path('compras-directas/', RegistrarCompraDirectaApi.as_view(), name='listar-compras-directas'),
     path('compras-directas/registrar/', RegistrarCompraDirectaApi.as_view(), name='registrar-compra-directa'),
+    # MOTOR AUTÓNOMO DE ABASTECIMIENTO INTELIGENTE
+    path('motor-abastecimiento/ejecutar/', EjecutarMotorAbastecimientoApi.as_view(), name='motor-abastecimiento-ejecutar'),
+    path('motor-abastecimiento/estado/', EstadoMotorAbastecimientoApi.as_view(), name='motor-abastecimiento-estado'),
 ]
 

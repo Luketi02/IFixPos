@@ -145,7 +145,7 @@ export const CLIENT_MENU_ITEMS = [
 // ==============================================================================
 export const TECH_MENU_ITEMS = [
   {
-    label: '📱 Dispositivos',
+    label: 'Dispositivos',
     children: [
       {
         value: 'tech-repairs-new',

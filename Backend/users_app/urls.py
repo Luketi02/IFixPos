@@ -16,7 +16,8 @@ from users_app.apis import (
     CambiarSesionDevApi,
     ModificarUsuarioAdminApi,
     ListarRolesApi,
-    ModificarRolApi
+    ModificarRolApi,
+    PreferenciasUsuarioApi
 )
 
 urlpatterns = [
@@ -31,6 +32,7 @@ urlpatterns = [
     path('token/restablecer/', RestablecerCredencialesApi.as_view(), name='api_restablecer_credenciales'),
     path('recuperar-contrasena/solicitar/', SolicitarRecuperacionContrasenaApi.as_view(), name='api_solicitar_recuperacion'),
     path('perfil/editar/', EditarPerfilApi.as_view(), name='api_editar_perfil'),
+    path('perfil/preferencias/', PreferenciasUsuarioApi.as_view(), name='api_perfil_preferencias'),
     path('perfil/foto/', SubirFotoPerfilApi.as_view(), name='api_subir_foto_perfil'),
     path('filtrar/', FiltrarUsuariosApi.as_view(), name='api_filtrar_usuarios'),
     path('onboarding/completar/', CompletarOnboardingApi.as_view(), name='api_completar_onboarding'),

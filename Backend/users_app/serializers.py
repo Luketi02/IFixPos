@@ -359,3 +359,28 @@ class RolUsuarioOutputSerializer(serializers.Serializer):
     nombre_rol = serializers.CharField()
     descripcion = serializers.CharField(allow_null=True)
     usuarios_count = serializers.IntegerField(required=False, default=0)
+
+
+class PreferenciasUsuarioInputSerializer(serializers.Serializer):
+    """
+    Serializador de entrada para actualizar las preferencias del usuario.
+    Regla HackSoftware: Prohibido incluir .create() o .update().
+    """
+    noti_c = serializers.BooleanField(required=False)
+    noti_w = serializers.BooleanField(required=False)
+    modo_oscuro = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("Debe proporcionar al menos una preferencia para actualizar.")
+        return attrs
+
+
+class PreferenciasUsuarioOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para las preferencias personales del usuario.
+    Regla HackSoftware: Formato estructurado hacia el cliente.
+    """
+    noti_c = serializers.BooleanField()
+    noti_w = serializers.BooleanField()
+    modo_oscuro = serializers.BooleanField()

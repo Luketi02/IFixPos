@@ -42,6 +42,14 @@ export default function AdminPurchaseOrdersScreen() {
   const [idOrdenRecepcionar, setIdOrdenRecepcionar] = useState(null);
   const [ordenParaRecepcionar, setOrdenParaRecepcionar] = useState(null);
 
+  // Estados del Motor Automatizado e Inteligente de Abastecimiento
+  const [estadoMotor, setEstadoMotor] = useState(null);
+  const [cargandoEstadoMotor, setCargandoEstadoMotor] = useState(false);
+  const [ejecutandoMotor, setEjecutandoMotor] = useState(false);
+  const [resumenMotor, setResumenMotor] = useState(null);
+  const [modalResumenMotorOpen, setModalResumenMotorOpen] = useState(false);
+  const [modalArticulosCriticosOpen, setModalArticulosCriticosOpen] = useState(false);
+
   // Si se accede mediante enlace directo /admin/ordenes-compra/:id_orden, abrir el expediente automáticamente
   useEffect(() => {
     if (idOrdenUrl !== undefined && idOrdenUrl !== null && String(idOrdenUrl).trim() !== '') {
@@ -101,6 +109,54 @@ export default function AdminPurchaseOrdersScreen() {
     const timer = setTimeout(() => setMensajeExito(''), 6000);
     return () => clearTimeout(timer);
   }, [mensajeExito]);
+
+  // Carga del estado y diagnósticos del motor inteligente de abastecimiento
+  const consultarEstadoMotor = useCallback(async () => {
+    try {
+      setCargandoEstadoMotor(true);
+      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const config = {
+        headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
+      };
+      const resp = await axios.get(`${API_BASE_URL}/api/purchases/motor-abastecimiento/estado/`, config);
+      setEstadoMotor(resp.data);
+    } catch {
+      // Si falla la consulta del motor, no bloqueamos la pantalla
+    } finally {
+      setCargandoEstadoMotor(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    consultarEstadoMotor();
+  }, [consultarEstadoMotor]);
+
+  // Ejecución manual forzada del ciclo inteligente de abastecimiento
+  const handleEjecutarMotorAhora = async () => {
+    try {
+      setEjecutandoMotor(true);
+      setErrorAlerta('');
+      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const config = {
+        headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
+      };
+      const resp = await axios.post(
+        `${API_BASE_URL}/api/purchases/motor-abastecimiento/ejecutar/`,
+        { forzar_ejecucion: true },
+        config
+      );
+      setResumenMotor(resp.data?.resumen || resp.data);
+      setModalResumenMotorOpen(true);
+      consultarOrdenesCompra(filtros);
+      consultarEstadoMotor();
+    } catch (err) {
+      const dataErr = err?.response?.data;
+      const msg = dataErr?.error || dataErr?.detail || 'No se pudo completar la ejecución del motor de abastecimiento.';
+      setErrorAlerta(msg);
+    } finally {
+      setEjecutandoMotor(false);
+    }
+  };
 
   // Carga auxiliar del padrón de proveedores para el selector de filtrado
   useEffect(() => {
@@ -352,16 +408,46 @@ export default function AdminPurchaseOrdersScreen() {
             <div>
               <h2 className="text-xl font-bold text-white tracking-tight">Registro y Emisión de Órdenes</h2>
             </div>
-            <button
-              type="button"
-              onClick={() => setModalGenerarOpen(true)}
-              className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-2 cursor-pointer shrink-0"
-            >
-              <svg className="w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-              </svg>
-              <span>Nueva Orden de Compra</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleEjecutarMotorAhora}
+                disabled={ejecutandoMotor}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-2 cursor-pointer shadow-lg ${
+                  ejecutandoMotor
+                    ? 'bg-violet-950/60 border-violet-500/40 text-violet-300 cursor-not-allowed'
+                    : 'bg-violet-600 hover:bg-violet-500 text-white border-violet-400/50 shadow-[0_0_15px_rgba(139,92,246,0.3)]'
+                }`}
+              >
+                {ejecutandoMotor ? (
+                  <>
+                    <svg className="w-4 h-4 text-violet-300 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    <span>Optimizando Compras...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 text-violet-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    <span>Ejecutar Abastecimiento Inteligente</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalGenerarOpen(true)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-2 cursor-pointer shrink-0"
+              >
+                <svg className="w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>Nueva Orden Manual</span>
+              </button>
+            </div>
           </div>
           {/* Notificación de Error con Auto-Cierre a los 6s */}
           <AnimatePresence>
@@ -411,6 +497,72 @@ export default function AdminPurchaseOrdersScreen() {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Banner Cyber-Tech: Motor Automatizado e Inteligente de Abastecimiento */}
+          {estadoMotor && (
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-[#1E293B] via-slate-900 to-[#1E293B] border border-cyan-500/30 rounded-2xl shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center shrink-0 text-cyan-400">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-white text-sm">Motor de Abastecimiento Continuo</span>
+                    {estadoMotor.activo ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Activo y Operativo
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        Pausado
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-violet-500/15 text-violet-300 border border-violet-500/30">
+                      Disparo: {estadoMotor.modo_disparador === 'HIBRIDO' ? 'Híbrido' : estadoMotor.modo_disparador === 'TRANSACCIONAL' ? 'Eventos en Vivo' : 'Programado'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                      Lote: {estadoMotor.estrategia_lote === 'BRECHA_MINIMO' ? 'Brecha a Mínimo' : estadoMotor.estrategia_lote === 'DOBLE_MINIMO' ? 'Doble Mínimo' : 'Fijo Mínimo'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Audita stock crítico, demanda de taller ({estadoMotor.espera_urgencia_taller_horas === 0 ? 'emisión al instante' : `${estadoMotor.espera_urgencia_taller_horas}hs espera`}), cotizaciones vigentes y evalúa la mejor compra con matriz multicriterio.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0 self-end lg:self-center">
+                <button
+                  type="button"
+                  onClick={() => setModalArticulosCriticosOpen(true)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-colors flex items-center gap-2 ${
+                    (estadoMotor.articulos_deficitarios_count || 0) > 0
+                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-300 hover:bg-rose-500/25'
+                      : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700/80'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-400 animate-ping" />
+                  <span>
+                    {estadoMotor.articulos_deficitarios_count || 0} Insumo(s) en Déficit
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={consultarEstadoMotor}
+                  disabled={cargandoEstadoMotor}
+                  className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 transition-colors"
+                  title="Actualizar diagnóstico del motor"
+                >
+                  <svg className={`w-4 h-4 ${cargandoEstadoMotor ? 'animate-spin text-cyan-400' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Tarjetas de Resumen Operativo (KPIs) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -778,6 +930,227 @@ export default function AdminPurchaseOrdersScreen() {
           );
         }}
       />
+
+      {/* Modal de Artículos Críticos y Faltantes Detectados por el Motor */}
+      <AnimatePresence>
+        {modalArticulosCriticosOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#1E293B] border border-slate-700 rounded-2xl max-w-3xl w-full p-6 shadow-2xl max-h-[85vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center font-bold">
+                    !
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Insumos y Repuestos en Estado Crítico</h3>
+                    <p className="text-xs text-slate-400">Artículos con stock físico insuficiente o requeridos por el taller técnico</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalArticulosCriticosOpen(false)}
+                  className="text-slate-400 hover:text-white text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto py-4 space-y-3 custom-scrollbar">
+                {(!estadoMotor?.articulos_deficitarios || estadoMotor.articulos_deficitarios.length === 0) ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <p className="text-sm font-semibold text-emerald-300">¡Niveles de inventario óptimos!</p>
+                    <p className="text-xs text-slate-500 mt-1">No se detectaron faltantes ni requerimientos de taller desatendidos.</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#0F172A] text-slate-400 uppercase font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="px-4 py-2.5">Artículo / Repuesto</th>
+                        <th className="px-3 py-2.5 text-center">Stock Físico</th>
+                        <th className="px-3 py-2.5 text-center">En Tránsito</th>
+                        <th className="px-3 py-2.5 text-center">Taller Urgente</th>
+                        <th className="px-3 py-2.5 text-center">A Reponer</th>
+                        <th className="px-3 py-2.5 text-center">Cotización</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-slate-300">
+                      {estadoMotor.articulos_deficitarios.map((art) => (
+                        <tr key={art.id_producto} className="hover:bg-slate-800/40">
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-white">{art.nombre}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">Mínimo: {art.stock_minimo} unid.</div>
+                          </td>
+                          <td className="px-3 py-3 text-center font-mono font-bold text-slate-200">
+                            {art.stock_fisico}
+                          </td>
+                          <td className="px-3 py-3 text-center font-mono text-cyan-300">
+                            {art.stock_transito}
+                          </td>
+                          <td className="px-3 py-3 text-center font-mono">
+                            {art.demanda_taller > 0 ? (
+                              <span className="px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/40 font-bold">
+                                {art.demanda_taller}
+                              </span>
+                            ) : (
+                              '0'
+                            )}
+                          </td>
+                          <td className="px-3 py-3 text-center font-mono font-bold text-amber-400">
+                            {art.cantidad_a_pedir}
+                          </td>
+                          <td className="px-3 py-3 text-center">
+                            {art.tiene_cotizacion_vigente ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                Vigente
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                Requiere Sondeo
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+                <span className="text-xs text-slate-400">
+                  {estadoMotor?.articulos_deficitarios?.length || 0} producto(s) evaluados
+                </span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setModalArticulosCriticosOpen(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700"
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalArticulosCriticosOpen(false);
+                      handleEjecutarMotorAhora();
+                    }}
+                    disabled={ejecutandoMotor}
+                    className="px-4 py-2 rounded-xl text-xs font-bold bg-violet-600 hover:bg-violet-500 text-white"
+                  >
+                    Abastecer Todo Ahora
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Resumen Ejecutivo Post-Ejecución del Motor */}
+      <AnimatePresence>
+        {modalResumenMotorOpen && resumenMotor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#1E293B] border border-cyan-500/40 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 flex items-center justify-center font-bold text-lg">
+                    ✓
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Ciclo de Abastecimiento Completado</h3>
+                    <p className="text-xs text-cyan-300 font-mono">El motor inteligente procesó las necesidades operativas</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalResumenMotorOpen(false)}
+                  className="text-slate-400 hover:text-white text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400">Órdenes Generadas</div>
+                  <div className="text-2xl font-black text-cyan-400 mt-1">
+                    {resumenMotor.ordenes_emitidas?.length || 0}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">En Esperando Entrega</div>
+                </div>
+
+                <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400">Solicitudes de Cotización</div>
+                  <div className="text-2xl font-black text-amber-400 mt-1">
+                    {resumenMotor.solicitudes_cotizacion_creadas?.length || 0}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Sondeo selectivo a proveedores</div>
+                </div>
+
+                <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400">Incumplimientos / Bajas</div>
+                  <div className="text-2xl font-black text-rose-400 mt-1">
+                    {resumenMotor.ordenes_canceladas_por_incumplimiento?.length || 0}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Penalizaciones aplicadas</div>
+                </div>
+              </div>
+
+              {resumenMotor.ordenes_emitidas && resumenMotor.ordenes_emitidas.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-slate-200">Detalle de Órdenes Formalizadas:</h4>
+                  <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                    {resumenMotor.ordenes_emitidas.map((ord, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between text-xs">
+                        <div>
+                          <div className="font-semibold text-white">{ord.proveedor}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            {ord.items_count} producto(s) | {ord.es_urgencia_taller ? '⚡ Urgencia Taller' : 'Stock General'}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-mono font-bold text-cyan-300">
+                            {formatMoneda(ord.monto_total)}
+                          </div>
+                          <div className="text-[10px] text-emerald-400">Comprobante PDF enviado</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {resumenMotor.solicitudes_cotizacion_creadas && resumenMotor.solicitudes_cotizacion_creadas.length > 0 && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                  <span className="font-bold">Sondeo de Mercado Despachado: </span>
+                  Se emitieron solicitudes de cotización para {resumenMotor.solicitudes_cotizacion_creadas.length} insumo(s) sin cotizaciones vigentes, convocando únicamente a proveedores que no cuentan con oferta activa.
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setModalResumenMotorOpen(false)}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-cyan-400 hover:bg-cyan-300 text-slate-950 transition-colors"
+                >
+                  Entendido y Aceptar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
@@ -806,7 +1179,7 @@ function FragmentFilaOrden({
             <span className="font-mono text-cyan-400 font-bold">#{orden.id_orden}</span>
             {orden.sol_tec ? (
               <span className="px-2 py-0.5 text-[10px] rounded-md bg-violet-500/15 text-violet-300 border border-violet-500/30">
-                Taller Técnico
+                ⚡ Urgencia Taller
               </span>
             ) : (
               <span className="px-2 py-0.5 text-[10px] rounded-md bg-slate-700/50 text-slate-300 border border-slate-600/60">
