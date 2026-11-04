@@ -121,6 +121,18 @@ class LogoutInputSerializer(serializers.Serializer):
     refresh_token = serializers.CharField(required=True)
 
 
+class RefreshTokenInputSerializer(serializers.Serializer):
+    """
+    Validador de datos de entrada para el refresco y renovación de tokens JWT.
+    """
+    refresh = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=1000,
+        help_text="Token de refresco JWT válido para renovar la sesión."
+    )
+
+
 class GenerarTokenInputSerializer(serializers.Serializer):
     """Validador para solicitar la generación de un token de restablecimiento."""
     email = serializers.EmailField(required=True)

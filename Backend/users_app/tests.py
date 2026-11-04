@@ -834,6 +834,24 @@ class ModificarRolTestCase(TestCase):
         self.assertEqual(res_inactivos.data[0]['email'], 'inactivo.filtro@ifixpos.com')
         self.assertFalse(res_inactivos.data[0]['is_active'])
 
+    def test_renovar_token_jwt_exitoso_y_token_invalido(self):
+        """Valida que /api/auth/token/refresh/ renueve los tokens y rechace tokens inválidos."""
+        from users_app.services import generar_tokens_jwt
+        tokens = generar_tokens_jwt(self.admin_user)
+        self.assertIn('access', tokens)
+        self.assertIn('refresh', tokens)
+
+        # Refresco exitoso
+        res = self.client.post("/api/auth/token/refresh/", {"refresh": tokens['refresh']}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('tokens', res.data)
+        self.assertIn('access', res.data['tokens'])
+        self.assertIn('refresh', res.data['tokens'])
+
+        # Token inválido
+        res_invalido = self.client.post("/api/auth/token/refresh/", {"refresh": "token_falso_invalido"}, format='json')
+        self.assertEqual(res_invalido.status_code, 401)
+
 
 
 

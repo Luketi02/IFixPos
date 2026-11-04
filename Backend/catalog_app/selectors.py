@@ -198,8 +198,9 @@ def obtener_productos_tienda(
         'id_categoria',
         'id_modelo',
         'id_modelo__id_marca',
-        'id_modelo__id_tipo_dispositivo'
-    ).prefetch_related('imagenes')
+        'id_modelo__id_tipo_dispositivo',
+        'id_tipo_dispositivo'
+    ).prefetch_related('imagenes', 'modelos_compatibles', 'marcas_compatibles')
 
     if id_categoria:
         qs = qs.filter(id_categoria_id=id_categoria)
@@ -212,8 +213,11 @@ def obtener_productos_tienda(
                 Q(descripcion__icontains=termino) |
                 Q(id_modelo__nombre__icontains=termino) |
                 Q(id_modelo__id_marca__nombre__icontains=termino) |
-                Q(id_modelo__id_tipo_dispositivo__nombre__icontains=termino)
-            )
+                Q(id_modelo__id_tipo_dispositivo__nombre__icontains=termino) |
+                Q(modelos_compatibles__nombre__icontains=termino) |
+                Q(marcas_compatibles__nombre__icontains=termino) |
+                Q(id_tipo_dispositivo__nombre__icontains=termino)
+            ).distinct()
 
     qs = qs.order_by('nombre')
 
@@ -225,12 +229,29 @@ def obtener_productos_tienda(
     for prod in qs:
         cant_stock = obtener_stock_actual_producto(prod.id_producto)
 
-        # Resolver tipo de dispositivo heredado del modelo
+        # Resolver tipo de dispositivo
         tipo_disp_nombre = ''
         id_tipo_disp = None
-        if prod.id_modelo and prod.id_modelo.id_tipo_dispositivo:
+        if prod.id_tipo_dispositivo:
+            tipo_disp_nombre = prod.id_tipo_dispositivo.nombre
+            id_tipo_disp = prod.id_tipo_dispositivo_id
+        elif prod.id_modelo and prod.id_modelo.id_tipo_dispositivo:
             tipo_disp_nombre = prod.id_modelo.id_tipo_dispositivo.nombre
             id_tipo_disp = prod.id_modelo.id_tipo_dispositivo_id
+
+        # Modelos y marcas compatibles nombres
+        nombres_modelos = [m.nombre for m in prod.modelos_compatibles.all()]
+        nombres_marcas = [m.nombre for m in prod.marcas_compatibles.all()]
+
+        # Modelo nombre visual
+        if prod.es_universal:
+            modelo_display = 'Universal / Genérico'
+        elif prod.tipo_compatibilidad == 'MULTI_MODELO':
+            modelo_display = f"Multi-modelo ({len(nombres_modelos)})" if nombres_modelos else 'Múltiples Modelos'
+        elif prod.id_modelo:
+            modelo_display = prod.id_modelo.nombre
+        else:
+            modelo_display = 'General'
 
         # Resolver imágenes
         imagenes_list = [img.url_imagen for img in prod.imagenes.all()]
@@ -267,9 +288,13 @@ def obtener_productos_tienda(
             'id_marca': prod.id_marca_id,
             'marca_nombre': prod.id_marca.nombre if prod.id_marca else '',
             'id_modelo': prod.id_modelo_id,
-            'modelo_nombre': prod.id_modelo.nombre if prod.id_modelo else '',
+            'modelo_nombre': modelo_display,
             'id_tipo_dispositivo': id_tipo_disp,
             'tipo_dispositivo_nombre': tipo_disp_nombre,
+            'tipo_compatibilidad': prod.tipo_compatibilidad,
+            'es_universal': prod.es_universal,
+            'modelos_compatibles': nombres_modelos,
+            'marcas_compatibles': nombres_marcas,
             'imagen_principal': img_principal or '',
             'imagenes': imagenes_list,
             'stock_disponible': max(0, cant_stock),
@@ -283,6 +308,82 @@ def obtener_productos_tienda(
     return resultados
 
 
+def obtener_productos_compatibles_con_equipo(
+    *,
+    id_modelo: Optional[int] = None,
+    id_marca: Optional[int] = None,
+    id_tipo_dispositivo: Optional[int] = None,
+    categorias_ids: Optional[list] = None,
+    solo_con_stock: bool = True
+) -> list:
+    """
+    Retorna productos compatibles con un equipo siguiendo una rigurosa jerarquía:
+    1. Prioridad 1: Coincidencia EXACTA con el modelo (id_modelo directo o en modelos_compatibles).
+    2. Prioridad 2: Coincidencia por MARCA completa (marcas_compatibles).
+    3. Prioridad 3: Coincidencia por TIPO DE DISPOSITIVO / FORMATO (id_tipo_dispositivo).
+    4. Prioridad 4: Accesorios UNIVERSALES / GENÉRICOS (es_universal=True).
+    """
+    from django.db.models import Q
+    from .models import Producto
+    from inventory_app.selectors import obtener_stock_actual_producto
+
+    base_qs = Producto.objects.filter(estado=True, apto_venta=True).select_related(
+        'id_categoria', 'id_modelo', 'id_tipo_dispositivo'
+    ).prefetch_related('modelos_compatibles', 'marcas_compatibles')
+
+    if categorias_ids:
+        base_qs = base_qs.filter(id_categoria_id__in=categorias_ids)
+
+    # 1. Búsqueda de Prioridad 1: Específicos del modelo
+    productos_modelo = []
+    if id_modelo:
+        qs_modelo = base_qs.filter(
+            Q(id_modelo_id=id_modelo) | Q(modelos_compatibles__id_modelo=id_modelo)
+        ).distinct()
+        for p in qs_modelo:
+            if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
+                productos_modelo.append(p)
+
+    if productos_modelo:
+        return productos_modelo
+
+    # 2. Búsqueda de Prioridad 2: Compatibles con la marca
+    productos_marca = []
+    if id_marca:
+        qs_marca = base_qs.filter(
+            Q(marcas_compatibles__id_marca=id_marca) | Q(id_modelo__id_marca_id=id_marca)
+        ).distinct()
+        for p in qs_marca:
+            if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
+                productos_marca.append(p)
+
+    if productos_marca:
+        return productos_marca
+
+    # 3. Búsqueda de Prioridad 3: Por tipo de dispositivo
+    productos_tipo = []
+    if id_tipo_dispositivo:
+        qs_tipo = base_qs.filter(
+            Q(id_tipo_dispositivo_id=id_tipo_dispositivo) |
+            Q(id_modelo__id_tipo_dispositivo_id=id_tipo_dispositivo)
+        ).distinct()
+        for p in qs_tipo:
+            if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
+                productos_tipo.append(p)
+
+    if productos_tipo:
+        return productos_tipo
+
+    # 4. Búsqueda de Prioridad 4: Universales
+    productos_universales = []
+    qs_univ = base_qs.filter(es_universal=True).distinct()
+    for p in qs_univ:
+        if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
+            productos_universales.append(p)
+
+    return productos_universales
+
+
 def obtener_producto(id_producto: int) -> Producto:
     """
     CU-68: Recupera un producto específico para edición y consulta detallada.
@@ -293,6 +394,7 @@ def obtener_producto(id_producto: int) -> Producto:
         'id_categoria',
         'id_modelo',
         'id_modelo__id_marca',
-        'id_modelo__id_tipo_dispositivo'
-    ).prefetch_related('imagenes').get(id_producto=id_producto)
+        'id_modelo__id_tipo_dispositivo',
+        'id_tipo_dispositivo'
+    ).prefetch_related('imagenes', 'modelos_compatibles', 'marcas_compatibles').get(id_producto=id_producto)
 

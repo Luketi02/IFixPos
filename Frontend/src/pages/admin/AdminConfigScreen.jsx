@@ -344,6 +344,27 @@ export default function AdminConfigScreen() {
     setFormData((prev) => ({ ...prev, [clave]: String(num) }));
   };
 
+  const [ejecutandoMotorPredictivo, setEjecutandoMotorPredictivo] = useState(false);
+
+  const handleEjecutarDepuracionMotor = async () => {
+    setEjecutandoMotorPredictivo(true);
+    try {
+      const token = localStorage.getItem("token") || localStorage.getItem("access_token");
+      const res = await axios.post(`${API_BASE_URL}/api/sales/beneficios/depurar-predictivo/`, {}, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      const r = res.data?.resumen_ejecucion || {};
+      setSuccessMsg(`Análisis predictivo completado: ${r.total_beneficios_generados || 0} cupones emitidos (${r.carritos_beneficiados || 0} carritos abandonados, ${r.mantenimiento_computadoras || 0} PC/Laptops, ${r.chequeo_celulares || 0} móviles).`);
+      setTimeout(() => setSuccessMsg(""), 6000);
+    } catch (err) {
+      console.error("Error al depurar motor de beneficios:", err);
+      setServerError("No fue posible ejecutar el análisis predictivo.");
+      setTimeout(() => setServerError(""), 6000);
+    } finally {
+      setEjecutandoMotorPredictivo(false);
+    }
+  };
+
   // Manejo de decimales (ej. porcentajeDescuentoMaximo)
   const handleFloatPercentageChange = (clave, rawValue) => {
     if (rawValue === '') {
@@ -1504,6 +1525,40 @@ export default function AdminConfigScreen() {
                       onChange={(e) => handleInputChange('vigenciaBeneficioDefecto', e.target.value)}
                     />
                     <p className="text-[10px] text-slate-400">Horas de validez antes de la caducidad del cupón.</p>
+                  </div>
+                </div>
+
+                {/* Herramienta de Depuración y Diagnóstico del Motor Predictivo */}
+                <div className="pt-4 border-t border-slate-700/60">
+                  <div className="p-4 rounded-xl bg-slate-900/60 border border-violet-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div>
+                      <h4 className="text-xs font-bold text-violet-300 flex items-center gap-1.5 font-mono uppercase tracking-wider">
+                        <span>🧪</span>
+                        <span>Diagnóstico y Depuración del Motor Predictivo</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Permite forzar el ciclo de análisis predictivo bajo demanda para pruebas internas de desarrollo.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={ejecutandoMotorPredictivo}
+                      onClick={handleEjecutarDepuracionMotor}
+                      className="px-4 py-2 rounded-lg bg-violet-600/30 hover:bg-violet-600/50 text-violet-200 border border-violet-500/50 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {ejecutandoMotorPredictivo ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
+                          <span>Evaluando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>⚡</span>
+                          <span>Ejecutar Análisis Predictivo Ahora</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
 

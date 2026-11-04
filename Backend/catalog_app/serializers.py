@@ -190,6 +190,10 @@ class ProductoTiendaOutputSerializer(serializers.Serializer):
     porcentaje_descuento = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
     precio_final = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     motivo_descuento = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
+    tipo_compatibilidad = serializers.CharField(required=False, default='MONO_MODELO')
+    es_universal = serializers.BooleanField(required=False, default=False)
+    modelos_compatibles = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    marcas_compatibles = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
 
 class ProductoCreateInputSerializer(serializers.Serializer):
@@ -225,6 +229,25 @@ class ProductoCreateInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         default=None
+    )
+    tipo_compatibilidad = serializers.CharField(
+        required=False,
+        default=None,
+        allow_null=True
+    )
+    es_universal = serializers.BooleanField(
+        required=False,
+        default=False
+    )
+    ids_modelos_compatibles = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
+    )
+    ids_marcas_compatibles = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
     )
     imagen_principal = serializers.CharField(
         max_length=500,
@@ -324,7 +347,43 @@ class ProductoCreateInputSerializer(serializers.Serializer):
             except ModeloDispositivo.DoesNotExist:
                 raise serializers.ValidationError({'id_modelo': 'El modelo seleccionado no existe.'})
 
-        # 1.d Validar Tipo de Dispositivo (Opcional)
+        # 1.d Validar Compatibilidades Múltiples de Modelos
+        ids_modelos = list(attrs.get('ids_modelos_compatibles') or [])
+        if id_modelo and id_modelo not in ids_modelos:
+            ids_modelos.insert(0, id_modelo)
+        elif not id_modelo and ids_modelos:
+            attrs['id_modelo'] = ids_modelos[0]
+
+        if ids_modelos:
+            modelos_encontrados = list(ModeloDispositivo.objects.filter(id_modelo__in=ids_modelos))
+            ids_existentes = {m.id_modelo for m in modelos_encontrados}
+            ids_faltantes = set(ids_modelos) - ids_existentes
+            if ids_faltantes:
+                raise serializers.ValidationError({'ids_modelos_compatibles': f'Los siguientes modelos no existen: {list(ids_faltantes)}.'})
+            attrs['modelos_compatibles_objs'] = modelos_encontrados
+            attrs['ids_modelos_compatibles'] = ids_modelos
+            if not attrs.get('modelo') and modelos_encontrados:
+                attrs['modelo'] = modelos_encontrados[0]
+
+        # 1.e Validar Compatibilidad de Marcas
+        ids_marcas = list(attrs.get('ids_marcas_compatibles') or [])
+        if id_marca and id_marca not in ids_marcas:
+            ids_marcas.insert(0, id_marca)
+        elif not id_marca and ids_marcas:
+            attrs['id_marca'] = ids_marcas[0]
+
+        if ids_marcas:
+            marcas_encontradas = list(Marca.objects.filter(id_marca__in=ids_marcas))
+            ids_existentes_marcas = {m.id_marca for m in marcas_encontradas}
+            ids_faltantes_marcas = set(ids_marcas) - ids_existentes_marcas
+            if ids_faltantes_marcas:
+                raise serializers.ValidationError({'ids_marcas_compatibles': f'Las siguientes marcas no existen: {list(ids_faltantes_marcas)}.'})
+            attrs['marcas_compatibles_objs'] = marcas_encontradas
+            attrs['ids_marcas_compatibles'] = ids_marcas
+            if not attrs.get('marca') and marcas_encontradas:
+                attrs['marca'] = marcas_encontradas[0]
+
+        # 1.f Validar Tipo de Dispositivo (Opcional)
         id_tipo_dispositivo = attrs.get('id_tipo_dispositivo')
         if id_tipo_dispositivo:
             from .models import TipoDispositivo
@@ -332,6 +391,55 @@ class ProductoCreateInputSerializer(serializers.Serializer):
                 attrs['tipo_dispositivo'] = TipoDispositivo.objects.get(id_tipo_dispositivo=id_tipo_dispositivo)
             except TipoDispositivo.DoesNotExist:
                 raise serializers.ValidationError({'id_tipo_dispositivo': 'El tipo de dispositivo seleccionado no existe.'})
+        elif attrs.get('modelo') and getattr(attrs['modelo'], 'id_tipo_dispositivo', None):
+            attrs['tipo_dispositivo'] = attrs['modelo'].id_tipo_dispositivo
+            attrs['id_tipo_dispositivo'] = attrs['tipo_dispositivo'].id_tipo_dispositivo
+
+        # 1.g Resolver y Validar Tipo de Compatibilidad (CU-12)
+        from catalog_app.models import TipoCompatibilidadProducto
+        es_universal = bool(attrs.get('es_universal', False))
+        tipo_comp = attrs.get('tipo_compatibilidad')
+
+        if tipo_comp:
+            if tipo_comp not in TipoCompatibilidadProducto.values:
+                raise serializers.ValidationError({'tipo_compatibilidad': f'El tipo de compatibilidad "{tipo_comp}" no es válido.'})
+
+            if tipo_comp == TipoCompatibilidadProducto.MONO_MODELO:
+                if not attrs.get('modelo') and not attrs.get('id_modelo') and not ids_modelos:
+                    raise serializers.ValidationError({'id_modelo': 'Debe seleccionar un modelo específico comercial para el modo Mono-Modelo.'})
+            elif tipo_comp == TipoCompatibilidadProducto.MULTI_MODELO:
+                if not ids_modelos or len(ids_modelos) == 0:
+                    raise serializers.ValidationError({'ids_modelos_compatibles': 'Debe seleccionar al menos un modelo compatible para el modo Multi-Modelo.'})
+            elif tipo_comp == TipoCompatibilidadProducto.MARCAS:
+                if not ids_marcas or len(ids_marcas) == 0:
+                    raise serializers.ValidationError({'ids_marcas_compatibles': 'Debe seleccionar al menos una marca compatible para el modo Por Marcas.'})
+            elif tipo_comp == TipoCompatibilidadProducto.TIPO_DISPOSITIVO:
+                if not attrs.get('tipo_dispositivo') and not attrs.get('id_tipo_dispositivo'):
+                    raise serializers.ValidationError({'id_tipo_dispositivo': 'Debe seleccionar un tipo de dispositivo compatible.'})
+            elif tipo_comp == TipoCompatibilidadProducto.UNIVERSAL:
+                es_universal = True
+        else:
+            if es_universal:
+                tipo_comp = TipoCompatibilidadProducto.UNIVERSAL
+            elif len(ids_modelos) > 1:
+                tipo_comp = TipoCompatibilidadProducto.MULTI_MODELO
+            elif ids_modelos or attrs.get('modelo'):
+                tipo_comp = TipoCompatibilidadProducto.MONO_MODELO
+            elif ids_marcas:
+                tipo_comp = TipoCompatibilidadProducto.MARCAS
+            elif attrs.get('id_tipo_dispositivo'):
+                tipo_comp = TipoCompatibilidadProducto.TIPO_DISPOSITIVO
+            else:
+                tipo_comp = TipoCompatibilidadProducto.UNIVERSAL
+                es_universal = True
+
+        if tipo_comp == TipoCompatibilidadProducto.UNIVERSAL:
+            es_universal = True
+        else:
+            es_universal = False
+
+        attrs['tipo_compatibilidad'] = tipo_comp
+        attrs['es_universal'] = es_universal
 
         # 2. Unificar precio / precio_venta
         precio = attrs.get('precio') if attrs.get('precio') is not None else attrs.get('precio_venta')
@@ -374,8 +482,22 @@ class ProductoCreateOutputSerializer(serializers.Serializer):
     tipo_dispositivo = serializers.CharField(source='id_modelo.id_tipo_dispositivo.nombre', allow_null=True, required=False, default='')
     imagen_principal = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
     imagenes = serializers.SerializerMethodField(required=False)
+    tipo_compatibilidad = serializers.CharField(required=False, default='MONO_MODELO')
+    es_universal = serializers.BooleanField(required=False, default=False)
+    ids_modelos_compatibles = serializers.SerializerMethodField(required=False)
+    ids_marcas_compatibles = serializers.SerializerMethodField(required=False)
     stock_inicial = serializers.IntegerField()
     stock_minimo = serializers.IntegerField()
+
+    def get_ids_modelos_compatibles(self, obj):
+        if hasattr(obj, 'modelos_compatibles'):
+            return list(obj.modelos_compatibles.values_list('id_modelo', flat=True))
+        return []
+
+    def get_ids_marcas_compatibles(self, obj):
+        if hasattr(obj, 'marcas_compatibles'):
+            return list(obj.marcas_compatibles.values_list('id_marca', flat=True))
+        return []
 
     def get_imagenes(self, obj):
         if hasattr(obj, 'imagenes'):
@@ -417,6 +539,25 @@ class ProductoUpdateInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         default=None
+    )
+    tipo_compatibilidad = serializers.CharField(
+        required=False,
+        default=None,
+        allow_null=True
+    )
+    es_universal = serializers.BooleanField(
+        required=False,
+        default=False
+    )
+    ids_modelos_compatibles = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
+    )
+    ids_marcas_compatibles = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
     )
     imagen_principal = serializers.CharField(
         max_length=500,
@@ -515,6 +656,42 @@ class ProductoUpdateInputSerializer(serializers.Serializer):
             except ModeloDispositivo.DoesNotExist:
                 raise serializers.ValidationError({'id_modelo': 'El modelo seleccionado no existe.'})
 
+        # 3.b Validar Compatibilidades Múltiples de Modelos
+        ids_modelos = list(attrs.get('ids_modelos_compatibles') or [])
+        if id_modelo and id_modelo not in ids_modelos:
+            ids_modelos.insert(0, id_modelo)
+        elif not id_modelo and ids_modelos:
+            attrs['id_modelo'] = ids_modelos[0]
+
+        if ids_modelos:
+            modelos_encontrados = list(ModeloDispositivo.objects.filter(id_modelo__in=ids_modelos))
+            ids_existentes = {m.id_modelo for m in modelos_encontrados}
+            ids_faltantes = set(ids_modelos) - ids_existentes
+            if ids_faltantes:
+                raise serializers.ValidationError({'ids_modelos_compatibles': f'Los siguientes modelos no existen: {list(ids_faltantes)}.'})
+            attrs['modelos_compatibles_objs'] = modelos_encontrados
+            attrs['ids_modelos_compatibles'] = ids_modelos
+            if not attrs.get('modelo') and modelos_encontrados:
+                attrs['modelo'] = modelos_encontrados[0]
+
+        # 3.c Validar Compatibilidad de Marcas
+        ids_marcas = list(attrs.get('ids_marcas_compatibles') or [])
+        if id_marca and id_marca not in ids_marcas:
+            ids_marcas.insert(0, id_marca)
+        elif not id_marca and ids_marcas:
+            attrs['id_marca'] = ids_marcas[0]
+
+        if ids_marcas:
+            marcas_encontradas = list(Marca.objects.filter(id_marca__in=ids_marcas))
+            ids_existentes_marcas = {m.id_marca for m in marcas_encontradas}
+            ids_faltantes_marcas = set(ids_marcas) - ids_existentes_marcas
+            if ids_faltantes_marcas:
+                raise serializers.ValidationError({'ids_marcas_compatibles': f'Las siguientes marcas no existen: {list(ids_faltantes_marcas)}.'})
+            attrs['marcas_compatibles_objs'] = marcas_encontradas
+            attrs['ids_marcas_compatibles'] = ids_marcas
+            if not attrs.get('marca') and marcas_encontradas:
+                attrs['marca'] = marcas_encontradas[0]
+
         # 4. Validar Tipo de Dispositivo
         id_tipo_dispositivo = attrs.get('id_tipo_dispositivo')
         if id_tipo_dispositivo:
@@ -522,6 +699,55 @@ class ProductoUpdateInputSerializer(serializers.Serializer):
                 attrs['tipo_dispositivo'] = TipoDispositivo.objects.get(id_tipo_dispositivo=id_tipo_dispositivo)
             except TipoDispositivo.DoesNotExist:
                 raise serializers.ValidationError({'id_tipo_dispositivo': 'El tipo de dispositivo seleccionado no existe.'})
+        elif attrs.get('modelo') and getattr(attrs['modelo'], 'id_tipo_dispositivo', None):
+            attrs['tipo_dispositivo'] = attrs['modelo'].id_tipo_dispositivo
+            attrs['id_tipo_dispositivo'] = attrs['tipo_dispositivo'].id_tipo_dispositivo
+
+        # 4.b Resolver y Validar Tipo de Compatibilidad (CU-68)
+        from catalog_app.models import TipoCompatibilidadProducto
+        es_universal = bool(attrs.get('es_universal', False))
+        tipo_comp = attrs.get('tipo_compatibilidad')
+
+        if tipo_comp:
+            if tipo_comp not in TipoCompatibilidadProducto.values:
+                raise serializers.ValidationError({'tipo_compatibilidad': f'El tipo de compatibilidad "{tipo_comp}" no es válido.'})
+
+            if tipo_comp == TipoCompatibilidadProducto.MONO_MODELO:
+                if not attrs.get('modelo') and not attrs.get('id_modelo') and not ids_modelos:
+                    raise serializers.ValidationError({'id_modelo': 'Debe seleccionar un modelo específico comercial para el modo Mono-Modelo.'})
+            elif tipo_comp == TipoCompatibilidadProducto.MULTI_MODELO:
+                if not ids_modelos or len(ids_modelos) == 0:
+                    raise serializers.ValidationError({'ids_modelos_compatibles': 'Debe seleccionar al menos un modelo compatible para el modo Multi-Modelo.'})
+            elif tipo_comp == TipoCompatibilidadProducto.MARCAS:
+                if not ids_marcas or len(ids_marcas) == 0:
+                    raise serializers.ValidationError({'ids_marcas_compatibles': 'Debe seleccionar al menos una marca compatible para el modo Por Marcas.'})
+            elif tipo_comp == TipoCompatibilidadProducto.TIPO_DISPOSITIVO:
+                if not attrs.get('tipo_dispositivo') and not attrs.get('id_tipo_dispositivo'):
+                    raise serializers.ValidationError({'id_tipo_dispositivo': 'Debe seleccionar un tipo de dispositivo compatible.'})
+            elif tipo_comp == TipoCompatibilidadProducto.UNIVERSAL:
+                es_universal = True
+        else:
+            if es_universal:
+                tipo_comp = TipoCompatibilidadProducto.UNIVERSAL
+            elif len(ids_modelos) > 1:
+                tipo_comp = TipoCompatibilidadProducto.MULTI_MODELO
+            elif ids_modelos or attrs.get('modelo'):
+                tipo_comp = TipoCompatibilidadProducto.MONO_MODELO
+            elif ids_marcas:
+                tipo_comp = TipoCompatibilidadProducto.MARCAS
+            elif attrs.get('id_tipo_dispositivo'):
+                tipo_comp = TipoCompatibilidadProducto.TIPO_DISPOSITIVO
+            else:
+                tipo_comp = TipoCompatibilidadProducto.UNIVERSAL
+                es_universal = True
+
+        if tipo_comp == TipoCompatibilidadProducto.UNIVERSAL:
+            es_universal = True
+        else:
+            es_universal = False
+
+        attrs['tipo_compatibilidad'] = tipo_comp
+        attrs['es_universal'] = es_universal
 
         # 5. Unificar precio / precio_venta
         precio = attrs.get('precio') if attrs.get('precio') is not None else attrs.get('precio_venta')
@@ -561,16 +787,74 @@ class ProductoDetailOutputSerializer(serializers.Serializer):
     categoria_nombre = serializers.CharField(source='id_categoria.nombre', allow_null=True, default='')
     categorias = serializers.SerializerMethodField()
     ids_categorias = serializers.SerializerMethodField()
-    id_marca = serializers.IntegerField(source='id_modelo.id_marca_id', allow_null=True, default=None)
-    marca_nombre = serializers.CharField(source='id_modelo.id_marca.nombre', allow_null=True, default='')
-    id_modelo = serializers.IntegerField(source='id_modelo_id', allow_null=True)
-    modelo_nombre = serializers.CharField(source='id_modelo.nombre', allow_null=True, default='')
-    id_tipo_dispositivo = serializers.IntegerField(source='id_modelo.id_tipo_dispositivo_id', allow_null=True, default=None)
-    tipo_dispositivo_nombre = serializers.CharField(source='id_modelo.id_tipo_dispositivo.nombre', allow_null=True, default='')
+    tipo_compatibilidad = serializers.CharField(required=False, default='MONO_MODELO')
+    es_universal = serializers.BooleanField(required=False, default=False)
+    id_tipo_dispositivo = serializers.SerializerMethodField()
+    tipo_dispositivo_nombre = serializers.SerializerMethodField()
+    id_marca = serializers.SerializerMethodField()
+    marca_nombre = serializers.SerializerMethodField()
+    id_modelo = serializers.IntegerField(source='id_modelo_id', allow_null=True, required=False)
+    modelo_nombre = serializers.CharField(source='id_modelo.nombre', allow_null=True, required=False, default='')
+    modelos_compatibles = serializers.SerializerMethodField()
+    ids_modelos_compatibles = serializers.SerializerMethodField()
+    marcas_compatibles = serializers.SerializerMethodField()
+    ids_marcas_compatibles = serializers.SerializerMethodField()
     imagen_principal = serializers.CharField(allow_blank=True, allow_null=True, default='')
     imagenes = serializers.SerializerMethodField()
     stock_minimo = serializers.SerializerMethodField()
     stock_actual = serializers.SerializerMethodField()
+
+    def get_id_tipo_dispositivo(self, obj):
+        if obj.id_tipo_dispositivo_id:
+            return obj.id_tipo_dispositivo_id
+        if obj.id_modelo and obj.id_modelo.id_tipo_dispositivo_id:
+            return obj.id_modelo.id_tipo_dispositivo_id
+        return None
+
+    def get_tipo_dispositivo_nombre(self, obj):
+        if obj.id_tipo_dispositivo_id and obj.id_tipo_dispositivo:
+            return obj.id_tipo_dispositivo.nombre
+        if obj.id_modelo and obj.id_modelo.id_tipo_dispositivo:
+            return obj.id_modelo.id_tipo_dispositivo.nombre
+        return ''
+
+    def get_id_marca(self, obj):
+        if obj.id_modelo and obj.id_modelo.id_marca_id:
+            return obj.id_modelo.id_marca_id
+        if hasattr(obj, 'marcas_compatibles'):
+            primera = obj.marcas_compatibles.first()
+            if primera:
+                return primera.id_marca
+        return None
+
+    def get_marca_nombre(self, obj):
+        if obj.id_modelo and obj.id_modelo.id_marca:
+            return obj.id_modelo.id_marca.nombre
+        if hasattr(obj, 'marcas_compatibles'):
+            primera = obj.marcas_compatibles.first()
+            if primera:
+                return primera.nombre
+        return ''
+
+    def get_modelos_compatibles(self, obj):
+        if hasattr(obj, 'modelos_compatibles'):
+            return [{'id_modelo': m.id_modelo, 'nombre': m.nombre, 'id_marca': m.id_marca_id, 'marca_nombre': m.id_marca.nombre if m.id_marca else ''} for m in obj.modelos_compatibles.select_related('id_marca').all()]
+        return []
+
+    def get_ids_modelos_compatibles(self, obj):
+        if hasattr(obj, 'modelos_compatibles'):
+            return list(obj.modelos_compatibles.values_list('id_modelo', flat=True))
+        return []
+
+    def get_marcas_compatibles(self, obj):
+        if hasattr(obj, 'marcas_compatibles'):
+            return [{'id_marca': m.id_marca, 'nombre': m.nombre} for m in obj.marcas_compatibles.all()]
+        return []
+
+    def get_ids_marcas_compatibles(self, obj):
+        if hasattr(obj, 'marcas_compatibles'):
+            return list(obj.marcas_compatibles.values_list('id_marca', flat=True))
+        return []
 
     def get_categorias(self, obj):
         if hasattr(obj, 'categorias_detalle'):

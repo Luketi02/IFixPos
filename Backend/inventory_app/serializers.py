@@ -20,6 +20,10 @@ class ProductoStockOutputSerializer(serializers.ModelSerializer):
     nivel_stock = serializers.SerializerMethodField()
     categorias = serializers.SerializerMethodField()
     ids_categorias = serializers.SerializerMethodField()
+    tipo_compatibilidad = serializers.CharField(read_only=True)
+    es_universal = serializers.BooleanField(read_only=True)
+    modelos_compatibles = serializers.SerializerMethodField()
+    marcas_compatibles = serializers.SerializerMethodField()
 
     class Meta:
         model = Producto
@@ -44,6 +48,10 @@ class ProductoStockOutputSerializer(serializers.ModelSerializer):
             'modelo',
             'id_tipo_dispositivo',
             'tipo_dispositivo',
+            'tipo_compatibilidad',
+            'es_universal',
+            'modelos_compatibles',
+            'marcas_compatibles',
             'id_stock',
             'stock_minimo',
             'cantidad_actual',
@@ -73,6 +81,28 @@ class ProductoStockOutputSerializer(serializers.ModelSerializer):
         elif cant <= minimo:
             return 'Alerta de Mínimo'
         return 'Normal'
+
+    def get_modelos_compatibles(self, obj):
+        if hasattr(obj, 'modelos_compatibles_detalle'):
+            detalles = obj.modelos_compatibles_detalle.select_related('id_modelo').all()
+            if detalles.exists():
+                return [{'id_modelo': d.id_modelo_id, 'nombre': d.id_modelo.nombre} for d in detalles]
+        if hasattr(obj, 'modelos_compatibles') and obj.modelos_compatibles.exists():
+            return [{'id_modelo': m.id_modelo, 'nombre': m.nombre} for m in obj.modelos_compatibles.all()]
+        if getattr(obj, 'id_modelo', None):
+            return [{'id_modelo': obj.id_modelo.id_modelo, 'nombre': obj.id_modelo.nombre}]
+        return []
+
+    def get_marcas_compatibles(self, obj):
+        if hasattr(obj, 'marcas_compatibles_detalle'):
+            detalles = obj.marcas_compatibles_detalle.select_related('id_marca').all()
+            if detalles.exists():
+                return [{'id_marca': d.id_marca_id, 'nombre': d.id_marca.nombre} for d in detalles]
+        if hasattr(obj, 'marcas_compatibles') and obj.marcas_compatibles.exists():
+            return [{'id_marca': m.id_marca, 'nombre': m.nombre} for m in obj.marcas_compatibles.all()]
+        if getattr(obj, 'id_modelo', None) and getattr(obj.id_modelo, 'id_marca', None):
+            return [{'id_marca': obj.id_modelo.id_marca.id_marca, 'nombre': obj.id_modelo.id_marca.nombre}]
+        return []
 
 
 class ActualizarStockInputSerializer(serializers.Serializer):
@@ -161,6 +191,7 @@ class FiltrarStockInputSerializer(serializers.Serializer):
     id_proveedor = serializers.CharField(required=False, allow_blank=True, max_length=30)
     cuit_prov = serializers.CharField(required=False, allow_blank=True, max_length=30)
     proposito = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    tipo_compatibilidad = serializers.CharField(required=False, allow_blank=True, max_length=30)
 
     def validate(self, attrs):
         # Unifica alias para que la vista consuma claves canónicas
@@ -170,4 +201,5 @@ class FiltrarStockInputSerializer(serializers.Serializer):
             'id_categoria': attrs.get('id_categoria'),
             'id_proveedor': attrs.get('id_proveedor') or attrs.get('cuit_prov') or None,
             'proposito': attrs.get('proposito') or None,
+            'tipo_compatibilidad': attrs.get('tipo_compatibilidad') or None,
         }

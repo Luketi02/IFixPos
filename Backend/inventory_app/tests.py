@@ -434,3 +434,23 @@ class InventoryCU13TestCase(TestCase):
         res = self.client.post('/api/inventory/stock/actualizar/', data=payload, format='json')
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
+
+    def test_filtrar_stock_por_tipo_compatibilidad(self):
+        from catalog_app.models import Producto
+        # Asignar modo a self.producto
+        self.producto.es_universal = True
+        self.producto.tipo_compatibilidad = 'UNIVERSAL'
+        self.producto.save()
+
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get('/api/inventory/stock/?tipo_compatibilidad=UNIVERSAL')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Debe contener el producto universal
+        ids = [p['id_producto'] for p in res.data]
+        self.assertIn(self.producto.id_producto, ids)
+        # Cada elemento debe incluir tipo_compatibilidad y modelos_compatibles
+        prod_data = next(p for p in res.data if p['id_producto'] == self.producto.id_producto)
+        self.assertEqual(prod_data['tipo_compatibilidad'], 'UNIVERSAL')
+        self.assertTrue(prod_data['es_universal'])
+        self.assertIn('modelos_compatibles', prod_data)
+        self.assertIn('marcas_compatibles', prod_data)

@@ -30,7 +30,8 @@ class FiltrarStockApi(APIView):
                 nivel_stock=filtros['nivel_stock'],
                 id_categoria=filtros['id_categoria'],
                 id_proveedor=filtros['id_proveedor'],
-                proposito=filtros['proposito']
+                proposito=filtros['proposito'],
+                tipo_compatibilidad=filtros.get('tipo_compatibilidad')
             )
         except (PermissionDenied, DjangoPermissionDenied) as e:
             raise PermissionDenied(str(e))

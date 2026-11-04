@@ -36,6 +36,14 @@ class CategoriaProducto(models.Model):
         db_table = 'categoria_producto'
 
 
+class TipoCompatibilidadProducto(models.TextChoices):
+    MONO_MODELO = 'MONO_MODELO', 'Modelo Específico'
+    MULTI_MODELO = 'MULTI_MODELO', 'Múltiples Modelos Específicos'
+    MARCAS = 'MARCAS', 'Por Marcas'
+    TIPO_DISPOSITIVO = 'TIPO_DISPOSITIVO', 'Por Tipo de Dispositivo'
+    UNIVERSAL = 'UNIVERSAL', 'Universal / Genérico'
+
+
 class Producto(models.Model):
     """
     Productos y consumibles del inventario.
@@ -95,7 +103,40 @@ class Producto(models.Model):
         null=True,
         blank=True,
         db_column='id_modelo',
-        help_text='Identificador único del modelo comercial si aplica.'
+        help_text='Identificador único del modelo comercial principal de referencia si aplica.'
+    )
+    tipo_compatibilidad = models.CharField(
+        max_length=20,
+        choices=TipoCompatibilidadProducto.choices,
+        default=TipoCompatibilidadProducto.MONO_MODELO,
+        help_text='Ámbito de compatibilidad del producto (específico, multimodelo, marcas, formato o universal).'
+    )
+    es_universal = models.BooleanField(
+        default=False,
+        help_text='Habilita compatibilidad universal con cualquier dispositivo sin importar marca o modelo.'
+    )
+    id_tipo_dispositivo = models.ForeignKey(
+        'TipoDispositivo',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='id_tipo_dispositivo',
+        related_name='productos_directos',
+        help_text='Tipo de dispositivo principal si la compatibilidad es genérica por formato.'
+    )
+    modelos_compatibles = models.ManyToManyField(
+        'ModeloDispositivo',
+        through='DetalleCompatibilidadProductoModelo',
+        related_name='productos_compatibles',
+        blank=True,
+        help_text='Modelos compatibles adicionales o multi-modelo.'
+    )
+    marcas_compatibles = models.ManyToManyField(
+        'Marca',
+        through='DetalleCompatibilidadProductoMarca',
+        related_name='productos_compatibles',
+        blank=True,
+        help_text='Marcas compatibles completas.'
     )
     imagen_principal = models.CharField(
         max_length=500,
@@ -106,22 +147,38 @@ class Producto(models.Model):
 
     @property
     def id_marca(self):
-        """Retorna la Marca asociada a través del ModeloDispositivo."""
-        return self.id_modelo.id_marca if self.id_modelo else None
+        """Retorna la Marca asociada a través del ModeloDispositivo o la primera marca compatible."""
+        if self.id_modelo_id and self.id_modelo:
+            return self.id_modelo.id_marca
+        if self.pk:
+            primera_marca = self.marcas_compatibles.first()
+            if primera_marca:
+                return primera_marca
+        return None
 
     @property
     def id_marca_id(self):
-        """Retorna el ID de la Marca asociada a través del ModeloDispositivo."""
-        return self.id_modelo.id_marca_id if self.id_modelo else None
+        """Retorna el ID de la Marca asociada a través del ModeloDispositivo o marca compatible."""
+        if self.id_modelo_id and self.id_modelo:
+            return self.id_modelo.id_marca_id
+        if self.pk:
+            primera_marca = self.marcas_compatibles.first()
+            if primera_marca:
+                return primera_marca.id_marca
+        return None
 
     @property
-    def id_tipo_dispositivo(self):
-        """Retorna el TipoDispositivo asociado a través del ModeloDispositivo."""
+    def tipo_dispositivo_asociado(self):
+        """Retorna el TipoDispositivo directo o el asociado a través del ModeloDispositivo."""
+        if self.id_tipo_dispositivo_id and self.id_tipo_dispositivo:
+            return self.id_tipo_dispositivo
         return self.id_modelo.id_tipo_dispositivo if self.id_modelo else None
 
     @property
-    def id_tipo_dispositivo_id(self):
-        """Retorna el ID del TipoDispositivo asociado a través del ModeloDispositivo."""
+    def tipo_dispositivo_id_calculado(self):
+        """Retorna el ID del TipoDispositivo directo o derivado del modelo."""
+        if self.id_tipo_dispositivo_id:
+            return self.id_tipo_dispositivo_id
         return self.id_modelo.id_tipo_dispositivo_id if self.id_modelo else None
 
     class Meta:
@@ -258,3 +315,66 @@ class ModeloDispositivo(models.Model):
 
     class Meta:
         db_table = 'modelo'
+
+
+class DetalleCompatibilidadProductoModelo(models.Model):
+    """
+    Tabla intermedia para compatibilidad de productos con múltiples modelos (N a M).
+    """
+    id_detalle_compatibilidad_modelo = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del detalle de compatibilidad con modelo.'
+    )
+    id_producto = models.ForeignKey(
+        Producto,
+        on_delete=models.CASCADE,
+        related_name='modelos_compatibles_detalle',
+        db_column='id_producto',
+        help_text='Producto asociado.'
+    )
+    id_modelo = models.ForeignKey(
+        ModeloDispositivo,
+        on_delete=models.CASCADE,
+        related_name='productos_compatibles_detalle',
+        db_column='id_modelo',
+        help_text='Modelo compatible con el producto.'
+    )
+
+    class Meta:
+        db_table = 'producto_modelo_compatibilidad'
+        unique_together = ('id_producto', 'id_modelo')
+
+    def __str__(self):
+        return f"Compatibilidad Prod {self.id_producto_id} - Modelo {self.id_modelo_id}"
+
+
+class DetalleCompatibilidadProductoMarca(models.Model):
+    """
+    Tabla intermedia para compatibilidad de productos con marcas completas (N a M).
+    """
+    id_detalle_compatibilidad_marca = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único del detalle de compatibilidad con marca.'
+    )
+    id_producto = models.ForeignKey(
+        Producto,
+        on_delete=models.CASCADE,
+        related_name='marcas_compatibles_detalle',
+        db_column='id_producto',
+        help_text='Producto asociado.'
+    )
+    id_marca = models.ForeignKey(
+        Marca,
+        on_delete=models.CASCADE,
+        related_name='productos_compatibles_detalle',
+        db_column='id_marca',
+        help_text='Marca compatible con el producto.'
+    )
+
+    class Meta:
+        db_table = 'producto_marca_compatibilidad'
+        unique_together = ('id_producto', 'id_marca')
+
+    def __str__(self):
+        return f"Compatibilidad Prod {self.id_producto_id} - Marca {self.id_marca_id}"
+

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { getDashboardPath } from '../../utils/roleRoutes';
 import NotificationBell from './NotificationBell';
+import ClientBenefitsModal from '../sales/ClientBenefitsModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -13,6 +14,7 @@ export default function UserProfileDropdown({ align = 'right', showNotificationB
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [cambiandoSesion, setCambiandoSesion] = useState(false);
+  const [modalBeneficiosAbierto, setModalBeneficiosAbierto] = useState(false);
   const dropdownRef = useRef(null);
 
   const nombreUsuario = user?.nombre || user?.email?.split('@')[0] || 'Usuario';
@@ -205,6 +207,21 @@ export default function UserProfileDropdown({ align = 'right', showNotificationB
                 <span>Preferencias de Usuario</span>
               </button>
 
+              {/* Opción Activa: Mis Beneficios y Cupones */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  setModalBeneficiosAbierto(true);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/40 hover:bg-slate-800 border border-slate-700/60 hover:border-cyan-500/40 transition-all duration-180 group cursor-pointer"
+              >
+                <svg className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                </svg>
+                <span>Mis Beneficios y Cupones</span>
+              </button>
+
               {/* Opción Activa: Libreta de Direcciones */}
               <button
                 type="button"
@@ -349,6 +366,13 @@ export default function UserProfileDropdown({ align = 'right', showNotificationB
         )}
       </AnimatePresence>
       </div>
+
+      {/* Modal de Beneficios y Cupones del Cliente (Motor Inteligente) */}
+      <ClientBenefitsModal
+        isOpen={modalBeneficiosAbierto}
+        onClose={() => setModalBeneficiosAbierto(false)}
+        onUsarEnTienda={() => navigate('/tienda')}
+      />
     </div>
   );
 }

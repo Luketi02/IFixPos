@@ -22,6 +22,8 @@ def obtener_configuracion_bool(clave: str) -> bool:
     except ConfiguracionSistema.DoesNotExist:
         return False
 
+from decimal import Decimal
+
 def obtener_configuracion_int(clave: str, fallback: int = 0) -> int:
     """Obtiene un valor numérico entero de ConfiguracionSistema. Fail-safe a fallback."""
     try:
@@ -30,6 +32,40 @@ def obtener_configuracion_int(clave: str, fallback: int = 0) -> int:
         return int(val) if val.isdigit() or (val.startswith('-') and val[1:].isdigit()) else fallback
     except (ConfiguracionSistema.DoesNotExist, ValueError):
         return fallback
+
+def obtener_configuracion_decimal(clave: str, fallback: Decimal = Decimal('0.00')) -> Decimal:
+    """Obtiene un valor numérico decimal de ConfiguracionSistema. Fail-safe a fallback."""
+    try:
+        config = ConfiguracionSistema.objects.get(clave=clave)
+        val = str(config.valor).strip().replace(',', '.')
+        return Decimal(val)
+    except Exception:
+        return fallback
+
+def obtener_tamano_maximo_archivo_mb() -> int:
+    """Obtiene el tamaño máximo en Megabytes permitido para la subida de archivos (ej. fotos)."""
+    return max(1, obtener_configuracion_int('tamanoMaxArchivoMB', fallback=10))
+
+def obtener_tamano_maximo_archivo_bytes() -> int:
+    """Retorna el tamaño máximo en bytes para validación física de archivos en memoria/disco."""
+    return obtener_tamano_maximo_archivo_mb() * 1024 * 1024
+
+def obtener_retencion_copias_backup() -> int:
+    """Obtiene la cantidad máxima de copias históricas de respaldo a conservar en el servidor."""
+    return max(1, obtener_configuracion_int('backupRetencionCopias', fallback=5))
+
+def obtener_max_intentos_login() -> int:
+    """Obtiene el límite de intentos fallidos antes de bloquear la cuenta frente a ataques."""
+    return max(3, obtener_configuracion_int('maxIntentosLogin', fallback=10))
+
+def obtener_tiempo_sesion_inactiva_horas() -> float:
+    """Obtiene el tiempo en horas para control de inactividad de sesión de usuarios."""
+    try:
+        config = ConfiguracionSistema.objects.get(clave='tiempoSesionInactiva')
+        val = str(config.valor).strip().replace(',', '.')
+        return float(val) if float(val) > 0 else 168.0
+    except Exception:
+        return 168.0
 
 def obtener_email_emisor() -> str:
     """Obtiene la casilla de correo configurada para envíos del sistema con fallback."""
@@ -42,13 +78,11 @@ def obtener_email_emisor() -> str:
 
 def obtener_email_soporte() -> str:
     """Obtiene la casilla de correo de soporte al cliente con fail-safe."""
-    try:
-        config = ConfiguracionSistema.objects.filter(id_config=23).first()
-        if config and config.valor and str(config.valor).strip():
-            return str(config.valor).strip()
-    except Exception:
-        pass
     return obtener_configuracion_texto('emailSoporte', fallback='soporte@ifixnet.com')
+
+def obtener_email_alertas_sistema() -> str:
+    """Obtiene la casilla de correo destino para alertas críticas internas del sistema."""
+    return obtener_configuracion_texto('emailAlertasSistema', fallback='alertas@ifixnet.com')
 
 def obtener_url_frontend() -> str:
     """Obtiene la URL base del Frontend configurada en el sistema o fallback a localhost:5173."""

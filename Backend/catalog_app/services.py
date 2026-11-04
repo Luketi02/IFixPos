@@ -269,6 +269,45 @@ def registrar_producto(
         if not imagen_principal and imagenes:
             imagen_principal = str(imagenes[0] or '').strip()
 
+        # Manejo de compatibilidades expandidas
+        tipo_compatibilidad = datos_validados.get('tipo_compatibilidad')
+        es_universal = bool(datos_validados.get('es_universal', False))
+        ids_modelos = list(datos_validados.get('ids_modelos_compatibles') or [])
+        ids_marcas = list(datos_validados.get('ids_marcas_compatibles') or [])
+
+        if modelo and modelo.id_modelo not in ids_modelos:
+            ids_modelos.insert(0, modelo.id_modelo)
+        elif not modelo and ids_modelos:
+            from catalog_app.models import ModeloDispositivo
+            modelo = ModeloDispositivo.objects.filter(id_modelo=ids_modelos[0]).first()
+
+        if marca and marca.id_marca not in ids_marcas:
+            ids_marcas.insert(0, marca.id_marca)
+        elif not marca and ids_marcas:
+            from catalog_app.models import Marca
+            marca = Marca.objects.filter(id_marca=ids_marcas[0]).first()
+
+        if not tipo_disp and modelo and getattr(modelo, 'id_tipo_dispositivo', None):
+            tipo_disp = modelo.id_tipo_dispositivo
+
+        if not tipo_compatibilidad:
+            if es_universal:
+                tipo_compatibilidad = 'UNIVERSAL'
+            elif len(ids_modelos) > 1:
+                tipo_compatibilidad = 'MULTI_MODELO'
+            elif ids_modelos or modelo:
+                tipo_compatibilidad = 'MONO_MODELO'
+            elif ids_marcas:
+                tipo_compatibilidad = 'MARCAS'
+            elif tipo_disp:
+                tipo_compatibilidad = 'TIPO_DISPOSITIVO'
+            else:
+                tipo_compatibilidad = 'UNIVERSAL'
+                es_universal = True
+
+        if tipo_compatibilidad == 'UNIVERSAL':
+            es_universal = True
+
         # 2. Crear y guardar el Producto
         producto = Producto.objects.create(
             nombre=nombre,
@@ -281,8 +320,30 @@ def registrar_producto(
             modulo_automatico=modulo_automatico,
             id_categoria=categoria,
             id_modelo=modelo,
+            tipo_compatibilidad=tipo_compatibilidad,
+            es_universal=es_universal,
+            id_tipo_dispositivo=tipo_disp,
             imagen_principal=imagen_principal or None
         )
+
+        # 2.a Guardar modelos compatibles (N a M)
+        from catalog_app.models import DetalleCompatibilidadProductoModelo, DetalleCompatibilidadProductoMarca
+        if ids_modelos:
+            from catalog_app.models import ModeloDispositivo
+            for mod_obj in ModeloDispositivo.objects.filter(id_modelo__in=ids_modelos):
+                DetalleCompatibilidadProductoModelo.objects.get_or_create(
+                    id_producto=producto,
+                    id_modelo=mod_obj
+                )
+
+        # 2.b Guardar marcas compatibles (N a M)
+        if ids_marcas:
+            from catalog_app.models import Marca
+            for mar_obj in Marca.objects.filter(id_marca__in=ids_marcas):
+                DetalleCompatibilidadProductoMarca.objects.get_or_create(
+                    id_producto=producto,
+                    id_marca=mar_obj
+                )
 
         # 2.b Guardar relaciones en DetalleCategoriaProducto (N a M)
         from catalog_app.models import DetalleCategoriaProducto
@@ -402,7 +463,65 @@ def modificar_producto(
 
     if categoria:
         producto.id_categoria = categoria
+
+    # Compatibilidad expandida
+    tipo_comp = datos_validados.get('tipo_compatibilidad')
+    es_universal = bool(datos_validados.get('es_universal', False))
+    ids_modelos = list(datos_validados.get('ids_modelos_compatibles') or [])
+    ids_marcas = list(datos_validados.get('ids_marcas_compatibles') or [])
+
+    if modelo and modelo.id_modelo not in ids_modelos:
+        ids_modelos.insert(0, modelo.id_modelo)
+    elif not modelo and ids_modelos:
+        from catalog_app.models import ModeloDispositivo
+        modelo = ModeloDispositivo.objects.filter(id_modelo=ids_modelos[0]).first()
+
+    if marca and marca.id_marca not in ids_marcas:
+        ids_marcas.insert(0, marca.id_marca)
+    elif not marca and ids_marcas:
+        from catalog_app.models import Marca
+        marca = Marca.objects.filter(id_marca=ids_marcas[0]).first()
+
+    if not tipo_disp and modelo and getattr(modelo, 'id_tipo_dispositivo', None):
+        tipo_disp = modelo.id_tipo_dispositivo
+
+    if not tipo_comp:
+        if es_universal:
+            tipo_comp = 'UNIVERSAL'
+        elif len(ids_modelos) > 1:
+            tipo_comp = 'MULTI_MODELO'
+        elif ids_modelos or modelo:
+            tipo_comp = 'MONO_MODELO'
+        elif ids_marcas:
+            tipo_comp = 'MARCAS'
+        elif tipo_disp:
+            tipo_comp = 'TIPO_DISPOSITIVO'
+        else:
+            tipo_comp = 'UNIVERSAL'
+            es_universal = True
+
+    if tipo_comp == 'UNIVERSAL':
+        es_universal = True
+
+    producto.tipo_compatibilidad = tipo_comp
+    producto.es_universal = es_universal
+    producto.id_tipo_dispositivo = tipo_disp
     producto.id_modelo = modelo
+
+    # Sincronizar modelos compatibles
+    from catalog_app.models import DetalleCompatibilidadProductoModelo, DetalleCompatibilidadProductoMarca
+    if 'ids_modelos_compatibles' in datos_validados or ids_modelos:
+        DetalleCompatibilidadProductoModelo.objects.filter(id_producto=producto).exclude(id_modelo__id_modelo__in=ids_modelos).delete()
+        from catalog_app.models import ModeloDispositivo
+        for mod_obj in ModeloDispositivo.objects.filter(id_modelo__in=ids_modelos):
+            DetalleCompatibilidadProductoModelo.objects.get_or_create(id_producto=producto, id_modelo=mod_obj)
+
+    # Sincronizar marcas compatibles
+    if 'ids_marcas_compatibles' in datos_validados or ids_marcas:
+        DetalleCompatibilidadProductoMarca.objects.filter(id_producto=producto).exclude(id_marca__id_marca__in=ids_marcas).delete()
+        from catalog_app.models import Marca
+        for mar_obj in Marca.objects.filter(id_marca__in=ids_marcas):
+            DetalleCompatibilidadProductoMarca.objects.get_or_create(id_producto=producto, id_marca=mar_obj)
 
     # Portada e Imágenes
     imagen_principal = (datos_validados.get('imagen_principal') or '').strip()

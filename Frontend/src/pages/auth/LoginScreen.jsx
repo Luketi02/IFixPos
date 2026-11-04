@@ -11,7 +11,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const LoginScreen = () => {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, isAuthenticated, user, logout } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -93,6 +93,88 @@ const LoginScreen = () => {
   // Clave de prueba de Google ReCAPTCHA v2 (Fallback)
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
 
+  // Si ya existe una sesión activa en este navegador, bloqueamos la creación de otra sesión simultánea
+  if (isAuthenticated && user) {
+    return (
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans text-slate-50"
+      >
+        <div className="bg-slate-800 w-full max-w-md p-8 rounded-2xl shadow-2xl border border-cyan-500/30 text-center">
+          {/* Botón Volver al inicio */}
+          <div className="flex items-center justify-between mb-4">
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-400 transition-colors group focus:outline-none"
+            >
+              <svg className="w-4 h-4 transition-transform group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              <span>Volver al inicio</span>
+            </button>
+          </div>
+
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.25)] mb-4">
+            <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+          </div>
+
+          <h2 className="text-xl font-bold text-slate-100 mb-2">
+            Sesión Activa Detectada
+          </h2>
+          <p className="text-sm text-slate-400 mb-4">
+            Actualmente tienes una sesión activa en este navegador:
+          </p>
+
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700/80 mb-5 text-left">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block mb-1">
+              {user.rol || 'Usuario del Sistema'}
+            </span>
+            <p className="text-sm font-semibold text-slate-200">
+              {user.nombre ? `${user.nombre} ${user.apellido || ''}` : user.email}
+            </p>
+            <p className="text-xs text-slate-400 truncate">
+              {user.email}
+            </p>
+          </div>
+
+          <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl mb-6 text-left">
+            <p className="text-xs text-amber-300 leading-relaxed">
+              Por políticas de seguridad, no está permitido operar con múltiples cuentas simultáneas en el mismo navegador. Para ingresar con otra cuenta, primero debes cerrar tu sesión actual.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => {
+                if (user && !user.perfil_completo) {
+                  navigate('/completar-perfil', { replace: true });
+                } else {
+                  navigate(getDashboardPath(user?.rol), { replace: true });
+                }
+              }}
+              className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-cyan-500 hover:bg-cyan-400 transition-all shadow-lg shadow-cyan-500/20 active:scale-[0.98]"
+            >
+              Continuar a mi panel
+            </button>
+            <button
+              type="button"
+              onClick={() => logout()}
+              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 border border-red-500/30 transition-all"
+            >
+              Cerrar sesión actual e ingresar con otra cuenta
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -102,6 +184,20 @@ const LoginScreen = () => {
     >
       <div className="bg-slate-800 w-full max-w-md p-8 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] shadow-cyan-500/10 border border-slate-700/50 transition-all duration-300 ease-in-out">
         
+        {/* Opción de Volver al Inicio */}
+        <div className="flex items-center justify-between mb-6">
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-400 transition-colors group focus:outline-none"
+          >
+            <svg className="w-4 h-4 transition-transform group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            <span>Volver al inicio</span>
+          </button>
+        </div>
+
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold tracking-tight text-slate-50 mb-2">IFixPos</h1>
           <p className="text-slate-400">Ingresá a tu sesión</p>

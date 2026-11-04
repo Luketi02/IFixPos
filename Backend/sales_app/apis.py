@@ -490,21 +490,25 @@ class RegistrarMedioPagoApi(APIView):
     """
     CU-82: Registrar medio de pago y consulta de medios de pago disponibles (CU-18).
     Permite al Administrador dar de alta un nuevo canal de cobro o reactivar uno existente,
-    y a los clientes autenticados consultar los canales de cobro activos para abonar su compra.
+    y a cualquier cliente o invitado consultar los canales de cobro activos para abonar su compra.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def _verificar_admin(self, user):
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
         rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
         codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
         nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
         return codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
 
     def get(self, request):
-        rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
-        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
-        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
-        es_admin = codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
+        es_admin = False
+        if request.user and getattr(request.user, 'is_authenticated', False):
+            rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+            codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+            nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+            es_admin = codigo_rol == 'ADMIN' or nombre_rol == 'administrador'
         
         ver_todos = es_admin and request.query_params.get('todos', '').lower() == 'true'
         medios = obtener_medios_pago(solo_activos=not ver_todos)
@@ -1054,7 +1058,10 @@ class ConsultarCostoEnvioApi(APIView):
         id_dir_raw = request.query_params.get('id_direccion')
         id_dir = int(id_dir_raw) if id_dir_raw and id_dir_raw.isdigit() else None
 
-        resultado = calcular_costo_envio_sistema(id_dir)
+        id_ciudad_raw = request.query_params.get('id_ciudad')
+        id_ciudad = int(id_ciudad_raw) if id_ciudad_raw and id_ciudad_raw.isdigit() else None
+
+        resultado = calcular_costo_envio_sistema(id_dir, id_ciudad=id_ciudad)
         serializer = CostoEnvioOutputSerializer(resultado)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -1127,3 +1134,144 @@ class DescargarFacturaVentaApi(APIView):
 
 
 
+
+
+class RealizarCompraInvitadoApi(APIView):
+    """
+    Checkout para Visitantes / Clientes Sin Cuenta Registrada.
+    Permite procesar compras de e-commerce públicas de forma atómica:
+    - No requiere autenticación previa (AllowAny).
+    - Asocia la venta al usuario estándar 'Cliente sin cuenta' (email y clave S/N).
+    - Descuenta stock en tiempo real y genera el link de pago o comprobante de retiro.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from sales_app.serializers import (
+            RealizarCompraInvitadoInputSerializer,
+            CompraInvitadoOutputSerializer
+        )
+        from sales_app.services import procesar_compra_invitado
+
+        serializer = RealizarCompraInvitadoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = procesar_compra_invitado(datos_compra=serializer.validated_data)
+        except DjangoValidationError as e:
+            msg = e.messages if hasattr(e, 'messages') else [str(e)]
+            return Response(
+                {"error": msg[0] if len(msg) == 1 else msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Error al procesar la compra de invitado: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        output = CompraInvitadoOutputSerializer(resultado)
+        return Response(
+            {
+                "mensaje": "Compra de invitado procesada con éxito.",
+                "id_venta": resultado['id_venta'],
+                "venta": output.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ==============================================================================
+# MOTOR INTELIGENTE DE BENEFICIOS Y FIDELIZACIÓN (APIS)
+# ==============================================================================
+
+class MisBeneficiosClienteApi(APIView):
+    """
+    Retorna la lista de beneficios activos e historial para el cliente autenticado.
+    Permite nutrir la pestaña 'Mis Beneficios y Cupones' y el selector de Checkout.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from sales_app.selectors import (
+            obtener_beneficios_activos_cliente,
+            obtener_historial_beneficios_cliente
+        )
+        from sales_app.serializers import BeneficioClienteOutputSerializer
+
+        activos = obtener_beneficios_activos_cliente(request.user.id_usuario)
+        historial = obtener_historial_beneficios_cliente(request.user.id_usuario)
+
+        ser_activos = BeneficioClienteOutputSerializer(activos, many=True)
+        ser_historial = BeneficioClienteOutputSerializer(historial, many=True)
+
+        return Response({
+            "activos": ser_activos.data,
+            "historial": ser_historial.data,
+            "total_activos": len(activos)
+        }, status=status.HTTP_200_OK)
+
+
+class BeneficioRecomendacionCarritoApi(APIView):
+    """
+    Evalúa en tiempo real los artículos del carrito del cliente y devuelve
+    sugerencias predictivas de accesorios compatibles con descuento.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from sales_app.models import CarritoCompra, CarritoProducto
+        from sales_app.services import evaluar_beneficio_durante_carrito
+        from sales_app.serializers import BeneficioClienteOutputSerializer
+
+        carrito = CarritoCompra.objects.filter(
+            id_usuario=request.user,
+            estado__iexact='activo'
+        ).first()
+
+        if not carrito:
+            return Response({"recomendaciones": []}, status=status.HTTP_200_OK)
+
+        items = list(CarritoProducto.objects.filter(id_carrito=carrito).select_related('id_producto'))
+        nuevos_beneficios = evaluar_beneficio_durante_carrito(
+            id_usuario=request.user.id_usuario,
+            items_carrito=items
+        )
+
+        return Response({
+            "recomendaciones": BeneficioClienteOutputSerializer(nuevos_beneficios, many=True).data
+        }, status=status.HTTP_200_OK)
+
+
+class DepuracionMotorBeneficiosApi(APIView):
+    """
+    Panel administrativo y depuración: Consulta métricas del motor predictivo
+    y permite disparar el análisis predictivo bajo demanda.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        if codigo_rol != 'ADMIN':
+            raise PermissionDenied("Se requiere rol de Administrador para acceder a la telemetría del motor.")
+
+    def get(self, request):
+        self._verificar_admin(request.user)
+        from sales_app.selectors import obtener_metricas_motor_beneficios
+        metricas = obtener_metricas_motor_beneficios()
+        return Response(metricas, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        self._verificar_admin(request.user)
+        from sales_app.services import evaluar_beneficios_predictivos_sistema
+        from sales_app.selectors import obtener_metricas_motor_beneficios
+
+        resumen = evaluar_beneficios_predictivos_sistema()
+        metricas_actualizadas = obtener_metricas_motor_beneficios()
+
+        return Response({
+            "mensaje": "Ciclo predictivo de beneficios ejecutado con éxito.",
+            "resumen_ejecucion": resumen,
+            "metricas": metricas_actualizadas
+        }, status=status.HTTP_200_OK)

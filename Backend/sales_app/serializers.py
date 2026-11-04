@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Optional
 from rest_framework import serializers
-from sales_app.models import Venta, DetalleVenta, MedioPago
+from sales_app.models import Venta, DetalleVenta, MedioPago, Beneficio
 from geo_app.models import Direccion
 from geo_app.serializers import DireccionOutputSerializer
 
@@ -38,6 +38,18 @@ class RealizarCompraInputSerializer(serializers.Serializer):
             'invalid': 'El identificador de dirección debe ser numérico.'
         }
     )
+    beneficios_aplicados = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list,
+        help_text='Lista de identificadores de beneficios/cupones a canjear en la compra.'
+    )
+
+    def validate_dni_contacto(self, value):
+        val = str(value).strip()
+        if not val or val.upper() == 'S/N':
+            raise serializers.ValidationError('Debe ingresar un DNI o CUIL válido para la facturación.')
+        return val
 
     def validate_metodo_pago(self, value):
         try:
@@ -846,3 +858,217 @@ class CompraPendienteActivaOutputSerializer(serializers.Serializer):
     venta = VentaPendienteDetalleOutputSerializer(allow_null=True, required=False)
     segundos_restantes = serializers.IntegerField(required=False, default=0)
 
+
+
+# ==============================================================================
+# CHECKOUT PARA INVITADOS / CLIENTES SIN CUENTA (E-COMMERCE PÚBLICO)
+# ==============================================================================
+
+class ItemCompraInvitadoInputSerializer(serializers.Serializer):
+    """
+    Renglón de producto seleccionado por un cliente no registrado.
+    """
+    id_producto = serializers.IntegerField(
+        required=True,
+        error_messages={
+            'required': 'Debe especificar el identificador del producto.',
+            'invalid': 'El identificador del producto debe ser numérico.'
+        }
+    )
+    cantidad = serializers.IntegerField(
+        required=True,
+        min_value=1,
+        error_messages={
+            'required': 'Debe especificar la cantidad a adquirir.',
+            'invalid': 'La cantidad debe ser un número entero.',
+            'min_value': 'La cantidad mínima por producto es 1.'
+        }
+    )
+
+    def validate_id_producto(self, value):
+        from catalog_app.models import Producto
+        try:
+            prod = Producto.objects.get(id_producto=value)
+        except Producto.DoesNotExist:
+            raise serializers.ValidationError('El producto seleccionado no existe en el catálogo.')
+        if not prod.estado:
+            raise serializers.ValidationError(f"El producto '{prod.nombre}' no está disponible actualmente.")
+        return prod
+
+
+class DireccionEnvioInvitadoInputSerializer(serializers.Serializer):
+    """
+    Datos de dirección física para entrega a domicilio de un comprador invitado.
+    """
+    calle = serializers.CharField(
+        max_length=255,
+        required=True,
+        error_messages={'required': 'Debe ingresar la calle de entrega.'}
+    )
+    numero = serializers.CharField(
+        max_length=50,
+        required=True,
+        error_messages={'required': 'Debe ingresar la altura / número de entrega.'}
+    )
+    piso_depto = serializers.CharField(
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        default=''
+    )
+    codigo_postal = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        default='S/N'
+    )
+    id_ciudad = serializers.IntegerField(
+        required=True,
+        error_messages={'required': 'Debe seleccionar la ciudad de entrega.'}
+    )
+
+    def validate_id_ciudad(self, value):
+        from geo_app.models import Ciudad
+        try:
+            return Ciudad.objects.select_related('id_provincia__id_pais').get(id_ciudad=value)
+        except Ciudad.DoesNotExist:
+            raise serializers.ValidationError('La ciudad seleccionada no existe en el sistema.')
+
+
+class RealizarCompraInvitadoInputSerializer(serializers.Serializer):
+    """
+    Aduana comercial para compras realizadas por clientes sin cuenta registrada.
+    Valida items, datos de contacto indispensables, método de entrega,
+    dirección física (si aplica envío) y medio de pago.
+    """
+    items = ItemCompraInvitadoInputSerializer(
+        many=True,
+        required=True,
+        allow_empty=False,
+        error_messages={
+            'required': 'Debe incluir al menos un producto en la compra.',
+            'not_a_list': 'Los productos deben suministrarse en formato de lista.',
+            'empty': 'El carrito de compras no puede estar vacío.'
+        }
+    )
+    metodo_entrega = serializers.ChoiceField(
+        choices=['RETIRO', 'ENVIO', 'retiro', 'envio'],
+        required=True,
+        error_messages={
+            'required': 'Debe especificar el método de entrega (RETIRO o ENVIO).',
+            'invalid_choice': 'Método de entrega no válido. Debe ser RETIRO o ENVIO.'
+        }
+    )
+    metodo_pago = serializers.IntegerField(
+        required=True,
+        error_messages={
+            'required': 'Debe especificar el identificador del medio de pago.',
+            'invalid': 'El medio de pago debe ser numérico.'
+        }
+    )
+    nombre_contacto = serializers.CharField(
+        max_length=150,
+        required=True,
+        error_messages={'required': 'Debe indicar el nombre completo o razón social para el comprobante.'}
+    )
+    email_contacto = serializers.EmailField(
+        required=True,
+        error_messages={
+            'required': 'Debe ingresar un correo electrónico para recibir su factura y enlace de pago.',
+            'invalid': 'El formato del correo electrónico es inválido.'
+        }
+    )
+    telefono_contacto = serializers.CharField(
+        max_length=50,
+        required=True,
+        error_messages={'required': 'Debe ingresar un teléfono o WhatsApp de contacto.'}
+    )
+    dni_contacto = serializers.CharField(
+        max_length=30,
+        required=True,
+        allow_blank=False,
+        error_messages={
+            'required': 'El DNI o CUIL es obligatorio para la emisión de la factura.',
+            'blank': 'El DNI o CUIL no puede estar vacío.'
+        }
+    )
+    direccion_envio = DireccionEnvioInvitadoInputSerializer(
+        required=False,
+        allow_null=True
+    )
+
+    def validate_metodo_pago(self, value):
+        from sales_app.models import MedioPago
+        try:
+            medio = MedioPago.objects.get(id_mediopago=value)
+        except MedioPago.DoesNotExist:
+            raise serializers.ValidationError('El medio de pago seleccionado no existe en el catálogo.')
+        if not medio.estado:
+            raise serializers.ValidationError(f"El medio de pago '{medio.nombre_medio_pago}' no está habilitado actualmente.")
+        return medio
+
+    def validate(self, attrs):
+        metodo = str(attrs.get('metodo_entrega', '')).upper()
+        attrs['metodo_entrega'] = metodo
+
+        if metodo == 'ENVIO':
+            if not attrs.get('direccion_envio'):
+                raise serializers.ValidationError({
+                    'direccion_envio': 'Para entregas a domicilio debe especificar los datos completos de dirección de entrega.'
+                })
+        return attrs
+
+
+class CompraInvitadoOutputSerializer(serializers.Serializer):
+    """
+    Aduana de salida que formatea los datos de la compra creada para un invitado.
+    """
+    id_venta = serializers.IntegerField()
+    codigo_sec = serializers.CharField()
+    estado_venta = serializers.CharField()
+    metodo_entrega = serializers.CharField()
+    monto_subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+    costo_envio = serializers.DecimalField(max_digits=10, decimal_places=2)
+    monto_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    preference_id = serializers.CharField(allow_null=True, required=False)
+    init_point = serializers.CharField(allow_null=True, required=False)
+    modo_simulacion = serializers.BooleanField(required=False, default=False)
+    detalles = ItemCompraPendienteOutputSerializer(many=True)
+
+
+class BeneficioClienteOutputSerializer(serializers.ModelSerializer):
+    """
+    Formato estructurado de beneficios para el portal del cliente y checkout.
+    """
+    id_producto = serializers.IntegerField(source='id_producto_id', read_only=True)
+    producto_nombre = serializers.SerializerMethodField()
+    producto_precio = serializers.SerializerMethodField()
+    estado = serializers.CharField(read_only=True)
+    es_acumulable = serializers.BooleanField(default=True, read_only=True)
+
+    class Meta:
+        model = Beneficio
+        fields = [
+            'id_beneficio',
+            'motivo',
+            'fecha',
+            'por_desc',
+            'tiempo_disp',
+            'estado',
+            'enviado_momento_compra',
+            'enviado_durante_carrito',
+            'id_producto',
+            'producto_nombre',
+            'producto_precio',
+            'es_acumulable'
+        ]
+
+    def get_producto_nombre(self, obj):
+        if obj.id_producto:
+            return obj.id_producto.nombre
+        return "Descuento General de Tienda / Taller"
+
+    def get_producto_precio(self, obj):
+        if obj.id_producto and getattr(obj.id_producto, 'precio_venta', None) is not None:
+            return float(obj.id_producto.precio_venta)
+        return None

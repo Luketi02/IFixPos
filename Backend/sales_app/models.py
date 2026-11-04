@@ -273,8 +273,10 @@ class Beneficio(models.Model):
     id_producto = models.ForeignKey(
         'catalog_app.Producto',
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         db_column='id_producto',
-        help_text='Identificador único del producto.'
+        help_text='Identificador único del producto (opcional para beneficios globales o mano de obra).'
     )
 
     @property

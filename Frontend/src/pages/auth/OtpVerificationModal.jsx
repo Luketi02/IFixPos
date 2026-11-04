@@ -157,9 +157,11 @@ const OtpVerificationModal = ({ isOpen, email, onClose, onSuccess }) => {
         onSuccess(response.data);
       }
 
-      // Redirigir al Dashboard principal ('/') tras una breve pausa para apreciar el feedback
+      // Redirigir respetando parámetro 'redirect' o al inicio ('/')
+      const searchParams = new URLSearchParams(window.location.search);
+      const redirectTarget = searchParams.get('redirect') || '/';
       setTimeout(() => {
-        window.location.href = '/';
+        window.location.href = redirectTarget;
       }, 1500);
 
     } catch (error) {

@@ -2392,3 +2392,366 @@ class ActualizarCantidadCarritoTestCase(TestCase):
 
 
 
+
+
+
+from rest_framework.test import APITestCase
+
+class CompraInvitadoValidacionesTestCase(APITestCase):
+    """Pruebas de validación de datos para la compra de invitados (CU-18)."""
+
+    def setUp(self):
+        from catalog_app.models import CategoriaProducto, Producto
+        from inventory_app.models import Stock, MovimientoStock
+        from sales_app.models import MedioPago
+        from users_app.models import RolUsuario
+        from decimal import Decimal
+        from django.utils import timezone
+
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            id_rol=1,
+            defaults={'nombre_rol': 'Cliente', 'codigo': 'CLI', 'descripcion': 'Rol cliente'}
+        )
+        self.categoria, _ = CategoriaProducto.objects.get_or_create(
+            id_categoria=1,
+            defaults={'nombre': 'Accesorios', 'descripcion': 'Accesorios varios', 'estado': True}
+        )
+        self.producto = Producto.objects.create(
+            nombre="Cable USB-C Test Invitado",
+            descripcion="Cable de datos",
+            precio_venta=Decimal('1500.00'),
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False,
+            id_categoria=self.categoria
+        )
+        self.stock = Stock.objects.create(
+            id_producto=self.producto,
+            stock_minimo=1
+        )
+        MovimientoStock.objects.create(
+            id_stock=self.stock,
+            tipo_movimiento='ingreso',
+            cantidad=10,
+            fecha=timezone.now().date(),
+            motivo="Stock para test invitado",
+            uso_taller=False
+        )
+        self.medio_pago, _ = MedioPago.objects.get_or_create(
+            id_mediopago=99,
+            defaults={'nombre_medio_pago': 'Efectivo Mostrador Test', 'estado': True, 'recargo': Decimal('0.00')}
+        )
+
+    def test_compra_invitado_sin_dni_falla_validacion(self):
+        """Verifica que el DNI / CUIL sea estrictamente obligatorio para compras sin cuenta."""
+        payload_sin_dni = {
+            'items': [{'id_producto': self.producto.id_producto, 'cantidad': 1}],
+            'metodo_entrega': 'RETIRO',
+            'metodo_pago': self.medio_pago.id_mediopago,
+            'nombre_contacto': 'Pedro Invitado',
+            'email_contacto': 'pedro.invitado@test.com',
+            'telefono_contacto': '+5491122334455',
+            'dni_contacto': ''
+        }
+        res = self.client.post('/api/sales/compras/invitado/', payload_sin_dni, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('dni_contacto', res.data)
+
+    def test_compra_invitado_con_dni_valido_exito(self):
+        """Verifica que con DNI / CUIL ingresado la compra se registre exitosamente (201)."""
+        payload_valido = {
+            'items': [{'id_producto': self.producto.id_producto, 'cantidad': 1}],
+            'metodo_entrega': 'RETIRO',
+            'metodo_pago': self.medio_pago.id_mediopago,
+            'nombre_contacto': 'Pedro Invitado',
+            'email_contacto': 'pedro.invitado@test.com',
+            'telefono_contacto': '+5491122334455',
+            'dni_contacto': '38123456'
+        }
+        res = self.client.post('/api/sales/compras/invitado/', payload_valido, format='json')
+        self.assertEqual(res.status_code, 201, msg=str(res.data))
+        self.assertIn('venta', res.data)
+        self.assertEqual(res.data['venta']['estado_venta'], 'PENDIENTE')
+
+
+# ==============================================================================
+# PRUEBAS UNITARIAS: MOTOR INTELIGENTE DE BENEFICIOS Y FIDELIZACIÓN
+# ==============================================================================
+
+class MotorBeneficiosInteligenteTestCase(TestCase):
+    """
+    Pruebas unitarias para el motor autónomo de beneficios, acumulabilidad,
+    topes de descuento, canje y reversión justa ante cancelaciones.
+    """
+
+    def setUp(self):
+        from users_app.models import Usuario, RolUsuario
+        from catalog_app.models import Producto, CategoriaProducto, Marca, ModeloDispositivo, TipoDispositivo
+        from core_app.models import ConfiguracionSistema
+        from sales_app.models import MedioPago
+
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol cliente'}
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente_motor@test.com',
+            contrasena='hash123',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date()
+        )
+
+        self.tipo_dev, _ = TipoDispositivo.objects.get_or_create(
+            id_tipo_dispositivo=999,
+            defaults={'nombre': 'Smartphone', 'estado_activo': True}
+        )
+        self.marca, _ = Marca.objects.get_or_create(
+            id_marca=999,
+            defaults={'nombre': 'Motorola', 'estado_activo': True}
+        )
+        self.modelo, _ = ModeloDispositivo.objects.get_or_create(
+            id_modelo=999,
+            defaults={'nombre': 'Moto G52', 'estado_activo': True, 'id_marca': self.marca, 'id_tipo_dispositivo': self.tipo_dev}
+        )
+        self.categoria, _ = CategoriaProducto.objects.get_or_create(
+            id_categoria=999,
+            defaults={'nombre': 'Accesorios', 'descripcion': 'Accesorios', 'estado': True}
+        )
+
+        self.producto = Producto.objects.create(
+            nombre='Funda Protectora Moto G52',
+            precio_venta=Decimal('10000.00'),
+            id_categoria=self.categoria,
+            id_modelo=self.modelo,
+            estado=True,
+            apto_venta=True,
+            apto_reparacion=False,
+            apto_consumible=False,
+            modulo_automatico=False
+        )
+
+        # Configuraciones maestras
+        ConfiguracionSistema.objects.update_or_create(
+            clave='motorBeneficiosActivo',
+            defaults={'valor': 'True'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='porcentajeDescuentoMaximo',
+            defaults={'valor': '15.0'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='limitePromocionesMensual',
+            defaults={'valor': '50'}
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='periodoRefrigerioCliente',
+            defaults={'valor': '0'} # En test desactivamos cooldown temporal para evaluar llamadas consecutivas
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave='vigenciaBeneficioDefecto',
+            defaults={'valor': '72.0'}
+        )
+
+    def test_generar_beneficio_respeta_tope_maximo_y_producto_opcional(self):
+        """Verifica que si se solicita un descuento mayor al tope, se recorte a porcentajeDescuentoMaximo y acepte id_producto=None."""
+        from sales_app.services import generar_beneficio_cliente
+
+        beneficio = generar_beneficio_cliente(
+            usuario_destinatario=self.cliente,
+            motivo='Prueba de fidelización',
+            por_desc=Decimal('30.00'), # Mayor al 15% configurado
+            id_producto=None
+        )
+        self.assertIsNotNone(beneficio)
+        self.assertIsNone(beneficio.id_producto)
+        self.assertEqual(beneficio.por_desc, Decimal('15.00')) # Recortado al tope seguro
+        self.assertEqual(beneficio.estado, 'ACTIVO')
+
+    def test_generar_beneficio_motor_inactivo_aborta_pacíficamente(self):
+        """Verifica que si motorBeneficiosActivo es False, no se emite ningún beneficio."""
+        from core_app.models import ConfiguracionSistema
+        from sales_app.services import generar_beneficio_cliente
+
+        ConfiguracionSistema.objects.filter(clave='motorBeneficiosActivo').update(valor='False')
+
+        beneficio = generar_beneficio_cliente(
+            usuario_destinatario=self.cliente,
+            motivo='No debe emitirse',
+            por_desc=Decimal('10.00')
+        )
+        self.assertIsNone(beneficio)
+
+    def test_aplicacion_acumulada_y_canje_en_venta(self):
+        """Verifica la acumulación de múltiples beneficios en una venta y su marcado a CANJEADO."""
+        from sales_app.models import Venta, DetalleVenta
+        from sales_app.services import (
+            generar_beneficio_cliente,
+            aplicar_y_canjear_beneficios_en_venta
+        )
+
+        b1 = generar_beneficio_cliente(
+            usuario_destinatario=self.cliente,
+            motivo='Cupón específico accesorio',
+            por_desc=Decimal('10.00'),
+            id_producto=self.producto
+        )
+        b2 = generar_beneficio_cliente(
+            usuario_destinatario=self.cliente,
+            motivo='Cupón general',
+            por_desc=Decimal('5.00'),
+            id_producto=None
+        )
+
+        venta = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='RETIRO',
+            fecha_venta=timezone.now().date(),
+            estado_venta='PENDIENTE',
+            monto_subtotal=Decimal('10000.00'),
+            costo_envio=Decimal('0.00')
+        )
+        DetalleVenta.objects.create(
+            id_venta=venta,
+            id_producto=self.producto,
+            cantidad=1,
+            precio_unitario=Decimal('10000.00'),
+            subtotal=Decimal('10000.00')
+        )
+
+        res = aplicar_y_canjear_beneficios_en_venta(
+            venta=venta,
+            lista_id_beneficios=[b1.id_beneficio, b2.id_beneficio]
+        )
+
+        # Descuento b1: 10% de $10.000 = $1.000
+        # Descuento b2: 5% de $10.000 = $500
+        # Total descuento = $1.500 -> Nuevo subtotal = $8.500
+        self.assertEqual(res['descuento_total'], Decimal('1500.00'))
+        self.assertEqual(res['nuevo_subtotal'], Decimal('8500.00'))
+
+        venta.refresh_from_db()
+        self.assertEqual(venta.monto_subtotal, Decimal('8500.00'))
+
+        b1.refresh_from_db()
+        b2.refresh_from_db()
+        self.assertEqual(b1.tiempo_disp, Decimal('0.00'))
+        self.assertIn('[CANJEADO - Venta #', b1.motivo)
+        self.assertEqual(b1.estado, 'REVOCADO')
+
+    def test_reversion_justa_al_cancelar_venta(self):
+        """Verifica que al cancelar una venta, los cupones canjeados se restauren a ACTIVO con sus horas remanentes."""
+        from sales_app.models import Venta, DetalleVenta
+        from sales_app.services import (
+            generar_beneficio_cliente,
+            aplicar_y_canjear_beneficios_en_venta,
+            revertir_beneficios_de_venta_cancelada
+        )
+
+        b = generar_beneficio_cliente(
+            usuario_destinatario=self.cliente,
+            motivo='Cupón para compra cancelada',
+            por_desc=Decimal('10.00'),
+            id_producto=self.producto,
+            tiempo_disp_horas=Decimal('48.00')
+        )
+
+        venta = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='RETIRO',
+            fecha_venta=timezone.now().date(),
+            estado_venta='PENDIENTE',
+            monto_subtotal=Decimal('10000.00'),
+            costo_envio=Decimal('0.00')
+        )
+        DetalleVenta.objects.create(
+            id_venta=venta,
+            id_producto=self.producto,
+            cantidad=1,
+            precio_unitario=Decimal('10000.00'),
+            subtotal=Decimal('10000.00')
+        )
+
+        aplicar_y_canjear_beneficios_en_venta(venta=venta, lista_id_beneficios=[b.id_beneficio])
+        b.refresh_from_db()
+        self.assertEqual(b.tiempo_disp, Decimal('0.00'))
+
+        # Cancelar y revertir
+        revertidos = revertir_beneficios_de_venta_cancelada(venta=venta)
+        self.assertEqual(revertidos, 1)
+
+        b.refresh_from_db()
+        self.assertEqual(b.tiempo_disp, Decimal('48.00'))
+        self.assertNotIn('[CANJEADO', b.motivo)
+        self.assertEqual(b.estado, 'ACTIVO')
+
+    def test_consumidor_final_no_recibe_beneficios(self):
+        """
+        Verifica rigurosamente que el usuario consumidorfinal@ifixpos.com
+        está completamente excluido de recibir o canjear beneficios comerciales en el sistema.
+        """
+        from sales_app.services import (
+            _obtener_o_crear_consumidor_final,
+            generar_beneficio_cliente,
+            evaluar_beneficio_durante_carrito,
+            evaluar_beneficio_post_compra,
+            aplicar_y_canjear_beneficios_en_venta
+        )
+        from sales_app.selectors import (
+            obtener_beneficios_activos_cliente,
+            obtener_beneficios_activos_usuario,
+            obtener_historial_beneficios_cliente
+        )
+        from sales_app.models import Beneficio, Venta, DetalleVenta, CarritoCompra, CarritoProducto
+
+        consumidor = _obtener_o_crear_consumidor_final()
+
+        # 1. Emisión directa bloqueada
+        b_directo = generar_beneficio_cliente(
+            usuario_destinatario=consumidor,
+            motivo="Intento de beneficio a consumidor final",
+            por_desc=Decimal('10.00'),
+            id_producto=self.producto
+        )
+        self.assertIsNone(b_directo)
+
+        # 2. Evaluación durante carrito bloqueada
+        carrito = CarritoCompra.objects.create(id_usuario=consumidor, estado='activo', fecha_creacion=timezone.now().date())
+        item_c = CarritoProducto.objects.create(id_carrito=carrito, id_producto=self.producto, cantidad=1)
+        b_carrito = evaluar_beneficio_durante_carrito(
+            id_usuario=consumidor.id_usuario,
+            items_carrito=[item_c]
+        )
+        self.assertEqual(b_carrito, [])
+
+        # 3. Evaluación post-compra bloqueada
+        venta_cf = Venta.objects.create(
+            id_usuario=consumidor,
+            metodo_entrega='MOSTRADOR',
+            fecha_venta=timezone.now().date(),
+            estado_venta='PAGADA',
+            monto_subtotal=Decimal('5000.00'),
+            costo_envio=Decimal('0.00')
+        )
+        b_post_compra = evaluar_beneficio_post_compra(venta=venta_cf)
+        self.assertIsNone(b_post_compra)
+
+        # 4. Verificación de cero beneficios persistidos para el consumidor final
+        total_beneficios_cf = Beneficio.objects.filter(
+            id_usuario__email__iexact='consumidorfinal@ifixpos.com'
+        ).count()
+        self.assertEqual(total_beneficios_cf, 0)
+
+        # 5. Selectors devuelven vacío para consumidor final
+        self.assertEqual(obtener_beneficios_activos_cliente(consumidor.id_usuario), [])
+        self.assertEqual(obtener_beneficios_activos_usuario(consumidor.id_usuario), {})
+        self.assertEqual(obtener_historial_beneficios_cliente(consumidor.id_usuario).count(), 0)
+
+        # 6. Intentar canjear en venta es rechazado de inmediato
+        res_canje = aplicar_y_canjear_beneficios_en_venta(
+            venta=venta_cf,
+            lista_id_beneficios=[99999]
+        )
+        self.assertEqual(res_canje['descuento_total'], Decimal('0.00'))
+        self.assertEqual(res_canje['beneficios_canjeados'], [])

@@ -98,8 +98,14 @@ def obtener_beneficios_activos_usuario(id_usuario: int) -> dict:
     con los beneficios y descuentos vigentes asignados al cliente.
     """
     from sales_app.models import Beneficio
+    from users_app.models import Usuario
 
     if not id_usuario:
+        return {}
+
+    # Consumidor final nunca posee beneficios comerciales
+    usr = Usuario.objects.filter(id_usuario=id_usuario).only('email').first()
+    if usr and ('consumidorfinal' in (usr.email or '').lower()):
         return {}
 
     beneficios = Beneficio.objects.filter(id_usuario_id=id_usuario)
@@ -890,15 +896,16 @@ def obtener_medios_pago(*, solo_activos: bool = False) -> QuerySet[MedioPago]:
     return qs
 
 
-def calcular_costo_envio_sistema(id_direccion: Optional[int] = None) -> dict:
+def calcular_costo_envio_sistema(id_direccion: Optional[int] = None, id_ciudad: Optional[int] = None) -> dict:
     """
     Calcula el costo de entrega / flete según la Configuración del Sistema (ConfiguracionSistema):
     - envioLocal: Ciudad sede central (Posadas)
     - envioRegional: Misma provincia, distinta ciudad
     - envioNacional: Otra provincia
+    Acepta 'id_direccion' (dirección guardada) o 'id_ciudad' (para cotización directa de invitados).
     """
     from core_app.models import ConfiguracionSistema
-    from geo_app.models import Direccion
+    from geo_app.models import Direccion, Ciudad
 
     def _obtener_decimal(clave: str, fallback: str = '0.00') -> Decimal:
         cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
@@ -918,23 +925,21 @@ def calcular_costo_envio_sistema(id_direccion: Optional[int] = None) -> dict:
         'nacional': tarifa_nacional
     }
 
-    if not id_direccion:
+    ciudad_destino = None
+    if id_direccion:
+        direccion_destino = Direccion.objects.select_related(
+            'id_ciudad__id_provincia'
+        ).filter(id_direccion=id_direccion).first()
+        if direccion_destino and direccion_destino.id_ciudad:
+            ciudad_destino = direccion_destino.id_ciudad
+    elif id_ciudad:
+        ciudad_destino = Ciudad.objects.select_related('id_provincia').filter(id_ciudad=id_ciudad).first()
+
+    if not ciudad_destino:
         return {
             'costo': tarifa_local,
             'tipo': 'local',
             'descripcion': 'Tarifa Base de Entrega Local',
-            'tarifas': tarifas_dict
-        }
-
-    direccion_destino = Direccion.objects.select_related(
-        'id_ciudad__id_provincia'
-    ).filter(id_direccion=id_direccion).first()
-
-    if not direccion_destino or not direccion_destino.id_ciudad:
-        return {
-            'costo': tarifa_local,
-            'tipo': 'local',
-            'descripcion': 'Tarifa de Entrega Local',
             'tarifas': tarifas_dict
         }
 
@@ -953,25 +958,26 @@ def calcular_costo_envio_sistema(id_direccion: Optional[int] = None) -> dict:
             'tarifas': tarifas_dict
         }
 
-    id_ciudad_destino = getattr(direccion_destino.id_ciudad, 'id_ciudad', None)
+    id_ciudad_dest = getattr(ciudad_destino, 'id_ciudad', None)
     id_ciudad_sede = getattr(direccion_sede.id_ciudad, 'id_ciudad', None)
 
-    id_provincia_destino = getattr(direccion_destino.id_ciudad, 'id_provincia_id', None)
+    id_provincia_dest = getattr(ciudad_destino, 'id_provincia_id', None)
     id_provincia_sede = getattr(direccion_sede.id_ciudad, 'id_provincia_id', None)
 
-    if id_ciudad_destino and id_ciudad_sede and id_ciudad_destino == id_ciudad_sede:
+    if id_ciudad_dest and id_ciudad_sede and id_ciudad_dest == id_ciudad_sede:
         return {
             'costo': tarifa_local,
             'tipo': 'local',
-            'descripcion': f"Envío Local ({direccion_destino.id_ciudad.nombre_ciudad})",
+            'descripcion': f"Envío Local ({ciudad_destino.nombre_ciudad})",
             'tarifas': tarifas_dict
         }
-    elif id_provincia_destino and id_provincia_sede and id_provincia_destino == id_provincia_sede:
+    elif id_provincia_dest and id_provincia_sede and id_provincia_dest == id_provincia_sede:
         costo = tarifa_regional if tarifa_regional > Decimal('0.00') else tarifa_local
+        nombre_prov = ciudad_destino.id_provincia.nombre_provincia if ciudad_destino.id_provincia else ''
         return {
             'costo': costo,
             'tipo': 'regional',
-            'descripcion': f"Envío Regional ({direccion_destino.id_ciudad.id_provincia.nombre_provincia})",
+            'descripcion': f"Envío Regional ({nombre_prov})",
             'tarifas': tarifas_dict
         }
     else:
@@ -1139,3 +1145,150 @@ def obtener_factura_pdf_venta(*, id_venta: int, usuario: Any) -> Tuple[str, str]
 
 
 
+
+
+# ==============================================================================
+# MOTOR INTELIGENTE DE BENEFICIOS Y FIDELIZACIÓN (SELECTORS)
+# ==============================================================================
+
+def obtener_beneficios_activos_cliente(id_usuario: int) -> list:
+    """
+    Recupera la lista de beneficios y cupones actualmente activos y canjeables
+    para un cliente específico, aplicando select_related para evitar consultas N+1.
+    """
+    from sales_app.models import Beneficio
+    from users_app.models import Usuario
+    from django.utils import timezone
+    from decimal import Decimal
+    import math
+    import datetime
+
+    if not id_usuario:
+        return []
+
+    # Consumidor final nunca posee beneficios comerciales
+    usr = Usuario.objects.filter(id_usuario=id_usuario).only('email').first()
+    if usr and ('consumidorfinal' in (usr.email or '').lower()):
+        return []
+
+    beneficios = Beneficio.objects.select_related(
+        'id_producto',
+        'id_producto__id_categoria',
+        'id_producto__id_modelo'
+    ).filter(
+        id_usuario_id=id_usuario
+    ).order_by('-fecha', '-id_beneficio')
+
+    activos = []
+    hoy = timezone.now().date()
+    for b in beneficios:
+        if b.motivo and '[REVOCADO]' in b.motivo:
+            continue
+        if b.tiempo_disp is not None and b.tiempo_disp <= Decimal('0.00'):
+            continue
+        if not b.fecha or b.tiempo_disp is None:
+            continue
+        dias = math.ceil(float(b.tiempo_disp) / 24.0)
+        if hoy <= b.fecha + datetime.timedelta(days=dias):
+            activos.append(b)
+    return activos
+
+
+def obtener_historial_beneficios_cliente(id_usuario: int):
+    """
+    Recupera el expediente completo de beneficios del cliente para la pestaña de perfil.
+    """
+    from sales_app.models import Beneficio
+    from users_app.models import Usuario
+    if not id_usuario:
+        return Beneficio.objects.none()
+
+    # Consumidor final nunca posee beneficios comerciales
+    usr = Usuario.objects.filter(id_usuario=id_usuario).only('email').first()
+    if usr and ('consumidorfinal' in (usr.email or '').lower()):
+        return Beneficio.objects.none()
+
+    return Beneficio.objects.select_related(
+        'id_producto',
+        'id_producto__id_categoria',
+        'id_producto__id_modelo'
+    ).filter(
+        id_usuario_id=id_usuario
+    ).order_by('-fecha', '-id_beneficio')
+
+
+def obtener_beneficios_aplicados_en_venta(id_venta: int) -> list:
+    """
+    Recupera y desglosa los cupones que fueron canjeados en una venta específica
+    para renderizar el ahorro discriminado en facturas y comprobantes.
+    """
+    from sales_app.models import Beneficio
+    if not id_venta:
+        return []
+
+    tag = f"[CANJEADO - Venta #{id_venta}"
+    beneficios = Beneficio.objects.select_related(
+        'id_producto'
+    ).filter(motivo__contains=tag)
+
+    resultado = []
+    for b in beneficios:
+        nombre_item = b.id_producto.nombre if b.id_producto else "Descuento General"
+        resultado.append({
+            'id_beneficio': b.id_beneficio,
+            'por_desc': float(b.por_desc or 0),
+            'id_producto': b.id_producto_id,
+            'producto_nombre': nombre_item,
+            'motivo': b.motivo
+        })
+    return resultado
+
+
+def obtener_metricas_motor_beneficios() -> dict:
+    """
+    Retorna métricas consolidadas del motor de beneficios para el panel administrativo y depuración.
+    """
+    from sales_app.models import Beneficio
+    from core_app.selectors import (
+        obtener_configuracion_bool,
+        obtener_configuracion_int,
+        obtener_configuracion_decimal
+    )
+    from django.utils import timezone
+    from decimal import Decimal
+
+    hoy = timezone.now().date()
+    inicio_mes = hoy.replace(day=1)
+
+    todos = Beneficio.objects.all()
+    total_emitidos = todos.count()
+    emitidos_mes = todos.filter(fecha__gte=inicio_mes).count()
+
+    canjeados = 0
+    activos = 0
+    caducados = 0
+
+    for b in todos:
+        st = b.estado
+        if '[CANJEADO' in (b.motivo or ''):
+            canjeados += 1
+        elif st == 'ACTIVO':
+            activos += 1
+        else:
+            caducados += 1
+
+    tasa_conversion = round((canjeados / total_emitidos * 100.0), 2) if total_emitidos > 0 else 0.0
+
+    return {
+        'motor_activo': obtener_configuracion_bool('motorBeneficiosActivo'),
+        'limite_promociones_mensual': obtener_configuracion_int('limitePromocionesMensual', 15),
+        'beneficios_emitidos_mes': emitidos_mes,
+        'porcentaje_descuento_maximo': float(obtener_configuracion_decimal('porcentajeDescuentoMaximo', Decimal('5.0'))),
+        'periodo_refrigerio_dias': obtener_configuracion_int('periodoRefrigerioCliente', 7),
+        'vigencia_defecto_horas': float(obtener_configuracion_decimal('vigenciaBeneficioDefecto', Decimal('72.0'))),
+        'total_historico': total_emitidos,
+        'total_activos': activos,
+        'total_canjeados': canjeados,
+        'total_caducados': caducados,
+        'tasa_conversion_porcentaje': tasa_conversion
+    }

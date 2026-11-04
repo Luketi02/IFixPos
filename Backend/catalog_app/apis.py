@@ -385,11 +385,13 @@ class ProductoSubirImagenApi(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validar tamaño máximo (5MB)
-        max_tamano = 5 * 1024 * 1024
+        # Validar tamaño máximo según configuración del sistema (tamanoMaxArchivoMB)
+        from core_app.selectors import obtener_tamano_maximo_archivo_bytes, obtener_tamano_maximo_archivo_mb
+        max_tamano = obtener_tamano_maximo_archivo_bytes()
+        max_mb = obtener_tamano_maximo_archivo_mb()
         if archivo.size > max_tamano:
             return Response(
-                {"error": "La imagen excede el tamaño máximo permitido de 5 MB."},
+                {"error": f"La imagen excede el tamaño máximo permitido de {max_mb} MB."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

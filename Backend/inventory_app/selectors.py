@@ -54,7 +54,8 @@ def filtrar_stock_inventario(
     nivel_stock: Optional[str] = None,
     id_categoria: Optional[int] = None,
     id_proveedor: Optional[Any] = None,
-    proposito: Optional[str] = None
+    proposito: Optional[str] = None,
+    tipo_compatibilidad: Optional[str] = None
 ) -> QuerySet[Producto]:
     """
     CU-35: Filtrar Stock e Inventario.
@@ -144,5 +145,13 @@ def filtrar_stock_inventario(
             qs = qs.filter(cantidad_actual__gt=0, cantidad_actual__lte=F('stock_minimo'))
         elif nivel_norm in ['NORMAL', 'OPTIMO', 'DISPONIBLE']:
             qs = qs.filter(cantidad_actual__gt=F('stock_minimo'))
+
+    # 8. Filtro por Ámbito de Compatibilidad Técnica (CU-35 extendido)
+    if tipo_compatibilidad and str(tipo_compatibilidad).strip():
+        comp_norm = str(tipo_compatibilidad).strip().upper()
+        if comp_norm == 'UNIVERSAL':
+            qs = qs.filter(es_universal=True)
+        else:
+            qs = qs.filter(tipo_compatibilidad=comp_norm)
 
     return qs.order_by('nombre')

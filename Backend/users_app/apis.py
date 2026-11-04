@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from users_app.serializers import (
     LoginInputSerializer, GoogleLoginSerializer,
     RegistroPublicoInputSerializer, RegistroInternoInputSerializer,
-    UsuarioOutputSerializer, LogoutInputSerializer,
+    UsuarioOutputSerializer, LogoutInputSerializer, RefreshTokenInputSerializer,
     GenerarTokenInputSerializer, RestablecerCredencialesInputSerializer,
     RecuperarContrasenaInputSerializer,
     EditarPerfilInputSerializer, PerfilOutputSerializer,
@@ -19,7 +19,7 @@ from users_app.services import (
     generar_token_seguridad, validar_y_restablecer_credencial,
     solicitar_recuperacion_contrasena, editar_perfil_usuario,
     completar_perfil_onboarding, verificar_y_activar_usuario,
-    guardar_archivo_foto_perfil
+    guardar_archivo_foto_perfil, refrescar_token_jwt
 )
 
 
@@ -167,6 +167,27 @@ class LogoutApi(APIView):
         )
         
         return Response({"mensaje": "Sesión cerrada correctamente"}, status=status.HTTP_200_OK)
+
+
+class RefreshTokenApi(APIView):
+    """
+    Controlador HTTP para renovar el par de tokens JWT a partir del token de refresco.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RefreshTokenInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tokens = refrescar_token_jwt(refresh_token=serializer.validated_data['refresh'])
+            return Response({"tokens": tokens}, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            msg = e.detail if hasattr(e, 'detail') else str(e)
+            if isinstance(msg, list) and len(msg) > 0:
+                msg = msg[0]
+            return Response({"detail": str(msg)}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class GenerarTokenSeguridadApi(APIView):

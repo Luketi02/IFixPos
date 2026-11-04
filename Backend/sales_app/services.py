@@ -1,18 +1,22 @@
+from __future__ import annotations
+
 import os
 import uuid
 import datetime
+import logging
 from decimal import Decimal
 from typing import Dict, Any, Optional, List, Tuple
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Sum, Value
+from django.db.models import Sum, Value, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMultiAlternatives
 
-from sales_app.models import Venta, DetalleVenta, CarritoCompra, CarritoProducto, Pago, MedioPago
+from sales_app.models import Venta, DetalleVenta, CarritoCompra, CarritoProducto, Pago, MedioPago, Beneficio
+from catalog_app.models import Producto
 from workshop_app.models import Reparacion, DetalleInsumoReparacion
 from inventory_app.models import Stock, MovimientoStock
 from geo_app.models import Direccion
@@ -26,8 +30,11 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 
 
+logger = logging.getLogger(__name__)
+
 TIPOS_INGRESO = ['ingreso', 'compra', 'devolucion', 'alta', 'entrada']
 TIPOS_EGRESO = ['egreso', 'venta', 'taller', 'baja', 'salida', 'consumo']
+EMAIL_CONSUMIDOR_FINAL = 'consumidorfinal@ifixpos.com'
 
 
 
@@ -171,6 +178,17 @@ def procesar_compra_virtual(
             motivo=f"Egreso por Venta Virtual #{venta.id_venta}",
             uso_taller=False,
             id_venta=venta
+        )
+
+    # -------------------------------------------------------------------------
+    # Paso 4.1: Canjear Beneficios Acumulables (si fueron seleccionados)
+    # -------------------------------------------------------------------------
+    beneficios_seleccionados = datos_compra.get('beneficios_aplicados') or []
+    if beneficios_seleccionados:
+        aplicar_y_canjear_beneficios_en_venta(
+            venta=venta,
+            lista_id_beneficios=beneficios_seleccionados,
+            items_compra=items_carrito
         )
 
     # -------------------------------------------------------------------------
@@ -723,6 +741,17 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
                     Paragraph(f"${operacion.costo_envio:,.2f}", estilo_td_num),
                     Paragraph(f"${operacion.costo_envio:,.2f}", estilo_td_num),
                 ])
+
+            # Renglones discriminados de cupones y beneficios canjeados
+            from sales_app.selectors import obtener_beneficios_aplicados_en_venta
+            beneficios_aplicados_pdf = obtener_beneficios_aplicados_en_venta(operacion.id_venta)
+            for ben in beneficios_aplicados_pdf:
+                filas_items.append([
+                    Paragraph(f"<b>Beneficio Aplicado:</b> {ben['producto_nombre']}", estilo_td),
+                    Paragraph("1", estilo_td),
+                    Paragraph(f"-{ben['por_desc']:.1f}%", estilo_td_num),
+                    Paragraph("Bonificado", estilo_td_num),
+                ])
         elif hasattr(operacion, 'id_reparacion'):
             disp_info = "Dispositivo en Taller"
             if getattr(operacion, 'id_dispositivo', None):
@@ -964,6 +993,10 @@ def registrar_cobro_operacion(
     if isinstance(operacion, Venta):
         operacion.estado_venta = 'PAGADO'
         operacion.save(update_fields=['estado_venta'])
+        try:
+            evaluar_beneficio_post_compra(venta=operacion)
+        except Exception as e_post:
+            logger.warning(f"[Motor Beneficios] Error post-compra en completar_pago: {e_post}")
     elif isinstance(operacion, Reparacion):
         operacion.etapa = 'PAGADO'
         operacion.save(update_fields=['etapa', 'id_venta'])
@@ -1183,7 +1216,7 @@ def _obtener_o_crear_consumidor_final() -> Usuario:
         defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente estándar'}
     )
     usuario, creado = Usuario.objects.get_or_create(
-        email='consumidorfinal@ifixpos.com',
+        email=EMAIL_CONSUMIDOR_FINAL,
         defaults={
             'contrasena': 'hash_invalido_consumidor_final',
             'fecha_registro': timezone.now().date(),
@@ -1305,6 +1338,10 @@ def crear_venta_presencial(
     if datos_validados.get('medio_pago') and datos_validados.get('monto_pagado') is not None:
         venta.estado_venta = 'PAGADA'
         venta.save(update_fields=['estado_venta'])
+        try:
+            evaluar_beneficio_post_compra(venta=venta)
+        except Exception as e_post:
+            logger.warning(f"[Motor Beneficios] Error post-compra en venta presencial: {e_post}")
 
         nombre_medio = str(datos_validados['medio_pago']).strip()
         medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_medio).first()
@@ -1765,6 +1802,12 @@ def procesar_webhook_mercadopago(
             venta.estado_venta = "PAGADA"
             venta.save(update_fields=["estado_venta"])
 
+            # Hook Transaccional: Evaluar beneficios de fidelización post-compra
+            try:
+                evaluar_beneficio_post_compra(venta=venta)
+            except Exception as e_post:
+                logger.warning(f"[Motor Beneficios] Error post-compra MP manual: {e_post}")
+
             LogSistema.objects.create(
                 fecha_hora=timezone.now(),
                 accion="Acreditación Mercado Pago Webhook",
@@ -1847,6 +1890,12 @@ def procesar_webhook_mercadopago(
         if venta.estado_venta != "PAGADA":
             venta.estado_venta = "PAGADA"
             venta.save(update_fields=["estado_venta"])
+
+            # Hook Transaccional: Evaluar beneficios de fidelización post-compra
+            try:
+                evaluar_beneficio_post_compra(venta=venta)
+            except Exception as e_post:
+                logger.warning(f"[Motor Beneficios] Error post-compra MP manual: {e_post}")
 
             LogSistema.objects.create(
                 fecha_hora=timezone.now(),
@@ -1978,6 +2027,9 @@ def cancelar_venta_y_restituir_stock(
         id_usuario=usuario or venta.id_usuario
     )
 
+    # Reversión justa de beneficios canjeados al cancelar venta
+    revertir_beneficios_de_venta_cancelada(venta=venta)
+
     return venta
 
 
@@ -2034,21 +2086,35 @@ def enviar_correo_confirmacion_compra(
     *,
     venta: Venta,
     pago: Pago,
-    ruta_pdf: Optional[str] = None
+    ruta_pdf: Optional[str] = None,
+    email_destinatario: Optional[str] = None
 ) -> None:
     """
     Despacha un correo electrónico formal al cliente tras la acreditación exitosa de su compra:
     - Adjunta el comprobante / factura en PDF generado físicamente.
-    - Informa el código oficial de la orden:
-      * Si es con retiro en local: indica explícitamente que es el código para retirar en sede central.
-      * Si es con envío a domicilio: indica que es el código de seguridad y seguimiento.
+    - Informa el código oficial de la orden (retiro o seguimiento de flete).
+    - Soporta tanto clientes registrados como compradores invitados (rescatando el email de contacto).
     - Persiste el aviso en el modelo Notificacion de core_app y asienta la auditoría en LogSistema.
     """
     from core_app.selectors import obtener_email_emisor
     from core_app.models import Notificacion, ConfiguracionSistema
 
     usuario = venta.id_usuario
-    if not usuario or not getattr(usuario, 'email', None):
+    email_destino = email_destinatario
+
+    if not email_destino or '@' not in email_destino:
+        if usuario and getattr(usuario, 'email', None) and usuario.email != 'S/N' and '@' in usuario.email:
+            email_destino = usuario.email
+        elif pago and pago.detalle and 'Email:' in pago.detalle:
+            try:
+                partes = pago.detalle.split('Email:')
+                posible_email = partes[1].split('|')[0].strip()
+                if '@' in posible_email:
+                    email_destino = posible_email
+            except Exception:
+                pass
+
+    if not email_destino or '@' not in email_destino:
         return
 
     # Extraer datos de la empresa emisora
@@ -2268,3 +2334,1142 @@ def enviar_correo_confirmacion_compra(
 
 
 
+
+
+# ==============================================================================
+# GESTIÓN DE COMPRAS PARA INVITADOS / CLIENTES SIN CUENTA (E-COMMERCE PÚBLICO)
+# ==============================================================================
+
+def obtener_o_crear_usuario_cliente_sin_cuenta() -> Usuario:
+    """
+    Recupera o instancia el usuario estándar del sistema 'Cliente sin cuenta'
+    con email='S/N' y contraseña='S/N', asignado al rol 'CLIENTE'.
+    Permite registrar compras de invitados sin persistir datos innecesarios de cuentas.
+    """
+    from users_app.models import RolUsuario, PerfilUsuario
+
+    rol_cliente = RolUsuario.objects.filter(codigo='CLIENTE').first() or RolUsuario.objects.filter(nombre_rol__iexact='cliente').first()
+    if not rol_cliente:
+        rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol de cliente estándar'}
+        )
+    usuario_sin_cuenta, created = Usuario.objects.get_or_create(
+        email='S/N',
+        defaults={
+            'contrasena': 'S/N',
+            'fecha_registro': timezone.now().date(),
+            'id_rol': rol_cliente,
+            'is_active': True
+        }
+    )
+
+    if created or not hasattr(usuario_sin_cuenta, 'perfilusuario'):
+        PerfilUsuario.objects.get_or_create(
+            id_usuario=usuario_sin_cuenta,
+            defaults={
+                'nombre': 'Cliente sin cuenta',
+                'apellido': 'S/N',
+                'dni': 'S/N',
+                'telefono': 'S/N'
+            }
+        )
+
+    return usuario_sin_cuenta
+
+
+def crear_preferencia_mercadopago_invitado(
+    *,
+    venta: Venta,
+    nombre_contacto: str,
+    email_contacto: str,
+    telefono_contacto: str
+) -> Dict[str, Any]:
+    """
+    Genera una Preferencia de Pago en Mercado Pago para una compra realizada por un invitado.
+    Devuelve los endpoints init_point y sandbox_init_point y fija expiración estricta a 30 min.
+    """
+    import mercadopago
+    from core_app.selectors import (
+        obtener_mercadopago_access_token,
+        obtener_mercadopago_public_key
+    )
+
+    access_token = obtener_mercadopago_access_token()
+    public_key = obtener_mercadopago_public_key()
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+
+    if not access_token or access_token.strip() == '' or 'TU_ACCESS_TOKEN' in access_token:
+        return {
+            "preference_id": f"SIMULADO-INVITADO-{venta.id_venta}",
+            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "public_key": public_key or "TEST-SIMULADA",
+            "modo_simulacion": True,
+            "mensaje": "Credenciales de Mercado Pago simuladas para compra de invitado."
+        }
+
+    sdk = mercadopago.SDK(access_token)
+    detalles = venta.detalleventa_set.select_related('id_producto').all()
+
+    items_mp = []
+    for d in detalles:
+        items_mp.append({
+            "id": str(d.id_producto.id_producto),
+            "title": str(d.id_producto.nombre)[:255],
+            "description": f"Repuesto/Insumo #{d.id_producto.id_producto}",
+            "quantity": int(d.cantidad),
+            "currency_id": "ARS",
+            "unit_price": float(d.precio_unitario)
+        })
+
+    if venta.costo_envio and venta.costo_envio > Decimal('0.00'):
+        items_mp.append({
+            "id": "ENVIO-FLETE",
+            "title": "Costo de Envío a Domicilio",
+            "description": f"Flete logístico orden #{venta.id_venta}",
+            "quantity": 1,
+            "currency_id": "ARS",
+            "unit_price": float(venta.costo_envio)
+        })
+
+    ahora_dt = timezone.now()
+    exp_dt = ahora_dt + datetime.timedelta(minutes=30)
+    exp_str = exp_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    preference_data = {
+        "items": items_mp,
+        "payer": {
+            "name": nombre_contacto[:100],
+            "email": email_contacto[:100],
+            "phone": {"number": telefono_contacto[:50]}
+        },
+        "back_urls": {
+            "success": f"{frontend_url}/tienda?pago=aprobado&venta_id={venta.id_venta}",
+            "failure": f"{frontend_url}/tienda?pago=rechazado&venta_id={venta.id_venta}",
+            "pending": f"{frontend_url}/tienda?pago=pendiente&venta_id={venta.id_venta}"
+        },
+        "auto_return": "approved",
+        "external_reference": str(venta.id_venta),
+        "statement_descriptor": "IFIXPOS",
+        "expires": True,
+        "expiration_date_from": ahora_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "expiration_date_to": exp_str
+    }
+
+    try:
+        pref_response = sdk.preference().create(preference_data)
+        res_json = pref_response.get("response", {})
+        return {
+            "preference_id": res_json.get("id"),
+            "init_point": res_json.get("init_point"),
+            "sandbox_init_point": res_json.get("sandbox_init_point"),
+            "public_key": public_key,
+            "modo_simulacion": False
+        }
+    except Exception as e:
+        print(f"[MercadoPago Invitado] Advertencia al contactar API MP: {e}")
+        return {
+            "preference_id": f"SIMULADO-INVITADO-{venta.id_venta}",
+            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
+            "public_key": public_key or "TEST-SIMULADA",
+            "modo_simulacion": True,
+            "error_mp": str(e)
+        }
+
+
+@transaction.atomic
+def procesar_compra_invitado(
+    *,
+    datos_compra: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Procesa de manera atómica la orden de compra de un visitante no registrado (invitado).
+    1. Obtiene o instancia el usuario estándar 'Cliente sin cuenta' (email y clave S/N).
+    2. Bloquea filas de stock (select_for_update) y valida disponibilidad en tiempo real.
+    3. Si es envío, calcula costo_envio según Sede Central y crea la Direccion física.
+    4. Crea la Venta en estado 'PENDIENTE' asociada a 'Cliente sin cuenta'.
+    5. Congela los renglones en DetalleVenta y descuenta el stock en MovimientoStock.
+    6. Asienta los datos de contacto y crea el registro en Pago con detalle descriptivo.
+    7. Genera preferencia de Mercado Pago si aplica o prepara el pago presencial.
+    8. Registra traza de auditoría en LogSistema.
+    """
+    from geo_app.models import Direccion
+    from sales_app.selectors import calcular_costo_envio_sistema
+
+    # Liberar preventivamente compras pendientes expiradas
+    limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+
+    # 1. Recuperar usuario estándar sin cuenta
+    usuario_sin_cuenta = obtener_o_crear_usuario_cliente_sin_cuenta()
+
+    items = datos_compra['items']
+    if not items:
+        raise ValidationError("Debe incluir al menos un producto en la compra.")
+
+    # 2. Bloqueo de Stock en Tiempo Real (select_for_update)
+    stocks_bloqueados = {}
+    for it in items:
+        prod = it['id_producto']
+        cant = int(it['cantidad'])
+        if cant <= 0:
+            raise ValidationError(f"La cantidad para '{prod.nombre}' debe ser mayor a cero.")
+
+        stock = Stock.objects.select_for_update().filter(id_producto=prod).first()
+        if not stock:
+            raise ValidationError(f"El producto '{prod.nombre}' no tiene inventario inicial configurado.")
+
+        ingresos = MovimientoStock.objects.filter(
+            id_stock=stock,
+            tipo_movimiento__in=TIPOS_INGRESO
+        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+        egresos = MovimientoStock.objects.filter(
+            id_stock=stock,
+            tipo_movimiento__in=TIPOS_EGRESO
+        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
+
+        stock_disponible = int(ingresos - egresos)
+        if cant > stock_disponible:
+            raise ValidationError(
+                f"Sin stock suficiente para el producto '{prod.nombre}'. "
+                f"Disponible: {stock_disponible}, solicitado: {cant}."
+            )
+
+        stocks_bloqueados[prod.id_producto] = stock
+
+    # 3. Método de entrega y cálculo logístico
+    metodo_entrega = str(datos_compra.get('metodo_entrega') or 'RETIRO').strip().upper()
+    direccion_obj = None
+    costo_envio = Decimal('0.00')
+
+    if metodo_entrega == 'ENVIO':
+        dir_data = datos_compra['direccion_envio']
+        calle = dir_data.get('calle', '').strip()
+        numero = dir_data.get('numero', '').strip()
+        nro_calle_completo = f"{calle} {numero}".strip() if numero else calle
+
+        # Parsear piso si es numérico
+        piso_raw = str(dir_data.get('piso', '') or dir_data.get('piso_depto', '')).strip()
+        piso_num = int(piso_raw) if piso_raw.isdigit() else None
+        dpto_val = dir_data.get('nro_dpto') or dir_data.get('depto') or dir_data.get('piso_depto') or None
+
+        direccion_obj = Direccion.objects.create(
+            alias='Envío Invitado',
+            nro_calle=nro_calle_completo,
+            nombre_barrio=dir_data.get('barrio') or dir_data.get('nombre_barrio') or None,
+            nro_dpto=dpto_val,
+            piso=piso_num,
+            id_ciudad=dir_data['id_ciudad'],
+            id_usuario=usuario_sin_cuenta,
+            is_active=True
+        )
+        calculo_envio = calcular_costo_envio_sistema(direccion_obj.id_direccion)
+        costo_envio = calculo_envio['costo']
+
+    # 4. Calcular Subtotal
+    monto_subtotal = Decimal('0.00')
+    for it in items:
+        precio_unit = Decimal(str(it['id_producto'].precio_venta))
+        monto_subtotal += precio_unit * Decimal(str(it['cantidad']))
+
+    codigo_seguridad = uuid.uuid4().hex[:10].upper()
+
+    # 5. Crear Venta
+    venta = Venta.objects.create(
+        id_usuario=usuario_sin_cuenta,
+        metodo_entrega=metodo_entrega,
+        fecha_venta=timezone.now().date(),
+        estado_venta='PENDIENTE',
+        codigo_sec=codigo_seguridad,
+        monto_subtotal=monto_subtotal,
+        costo_envio=costo_envio,
+        id_direccion_envio=direccion_obj
+    )
+
+    # 6. Congelar DetalleVenta y Reducir Stock
+    for it in items:
+        prod = it['id_producto']
+        cant = int(it['cantidad'])
+        precio_unit = Decimal(str(prod.precio_venta))
+        subtotal_renglon = precio_unit * Decimal(str(cant))
+
+        DetalleVenta.objects.create(
+            id_venta=venta,
+            id_producto=prod,
+            cantidad=cant,
+            precio_unitario=precio_unit,
+            subtotal=subtotal_renglon
+        )
+
+        stock = stocks_bloqueados[prod.id_producto]
+        MovimientoStock.objects.create(
+            id_stock=stock,
+            tipo_movimiento='venta',
+            cantidad=cant,
+            fecha=timezone.now().date(),
+            motivo=f"Egreso por Venta Invitado #{venta.id_venta}",
+            uso_taller=False,
+            id_venta=venta
+        )
+
+    # 7. Asentar medio de pago e información de contacto
+    monto_total = monto_subtotal + costo_envio
+    medio_pago = datos_compra['metodo_pago']
+    nombre_contacto = datos_compra['nombre_contacto'].strip()
+    email_contacto = datos_compra['email_contacto'].strip()
+    telefono_contacto = datos_compra['telefono_contacto'].strip()
+    dni_contacto = datos_compra.get('dni_contacto', 'S/N')
+
+    detalle_pago = (
+        f"Invitado: {nombre_contacto} | Email: {email_contacto} | "
+        f"Tel: {telefono_contacto} | DNI: {dni_contacto}"
+    )
+
+    pago = Pago.objects.create(
+        id_venta=venta,
+        medio_pago=medio_pago,
+        monto_pagado=monto_total,
+        fecha_pago=timezone.now().date(),
+        detalle=detalle_pago
+    )
+
+    # 8. Generar Preferencia de Pago si corresponde
+    pref_info = {"preference_id": None, "init_point": None, "modo_simulacion": False}
+    nombre_mp = str(medio_pago.nombre_medio_pago).strip().upper()
+    if any(k in nombre_mp for k in ['MERCADO', 'MP', 'DIGITAL', 'QR', 'ONLINE']):
+        pref_info = crear_preferencia_mercadopago_invitado(
+            venta=venta,
+            nombre_contacto=nombre_contacto,
+            email_contacto=email_contacto,
+            telefono_contacto=telefono_contacto
+        )
+
+    # 9. Auditoría en LogSistema
+    LogSistema.objects.create(
+        fecha_hora=timezone.now(),
+        accion="Realizar Compra Invitado (CU-18)",
+        detalle=(
+            f"Venta de invitado #{venta.id_venta} registrada para {nombre_contacto} ({email_contacto}). "
+            f"Items: {len(items)}, Subtotal: ${monto_subtotal}, Envio: ${costo_envio}, Total: ${monto_total}. "
+            f"Entrega: {metodo_entrega}. Medio de Pago: {medio_pago.nombre_medio_pago}."
+        ),
+        tipo="VENTA_INVITADO",
+        modulo_origen="sales_app",
+        tabla_afectada="venta",
+        id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario_sin_cuenta
+    )
+
+    return {
+        'id_venta': venta.id_venta,
+        'codigo_sec': venta.codigo_sec,
+        'estado_venta': venta.estado_venta,
+        'metodo_entrega': venta.metodo_entrega,
+        'monto_subtotal': venta.monto_subtotal,
+        'costo_envio': venta.costo_envio,
+        'monto_total': monto_total,
+        'preference_id': pref_info.get('preference_id'),
+        'init_point': pref_info.get('init_point'),
+        'modo_simulacion': pref_info.get('modo_simulacion', False),
+        'detalles': [
+            {
+                'id_producto': d.id_producto.id_producto,
+                'producto_nombre': d.id_producto.nombre,
+                'cantidad': d.cantidad,
+                'precio_unitario': d.precio_unitario,
+                'subtotal': d.subtotal
+            } for d in venta.detalleventa_set.all()
+        ]
+    }
+
+
+# ==============================================================================
+# MOTOR INTELIGENTE Y AUTOMATIZADO DE BENEFICIOS Y FIDELIZACIÓN (SERVICES)
+# ==============================================================================
+
+@transaction.atomic
+def generar_beneficio_cliente(
+    *,
+    usuario_destinatario: Usuario,
+    motivo: str,
+    por_desc: Decimal,
+    tiempo_disp_horas: Optional[Decimal] = None,
+    id_producto: Optional[Any] = None,
+    enviado_durante_carrito: bool = False,
+    enviado_momento_compra: bool = False,
+    asunto_notificacion: Optional[str] = None,
+    mensaje_notificacion: Optional[str] = None
+) -> Optional[Beneficio]:
+    """
+    Motor Central de Emisión de Beneficios.
+    Aplica rigurosamente las salvaguardas gerenciales de ConfiguracionSistema:
+    1. motorBeneficiosActivo: Si está inactivo, aborta pacíficamente.
+    2. limitePromocionesMensual: Control de cupo mensual emitido.
+    3. periodoRefrigerioCliente: Cooldown para evitar saturación del cliente.
+    4. porcentajeDescuentoMaximo: Tope infranqueable sobre por_desc.
+    5. vigenciaBeneficioDefecto: Fallback temporal si no se provee.
+    6. Doble canal: Campana web + correo electrónico transaccional Cyber-Tech si es notificación directa.
+    7. Asiento inmutable de auditoría en LogSistema.
+    """
+    from core_app.selectors import (
+        obtener_configuracion_bool,
+        obtener_configuracion_int,
+        obtener_configuracion_decimal
+    )
+    from core_app.services import registrar_y_enviar_notificacion_correo
+    from core_app.models import LogSistema
+    from sales_app.models import Beneficio
+    import datetime
+
+    # 0. Salvaguarda estricta: Consumidor Final nunca recibe beneficios comerciales
+    email_dest = (getattr(usuario_destinatario, 'email', '') or '').strip().lower()
+    if not email_dest or email_dest == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_dest:
+        logger.info(f"[Motor Beneficios] Emisión rechazada: el usuario '{email_dest}' (Consumidor Final / Anónimo) no puede recibir beneficios.")
+        return None
+
+    # 1. Verificar si el motor está encendido globalmente
+    if not obtener_configuracion_bool('motorBeneficiosActivo'):
+        return None
+
+    hoy = timezone.now().date()
+
+    # 2. Control de cupo mensual global
+    limite_mes = obtener_configuracion_int('limitePromocionesMensual', fallback=15)
+    primer_dia_mes = hoy.replace(day=1)
+    beneficios_mes_actual = Beneficio.objects.filter(fecha__gte=primer_dia_mes).count()
+    if beneficios_mes_actual >= limite_mes:
+        return None
+
+    # 3. Control de período de refrigerio (cooldown) por cliente
+    if not enviado_durante_carrito:
+        dias_refrigerio = obtener_configuracion_int('periodoRefrigerioCliente', fallback=7)
+        if dias_refrigerio > 0:
+            fecha_corte_refrigerio = hoy - datetime.timedelta(days=dias_refrigerio)
+            tiene_beneficio_reciente = Beneficio.objects.filter(
+                id_usuario=usuario_destinatario,
+                fecha__gte=fecha_corte_refrigerio
+            ).exists()
+            if tiene_beneficio_reciente:
+                return None
+
+    # 4. Tope de porcentaje máximo
+    max_desc = obtener_configuracion_decimal('porcentajeDescuentoMaximo', fallback=Decimal('5.00'))
+    por_desc_seguro = min(Decimal(str(por_desc)), max_desc)
+    if por_desc_seguro <= Decimal('0.00'):
+        por_desc_seguro = Decimal('1.00')
+
+    # 5. Vigencia por defecto
+    if tiempo_disp_horas is None or tiempo_disp_horas <= Decimal('0.00'):
+        tiempo_disp_horas = obtener_configuracion_decimal('vigenciaBeneficioDefecto', fallback=Decimal('72.00'))
+
+    # 5.b Resolver instancia de Producto segura
+    from catalog_app.models import Producto
+    producto_instancia = None
+    if id_producto:
+        if isinstance(id_producto, Producto):
+            producto_instancia = id_producto
+        elif isinstance(id_producto, (int, str)) and str(id_producto).isdigit():
+            producto_instancia = Producto.objects.filter(id_producto=int(id_producto)).first()
+
+    # 6. Creación física de la entidad Beneficio
+    beneficio = Beneficio.objects.create(
+        id_usuario=usuario_destinatario,
+        id_producto=producto_instancia,
+        motivo=motivo[:500],
+        fecha=hoy,
+        enviado_momento_compra=enviado_momento_compra,
+        enviado_durante_carrito=enviado_durante_carrito,
+        por_desc=por_desc_seguro,
+        tiempo_disp=tiempo_disp_horas
+    )
+
+    # 7. Doble canal: Despacho a Notificación Web + Email si es predictivo / post-taller
+    es_canal_notificacion = (not enviado_durante_carrito and not enviado_momento_compra)
+    if es_canal_notificacion:
+        asunto = asunto_notificacion or "¡Tienes un beneficio exclusivo esperándote en IFixPos!"
+        item_nombre = producto_instancia.nombre if producto_instancia else "toda la tienda y servicio técnico"
+        cuerpo_base = mensaje_notificacion or (
+            f"Hola, hemos habilitado un descuento especial del {por_desc_seguro}% en {item_nombre}. "
+            f"Válido por {int(tiempo_disp_horas)} horas."
+        )
+
+        cuerpo_html = f"""
+        <div style="background-color: #0F172A; color: #E2E8F0; font-family: 'Lexend', sans-serif; padding: 24px; border-radius: 12px; border: 1px solid #1E293B;">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <h1 style="color: #06B6D4; margin: 0; font-size: 20px;">Beneficio Exclusivo IFixPos</h1>
+                <p style="color: #94A3B8; font-size: 13px; margin-top: 4px;">Premio a tu lealtad comercial</p>
+            </div>
+            <div style="background-color: #1E293B; border-radius: 8px; padding: 18px; border-left: 4px solid #8B5CF6; margin-bottom: 20px;">
+                <p style="font-size: 14px; margin: 0; line-height: 1.5;">{cuerpo_base}</p>
+                <div style="margin-top: 14px; font-size: 24px; font-weight: bold; color: #10B981;">
+                    {por_desc_seguro}% OFF
+                </div>
+                <p style="font-size: 11px; color: #64748B; margin-top: 6px;">
+                    Tiempo de vigencia: {int(tiempo_disp_horas)} horas desde su emisión.
+                </p>
+            </div>
+            <p style="font-size: 12px; color: #94A3B8; text-align: center;">
+                Ingresa a tu cuenta en IFixPos y aprovecha tu beneficio antes de que caduque.
+            </p>
+        </div>
+        """
+
+        try:
+            registrar_y_enviar_notificacion_correo(
+                usuario=usuario_destinatario,
+                asunto=asunto,
+                cuerpo_texto=cuerpo_base,
+                tipo_notificacion='BENEFICIO',
+                cuerpo_html=cuerpo_html,
+                mensaje_notificacion=cuerpo_base,
+                adjuntar_logo=True,
+                beneficio=beneficio
+            )
+        except Exception as e:
+            logger.warning(f"[Motor Beneficios] Notificación/Email no despachado: {e}")
+
+    # 8. Asiento inmutable en LogSistema
+    try:
+        LogSistema.objects.create(
+            fecha_hora=timezone.now(),
+            accion="Emisión de Beneficio Inteligente",
+            detalle=f"Beneficio #{beneficio.id_beneficio} emitido a usuario {usuario_destinatario.email} ({por_desc_seguro}% OFF). Motivo: {motivo[:300]}",
+            tipo="BENEFICIO_GENERADO",
+            modulo_origen="sales_app",
+            tabla_afectada="beneficio"
+        )
+    except Exception as e:
+        logger.warning(f"[Motor Beneficios] Error asentando log de emisión: {e}")
+
+    return beneficio
+
+
+@transaction.atomic
+def evaluar_beneficio_durante_carrito(
+    *,
+    id_usuario: int,
+    items_carrito: list
+) -> list:
+    """
+    Momento 1: Cross-selling en tiempo real mientras el cliente arma el carrito.
+    Detecta productos principales en la cesta y busca accesorios compatibles con stock activo.
+    Genera el beneficio con enviado_durante_carrito=True y lo retorna.
+    """
+    from sales_app.models import Beneficio
+    from catalog_app.models import Producto
+    from users_app.models import Usuario
+
+    if not id_usuario or not items_carrito:
+        return []
+
+    try:
+        usuario = Usuario.objects.get(id_usuario=id_usuario)
+    except Usuario.DoesNotExist:
+        return []
+
+    # Salvaguarda: Consumidor Final nunca recibe beneficios
+    email_u = (getattr(usuario, 'email', '') or '').strip().lower()
+    if not email_u or email_u == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_u:
+        return []
+
+    beneficios_generados = []
+    ids_en_carrito = [getattr(i, 'id_producto_id', None) or getattr(i.id_producto, 'id_producto', None) for i in items_carrito]
+
+    for item in items_carrito:
+        prod = getattr(item, 'id_producto', item)
+        id_modelo = getattr(prod, 'id_modelo_id', None) or getattr(prod, 'id_modelo', None)
+        if not id_modelo and hasattr(prod, 'modelos_compatibles'):
+            primer_modelo = prod.modelos_compatibles.first()
+            if primer_modelo:
+                id_modelo = primer_modelo
+
+        id_mod_int = id_modelo.id_modelo if hasattr(id_modelo, 'id_modelo') else id_modelo
+        id_marca_int = getattr(prod, 'id_marca_id', None) or (id_modelo.id_marca_id if hasattr(id_modelo, 'id_marca_id') else None)
+        id_tipo_int = getattr(prod, 'tipo_dispositivo_id_calculado', None) or (id_modelo.id_tipo_dispositivo_id if hasattr(id_modelo, 'id_tipo_dispositivo_id') else None)
+
+        if not id_mod_int and not id_marca_int and not id_tipo_int and not getattr(prod, 'es_universal', False):
+            continue
+
+        # Buscar accesorios compatibles priorizando modelo exacto, luego marca o universales con stock > 0
+        from catalog_app.selectors import obtener_productos_compatibles_con_equipo
+
+        candidatos = obtener_productos_compatibles_con_equipo(
+            id_modelo=id_mod_int,
+            id_marca=id_marca_int,
+            id_tipo_dispositivo=id_tipo_int,
+            solo_con_stock=True
+        )
+        accesorio_compatible = None
+        for cand in candidatos:
+            if cand.id_producto not in ids_en_carrito:
+                accesorio_compatible = cand
+                break
+
+        if accesorio_compatible:
+            # Verificar si ya existe beneficio vigente durante carrito para este accesorio
+            ya_sugerido = Beneficio.objects.filter(
+                id_usuario=usuario,
+                id_producto=accesorio_compatible,
+                enviado_durante_carrito=True,
+                fecha=timezone.now().date()
+            ).exists()
+
+            if not ya_sugerido:
+                motivo = f"Recomendación predictiva durante carrito: Descuento en accesorio compatible {accesorio_compatible.nombre} tras seleccionar {prod.nombre}."
+                b = generar_beneficio_cliente(
+                    usuario_destinatario=usuario,
+                    motivo=motivo,
+                    por_desc=Decimal('5.00'),
+                    tiempo_disp_horas=Decimal('4.00'),
+                    id_producto=accesorio_compatible,
+                    enviado_durante_carrito=True,
+                    enviado_momento_compra=False
+                )
+                if b:
+                    beneficios_generados.append(b)
+
+    return beneficios_generados
+
+
+@transaction.atomic
+def evaluar_beneficio_post_compra(*, venta: Venta) -> Optional[Beneficio]:
+    """
+    Momento 2: Recompensa inmediata post-compra al acreditarse el pago.
+    - Primera compra: Cupón de bienvenida del 5% general para próxima visita.
+    - Cliente VIP (3+ compras en 90 días): Cupón VIP del 5%.
+    """
+    if not venta or not venta.id_usuario:
+        return None
+
+    usuario = venta.id_usuario
+    # Salvaguarda: Consumidor Final nunca recibe beneficios
+    email_u = (getattr(usuario, 'email', '') or '').strip().lower()
+    if not email_u or email_u == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_u:
+        return None
+
+    hoy = timezone.now().date()
+    hace_90d = hoy - datetime.timedelta(days=90)
+
+    compras_pagadas = Venta.objects.filter(
+        id_usuario=usuario,
+        estado_venta__in=['PAGADA', 'PAGADO']
+    ).count()
+
+    if compras_pagadas == 1:
+        # Recompensa primera compra
+        motivo = "Fidelización post-compra: Recompensa de bienvenida para su próxima compra en IFixPos."
+        return generar_beneficio_cliente(
+            usuario_destinatario=usuario,
+            motivo=motivo,
+            por_desc=Decimal('5.00'),
+            tiempo_disp_horas=Decimal('72.00'),
+            id_producto=None,
+            enviado_durante_carrito=False,
+            enviado_momento_compra=True
+        )
+
+    compras_recientes = Venta.objects.filter(
+        id_usuario=usuario,
+        estado_venta__in=['PAGADA', 'PAGADO'],
+        fecha_venta__gte=hace_90d
+    ).count()
+
+    if compras_recientes >= 3:
+        # Cliente frecuente VIP
+        motivo = "Premio al cliente frecuente: Beneficio VIP en reconocimiento a su lealtad comercial."
+        return generar_beneficio_cliente(
+            usuario_destinatario=usuario,
+            motivo=motivo,
+            por_desc=Decimal('5.00'),
+            tiempo_disp_horas=Decimal('120.00'),
+            id_producto=None,
+            enviado_durante_carrito=False,
+            enviado_momento_compra=True
+        )
+
+    return None
+
+
+@transaction.atomic
+def evaluar_beneficio_post_taller(*, reparacion: Any) -> Optional[Beneficio]:
+    """
+    Momento 3: Recompensa y protección técnica post-servicio de taller.
+    - Reparación de pantalla: Descuento en protector/funda para el modelo.
+    - Reparación de batería/carga: Descuento en cargador/cable para el modelo.
+    """
+    from catalog_app.models import Producto
+
+    if not reparacion:
+        return None
+
+    dispositivo = getattr(reparacion, 'id_dispositivo', None)
+    if not dispositivo:
+        return None
+
+    usuario = getattr(dispositivo, 'id_usuario', None)
+    if not usuario:
+        return None
+
+    # Salvaguarda: Consumidor Final nunca recibe beneficios
+    email_u = (getattr(usuario, 'email', '') or '').strip().lower()
+    if not email_u or email_u == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_u:
+        return None
+
+    modelo = getattr(dispositivo, 'id_modelo', None)
+    
+    # Obtener categorías de la reparación de forma segura (soporta ManyToMany o campo directo)
+    nombres_cats = []
+    if hasattr(reparacion, 'categorias'):
+        try:
+            nombres_cats = [c.nombre.upper() for c in reparacion.categorias.all()]
+        except Exception:
+            pass
+    elif hasattr(reparacion, 'id_categoria') and reparacion.id_categoria:
+        nombres_cats = [str(getattr(reparacion.id_categoria, 'nombre', '')).upper()]
+        
+    desc_falla = str(getattr(reparacion, 'desc_cliente', '') or '').upper()
+
+    from catalog_app.selectors import obtener_productos_compatibles_con_equipo
+    candidatos_compatibles = obtener_productos_compatibles_con_equipo(
+        id_modelo=modelo.id_modelo if modelo else None,
+        id_marca=modelo.id_marca_id if modelo else None,
+        id_tipo_dispositivo=modelo.id_tipo_dispositivo_id if modelo else None,
+        solo_con_stock=True
+    )
+
+    es_pantalla = any(any(k in cat for k in ['PANTALLA', 'DISPLAY', 'TACTIL', 'VIDRIO', 'MODULO']) for cat in nombres_cats) or any(k in desc_falla for k in ['PANTALLA', 'DISPLAY', 'TACTIL', 'VIDRIO', 'MODULO'])
+    es_bateria = any(any(k in cat for k in ['BATERIA', 'CARGA', 'PIN', 'CONECTOR', 'ENERGIA']) for cat in nombres_cats) or any(k in desc_falla for k in ['BATERIA', 'CARGA', 'PIN', 'CONECTOR', 'ENERGIA'])
+
+    producto_sugerido = None
+    if es_pantalla:
+        if candidatos_compatibles:
+            producto_sugerido = candidatos_compatibles[0]
+        motivo = f"Protección técnica post-taller: Descuento en accesorio protector tras reparación de pantalla de {modelo.nombre if modelo else 'su dispositivo'}."
+        asunto = "Protege tu pantalla recién reparada en IFixPos — Descuento Especial"
+        mensaje = "Hola, tu equipo ya fue reparado exitosamente. Para evitar futuras roturas, te obsequiamos un descuento especial en accesorios compatibles."
+    elif es_bateria:
+        if candidatos_compatibles:
+            producto_sugerido = candidatos_compatibles[0]
+        motivo = f"Optimización energética post-servicio: Descuento en accesorios de carga tras reparación de batería/energía."
+        asunto = "Cuida la nueva batería de tu equipo con accesorios certificados"
+        mensaje = "Estimado cliente, la nueva batería de tu dispositivo requiere carga estable. Aprovecha un descuento exclusivo en cargadores certificados."
+    else:
+        if candidatos_compatibles:
+            producto_sugerido = candidatos_compatibles[0]
+        motivo = f"Fidelización post-taller: Agradecimiento por servicio técnico en su dispositivo {modelo.nombre if modelo else ''}."
+        asunto = "Beneficio de cortesía post-reparación en IFixPos"
+        mensaje = "Muchas gracias por reparar tus equipos con nosotros. Te dejamos un cupón especial para tu próxima visita."
+
+    return generar_beneficio_cliente(
+        usuario_destinatario=usuario,
+        motivo=motivo,
+        por_desc=Decimal('5.00'),
+        tiempo_disp_horas=Decimal('72.00'),
+        id_producto=producto_sugerido,
+        enviado_durante_carrito=False,
+        enviado_momento_compra=False,
+        asunto_notificacion=asunto,
+        mensaje_notificacion=mensaje
+    )
+
+
+@transaction.atomic
+def evaluar_beneficio_post_calificacion(*, calificacion: Any) -> Optional[Beneficio]:
+    """
+    Momento 3 (Calidad): Recompensa por reseña sobresaliente de 5 estrellas en taller (CU-19).
+    """
+    if not calificacion or getattr(calificacion, 'puntuacion', 0) < 5:
+        return None
+
+    reparacion = getattr(calificacion, 'id_reparacion', None)
+    usuario = getattr(getattr(reparacion, 'id_dispositivo', None), 'id_usuario', None)
+    if not usuario:
+        return None
+
+    # Salvaguarda: Consumidor Final nunca recibe beneficios
+    email_u = (getattr(usuario, 'email', '') or '').strip().lower()
+    if not email_u or email_u == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_u:
+        return None
+
+    motivo = "Agradecimiento por reseña de 5 estrellas: Cupón de reconocimiento tras excelente calificación en servicio técnico."
+    asunto = "¡Gracias por tu calificación de 5 estrellas en IFixPos!"
+    mensaje = "Nos alegra profundamente que hayas tenido una excelente experiencia con nuestro servicio técnico. Te obsequiamos un descuento en tu próxima compra o visita."
+
+    return generar_beneficio_cliente(
+        usuario_destinatario=usuario,
+        motivo=motivo,
+        por_desc=Decimal('5.00'),
+        tiempo_disp_horas=Decimal('120.00'),
+        id_producto=None,
+        enviado_durante_carrito=False,
+        enviado_momento_compra=False,
+        asunto_notificacion=asunto,
+        mensaje_notificacion=mensaje
+    )
+
+
+@transaction.atomic
+def evaluar_beneficios_predictivos_sistema() -> dict:
+    """
+    Momento 4 y 5: Motor de Análisis Predictivo y Carrito Abandonado.
+    Ejecutado periódicamente por tarea programada (Cron / CLI):
+    1. Carrito Abandonado: Carritos con más de 24h sin completar checkout.
+       CONDICIÓN ESTRICTA: SOLO si el usuario NO tiene ningún beneficio ACTIVO en el sistema.
+    2. Mantenimiento Preventivo Laptops/PC (180 días).
+    3. Chequeo Anual Celulares/Tablets (360 días).
+    4. Reactivación de Cliente Inactivo (60 días).
+    """
+    from sales_app.models import CarritoCompra, Beneficio
+    from sales_app.selectors import beneficio_esta_activo
+    from workshop_app.models import Reparacion
+    from users_app.models import Usuario
+
+    hoy = timezone.now().date()
+    ayer = hoy - datetime.timedelta(days=1)
+    hace_180d = hoy - datetime.timedelta(days=180)
+    hace_360d = hoy - datetime.timedelta(days=360)
+    hace_60d = hoy - datetime.timedelta(days=60)
+
+    resumen = {
+        'carritos_abandonados_evaluados': 0,
+        'carritos_beneficiados': 0,
+        'mantenimiento_computadoras': 0,
+        'chequeo_celulares': 0,
+        'reactivacion_inactivos': 0,
+        'total_beneficios_generados': 0
+    }
+
+    # -------------------------------------------------------------------------
+    # 1. Recuperación de Carrito Abandonado (24h)
+    # -------------------------------------------------------------------------
+    carritos_abandonados = CarritoCompra.objects.filter(
+        estado__iexact='activo',
+        fecha_creacion__lte=ayer
+    ).exclude(
+        id_usuario__email__icontains='consumidorfinal'
+    ).select_related('id_usuario').prefetch_related('carritoproducto_set')
+
+    for c in carritos_abandonados:
+        resumen['carritos_abandonados_evaluados'] += 1
+        # Verificar que tenga al menos 1 producto
+        if not c.carritoproducto_set.exists():
+            continue
+
+        usuario = c.id_usuario
+        # REGLA ESTRICTA: NO debe tener NINGÚN beneficio en estado ACTIVO
+        beneficios_usuario = Beneficio.objects.filter(id_usuario=usuario)
+        tiene_activo = any(beneficio_esta_activo(b) for b in beneficios_usuario)
+        if tiene_activo:
+            continue
+
+        motivo = "Recuperación de carrito abandonado: Cupón de incentivo tras 24 horas de inactividad con productos en cesta."
+        asunto = "¡Tus productos te esperan en IFixPos! Completa tu pedido con descuento"
+        mensaje = "Notamos que dejaste artículos pendientes en tu carrito de compras. Para ayudarte a completar tu pedido, te otorgamos un descuento exclusivo por 48 horas."
+
+        b = generar_beneficio_cliente(
+            usuario_destinatario=usuario,
+            motivo=motivo,
+            por_desc=Decimal('5.00'),
+            tiempo_disp_horas=Decimal('48.00'),
+            id_producto=None,
+            enviado_durante_carrito=False,
+            enviado_momento_compra=False,
+            asunto_notificacion=asunto,
+            mensaje_notificacion=mensaje
+        )
+        if b:
+            resumen['carritos_beneficiados'] += 1
+            resumen['total_beneficios_generados'] += 1
+
+    # -------------------------------------------------------------------------
+    # 2. Mantenimiento Preventivo Laptops/PC (180 días)
+    # -------------------------------------------------------------------------
+    reparaciones_antiguas_pc = Reparacion.objects.filter(
+        etapa__in=['ENTREGADO', 'ENTREGADA'],
+        fecha_entrega__lte=hace_180d,
+        id_dispositivo__id_modelo__id_tipo_dispositivo__nombre__iregex=r'(notebook|laptop|pc|computadora|escritorio)'
+    ).select_related('id_dispositivo__id_usuario', 'id_dispositivo__id_modelo')
+
+    usuarios_ya_notificados_pc = set()
+    for rep in reparaciones_antiguas_pc:
+        usr = rep.id_dispositivo.id_usuario
+        if not usr or (getattr(usr, 'email', '') or '').strip().lower() == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in (getattr(usr, 'email', '') or '').lower():
+            continue
+        if usr.id_usuario in usuarios_ya_notificados_pc:
+            continue
+
+        # Verificar si tuvo reparación más reciente
+        tuvo_reciente = Reparacion.objects.filter(
+            id_dispositivo__id_usuario=usr,
+            fecha_entrega__gt=hace_180d
+        ).exists()
+
+        if not tuvo_reciente:
+            usuarios_ya_notificados_pc.add(usr.id_usuario)
+            modelo_nom = rep.id_dispositivo.id_modelo.nombre if rep.id_dispositivo.id_modelo else "su equipo"
+            motivo = f"Mantenimiento predictivo: Recordatorio preventivo térmico para {modelo_nom} tras 6 meses sin servicio."
+            asunto = f"Recordatorio de Mantenimiento Preventivo para tu {modelo_nom} en IFixPos"
+            mensaje = f"Hace 6 meses que realizaste el último mantenimiento a tu equipo. La acumulación de polvo y el desgaste de pasta térmica reducen su vida útil. ¡Agenda un servicio preventivo hoy con descuento!"
+
+            b = generar_beneficio_cliente(
+                usuario_destinatario=usr,
+                motivo=motivo,
+                por_desc=Decimal('5.00'),
+                tiempo_disp_horas=Decimal('168.00'),
+                id_producto=None,
+                enviado_durante_carrito=False,
+                enviado_momento_compra=False,
+                asunto_notificacion=asunto,
+                mensaje_notificacion=mensaje
+            )
+            if b:
+                resumen['mantenimiento_computadoras'] += 1
+                resumen['total_beneficios_generados'] += 1
+
+    # -------------------------------------------------------------------------
+    # 3. Chequeo Anual Smartphones / Tablets (360 días)
+    # -------------------------------------------------------------------------
+    reparaciones_antiguas_mobile = Reparacion.objects.filter(
+        etapa__in=['ENTREGADO', 'ENTREGADA'],
+        fecha_entrega__lte=hace_360d,
+        id_dispositivo__id_modelo__id_tipo_dispositivo__nombre__iregex=r'(celular|telefono|smartphone|tablet|ipad)'
+    ).select_related('id_dispositivo__id_usuario', 'id_dispositivo__id_modelo')
+
+    usuarios_ya_notificados_mobile = set()
+    for rep in reparaciones_antiguas_mobile:
+        usr = rep.id_dispositivo.id_usuario
+        if not usr or (getattr(usr, 'email', '') or '').strip().lower() == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in (getattr(usr, 'email', '') or '').lower():
+            continue
+        if usr.id_usuario in usuarios_ya_notificados_mobile or usr.id_usuario in usuarios_ya_notificados_pc:
+            continue
+
+        tuvo_reciente = Reparacion.objects.filter(
+            id_dispositivo__id_usuario=usr,
+            fecha_entrega__gt=hace_360d
+        ).exists()
+
+        if not tuvo_reciente:
+            usuarios_ya_notificados_mobile.add(usr.id_usuario)
+            modelo_nom = rep.id_dispositivo.id_modelo.nombre if rep.id_dispositivo.id_modelo else "su dispositivo"
+            motivo = f"Chequeo predictivo anual: Recordatorio de salud de batería y rendimiento para {modelo_nom}."
+            asunto = f"Chequeo anual de batería y rendimiento para tu {modelo_nom}"
+            mensaje = f"Tu equipo cumplió un año desde su última revisión técnica. Las baterías sufren degradación con el tiempo. Te ofrecemos un descuento en chequeo y cambio de batería."
+
+            b = generar_beneficio_cliente(
+                usuario_destinatario=usr,
+                motivo=motivo,
+                por_desc=Decimal('5.00'),
+                tiempo_disp_horas=Decimal('168.00'),
+                id_producto=None,
+                enviado_durante_carrito=False,
+                enviado_momento_compra=False,
+                asunto_notificacion=asunto,
+                mensaje_notificacion=mensaje
+            )
+            if b:
+                resumen['chequeo_celulares'] += 1
+                resumen['total_beneficios_generados'] += 1
+
+    # -------------------------------------------------------------------------
+    # 4. Reactivación de Cliente Inactivo (Win-Back - 60 días)
+    # -------------------------------------------------------------------------
+    clientes_con_historial = Usuario.objects.filter(
+        id_rol__codigo__iexact='CLIENTE'
+    ).exclude(
+        email__icontains='consumidorfinal'
+    ).filter(
+        Q(venta__isnull=False) | Q(dispositivo__reparacion__isnull=False)
+    ).distinct()
+
+    for usr in clientes_con_historial:
+        if usr.id_usuario in usuarios_ya_notificados_pc or usr.id_usuario in usuarios_ya_notificados_mobile:
+            continue
+
+        actividad_reciente = Venta.objects.filter(
+            id_usuario=usr,
+            fecha_venta__gt=hace_60d
+        ).exists() or Reparacion.objects.filter(
+            id_dispositivo__id_usuario=usr,
+            fecha_inicio__gt=hace_60d
+        ).exists()
+
+        if not actividad_reciente:
+            beneficios_usr = Beneficio.objects.filter(id_usuario=usr)
+            if any(beneficio_esta_activo(b) for b in beneficios_usr):
+                continue
+
+            motivo = "Campaña algorítmica de reactivación: Beneficio 'Te extrañamos' tras 60 días sin actividad en la plataforma."
+            asunto = "¡Te extrañamos en IFixPos! Descubre un beneficio especial esperándote"
+            mensaje = "Estimado cliente, hace tiempo que no nos visitas. Para que mantengas tus equipos al 100%, te obsequiamos un descuento especial en tu próxima compra o reparación."
+
+            b = generar_beneficio_cliente(
+                usuario_destinatario=usr,
+                motivo=motivo,
+                por_desc=Decimal('5.00'),
+                tiempo_disp_horas=Decimal('72.00'),
+                id_producto=None,
+                enviado_durante_carrito=False,
+                enviado_momento_compra=False,
+                asunto_notificacion=asunto,
+                mensaje_notificacion=mensaje
+            )
+            if b:
+                resumen['reactivacion_inactivos'] += 1
+                resumen['total_beneficios_generados'] += 1
+
+    return resumen
+
+
+@transaction.atomic
+def aplicar_y_canjear_beneficios_en_venta(
+    *,
+    venta: Venta,
+    lista_id_beneficios: list,
+    items_compra: Optional[list] = None
+) -> dict:
+    """
+    Aplica y canjea de forma segura los beneficios seleccionados por el cliente en una venta:
+    1. Valida estado ACTIVO de cada beneficio.
+    2. Calcula descuentos por producto y generales de forma acumulable.
+    3. Actualiza el monto_subtotal de la venta en base de datos.
+    4. Marca los beneficios como consumidos (tiempo_disp=0.00 y motivo=[CANJEADO - Venta #{id}]).
+    5. Asienta en LogSistema.
+    """
+    from sales_app.models import Beneficio
+    from sales_app.selectors import beneficio_esta_activo
+    from core_app.models import LogSistema
+
+    if not venta or not lista_id_beneficios or not venta.id_usuario:
+        return {'descuento_total': Decimal('0.00'), 'beneficios_canjeados': []}
+
+    # Salvaguarda: Consumidor Final no puede canjear beneficios
+    email_u = (getattr(venta.id_usuario, 'email', '') or '').strip().lower()
+    if not email_u or email_u == EMAIL_CONSUMIDOR_FINAL or 'consumidorfinal' in email_u:
+        return {'descuento_total': Decimal('0.00'), 'beneficios_canjeados': []}
+
+    beneficios = list(
+        Beneficio.objects.filter(
+            id_beneficio__in=lista_id_beneficios,
+            id_usuario=venta.id_usuario
+        ).select_related('id_producto')
+    )
+
+    detalles_venta = list(venta.detalleventa_set.select_related('id_producto').all())
+    subtotal_acumulado = Decimal(str(venta.monto_subtotal or 0))
+    descuento_total = Decimal('0.00')
+    canjeados = []
+
+    for b in beneficios:
+        if not beneficio_esta_activo(b):
+            continue
+
+        porc = Decimal(str(b.por_desc or 0)) / Decimal('100.00')
+        horas_previas = float(b.tiempo_disp or 0.0)
+
+        if b.id_producto:
+            # Descuento específico por producto
+            monto_linea = Decimal('0.00')
+            for det in detalles_venta:
+                if det.id_producto_id == b.id_producto_id:
+                    monto_linea += Decimal(str(det.subtotal))
+
+            if monto_linea > Decimal('0.00'):
+                desc = monto_linea * porc
+                descuento_total += desc
+                canjeados.append(b)
+                # Marcar beneficio como canjeado
+                b.tiempo_disp = Decimal('0.00')
+                b.motivo = f"[CANJEADO - Venta #{venta.id_venta} | HorasRemanentes: {horas_previas:.2f}] {b.motivo}"[:500]
+                b.save()
+        else:
+            # Descuento general sobre el subtotal restante
+            desc = subtotal_acumulado * porc
+            descuento_total += desc
+            canjeados.append(b)
+            # Marcar beneficio como canjeado
+            b.tiempo_disp = Decimal('0.00')
+            b.motivo = f"[CANJEADO - Venta #{venta.id_venta} | HorasRemanentes: {horas_previas:.2f}] {b.motivo}"[:500]
+            b.save()
+
+    # Salvaguarda: No superar el subtotal total
+    descuento_total = min(descuento_total, subtotal_acumulado)
+    nuevo_subtotal = max(Decimal('0.00'), subtotal_acumulado - descuento_total)
+
+    venta.monto_subtotal = nuevo_subtotal
+    venta.save(update_fields=['monto_subtotal'])
+
+    if canjeados:
+        try:
+            LogSistema.objects.create(
+                fecha_hora=timezone.now(),
+                accion="Canje de Beneficios en Venta",
+                detalle=f"Se canjearon {len(canjeados)} beneficios en Venta #{venta.id_venta}. Ahorro aplicado: ${descuento_total:.2f}",
+                tipo="BENEFICIO_CANJEADO",
+                modulo_origen="sales_app",
+                tabla_afectada="beneficio"
+            )
+        except Exception as e:
+            logger.warning(f"[Motor Beneficios] Error asentando log de canje: {e}")
+
+    return {
+        'descuento_total': descuento_total,
+        'nuevo_subtotal': nuevo_subtotal,
+        'beneficios_canjeados': [b.id_beneficio for b in canjeados]
+    }
+
+
+@transaction.atomic
+def revertir_beneficios_de_venta_cancelada(*, venta: Venta) -> int:
+    """
+    Restaura los beneficios canjeados en una venta que ha sido cancelada o expiró
+    antes del pago en pasarela, devolviéndolos al estado ACTIVO y recuperando sus horas.
+    """
+    from sales_app.models import Beneficio
+    from core_app.models import LogSistema
+    import re
+
+    if not venta:
+        return 0
+
+    tag = f"[CANJEADO - Venta #{venta.id_venta}"
+    beneficios_canjeados = list(
+        Beneficio.objects.filter(
+            id_usuario=venta.id_usuario,
+            motivo__contains=tag
+        )
+    )
+
+    revertidos = 0
+    for b in beneficios_canjeados:
+        # Extraer HorasRemanentes si existen en el motivo
+        match = re.search(r'HorasRemanentes:\s*([0-9.]+)', b.motivo or '')
+        horas_restauradas = Decimal('72.00')
+        if match:
+            try:
+                horas_restauradas = Decimal(match.group(1))
+            except Exception:
+                pass
+
+        # Quitar el prefijo de canje
+        nuevo_motivo = re.sub(r'\[CANJEADO - Venta #\d+[^\]]*\]\s*', '', b.motivo or '')
+        b.motivo = nuevo_motivo[:500]
+        b.tiempo_disp = max(Decimal('1.00'), horas_restauradas)
+        b.save()
+        revertidos += 1
+
+    if revertidos > 0:
+        try:
+            LogSistema.objects.create(
+                fecha_hora=timezone.now(),
+                accion="Reversión Justa de Beneficios Cancelados",
+                detalle=f"Se restauraron {revertidos} beneficios de la Venta #{venta.id_venta} cancelada/expirada.",
+                tipo="BENEFICIO_REVERTIDO",
+                modulo_origen="sales_app",
+                tabla_afectada="beneficio"
+            )
+        except Exception as e:
+            logger.warning(f"[Motor Beneficios] Error asentando log de reversión: {e}")
+
+    return revertidos

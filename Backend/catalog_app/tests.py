@@ -1655,3 +1655,213 @@ class ProductoImagenesYDescuentosTests(TestCase):
 
 
 
+
+
+class ProductoCompatibilidadMultiModeloGenericoTestCase(TestCase):
+    """
+    Pruebas automatizadas para productos universales, genéricos, multimarca y multimodelo.
+    """
+    def setUp(self):
+        from users_app.models import Usuario, RolUsuario
+        from catalog_app.models import CategoriaProducto, Marca, ModeloDispositivo, TipoDispositivo
+        from django.utils import timezone
+
+        from rest_framework.test import APIClient
+        self.rol_admin = RolUsuario.objects.create(
+            codigo='ADMIN',
+            nombre_rol='Administrador',
+            descripcion='Rol Administrador'
+        )
+        self.admin_user = Usuario.objects.create(
+            email='admin_compat@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin_user)
+
+        self.tipo_celular, _ = TipoDispositivo.objects.get_or_create(
+            nombre='Smartphone',
+            defaults={'estado_activo': True}
+        )
+        self.marca_samsung, _ = Marca.objects.get_or_create(
+            nombre='Samsung',
+            defaults={'estado_activo': True}
+        )
+        self.marca_motorola, _ = Marca.objects.get_or_create(
+            nombre='Motorola',
+            defaults={'estado_activo': True}
+        )
+        self.modelo_a51, _ = ModeloDispositivo.objects.get_or_create(
+            nombre='Galaxy A51',
+            defaults={'id_marca': self.marca_samsung, 'id_tipo_dispositivo': self.tipo_celular, 'estado_activo': True}
+        )
+        self.modelo_a52, _ = ModeloDispositivo.objects.get_or_create(
+            nombre='Galaxy A52',
+            defaults={'id_marca': self.marca_samsung, 'id_tipo_dispositivo': self.tipo_celular, 'estado_activo': True}
+        )
+        self.categoria_acc, _ = CategoriaProducto.objects.get_or_create(
+            nombre='Accesorios y Protectores',
+            defaults={'estado': True}
+        )
+
+    def test_creacion_producto_universal(self):
+        from catalog_app.services import registrar_producto
+        prod = registrar_producto(
+            usuario_admin=self.admin_user,
+            datos_validados={
+                'nombre': 'Paño Limpiador de Pantallas Universal',
+                'precio_venta': 1500.00,
+                'apto_venta': True,
+                'id_categoria': self.categoria_acc.id_categoria,
+                'es_universal': True,
+                'tipo_compatibilidad': 'UNIVERSAL',
+                'stock_inicial': 20
+            }
+        )
+        self.assertTrue(prod.es_universal)
+        self.assertEqual(prod.tipo_compatibilidad, 'UNIVERSAL')
+
+    def test_creacion_producto_multimodelo(self):
+        from catalog_app.services import registrar_producto
+        prod = registrar_producto(
+            usuario_admin=self.admin_user,
+            datos_validados={
+                'nombre': 'Vidrio Templado 9D Doble Calce A51/A52',
+                'precio_venta': 4500.00,
+                'apto_venta': True,
+                'id_categoria': self.categoria_acc.id_categoria,
+                'tipo_compatibilidad': 'MULTI_MODELO',
+                'ids_modelos_compatibles': [self.modelo_a51.id_modelo, self.modelo_a52.id_modelo],
+                'stock_inicial': 15
+            }
+        )
+        self.assertEqual(prod.tipo_compatibilidad, 'MULTI_MODELO')
+        self.assertEqual(prod.modelos_compatibles.count(), 2)
+        modelos_nombres = set(prod.modelos_compatibles.values_list('nombre', flat=True))
+        self.assertEqual(modelos_nombres, {'Galaxy A51', 'Galaxy A52'})
+
+    def test_creacion_producto_multimarca(self):
+        from catalog_app.services import registrar_producto
+        prod = registrar_producto(
+            usuario_admin=self.admin_user,
+            datos_validados={
+                'nombre': 'Cargador Rápido 30W Dual Samsung / Motorola',
+                'precio_venta': 12000.00,
+                'apto_venta': True,
+                'id_categoria': self.categoria_acc.id_categoria,
+                'tipo_compatibilidad': 'MARCAS',
+                'ids_marcas_compatibles': [self.marca_samsung.id_marca, self.marca_motorola.id_marca],
+                'stock_inicial': 10
+            }
+        )
+        self.assertEqual(prod.tipo_compatibilidad, 'MARCAS')
+        self.assertEqual(prod.marcas_compatibles.count(), 2)
+
+    def test_selector_prioridad_compatibilidad(self):
+        from catalog_app.services import registrar_producto
+        from catalog_app.selectors import obtener_productos_compatibles_con_equipo
+
+        funda_a51 = registrar_producto(
+            usuario_admin=self.admin_user,
+            datos_validados={
+                'nombre': 'Funda Silicona Rosa A51',
+                'precio_venta': 5000.00,
+                'apto_venta': True,
+                'id_categoria': self.categoria_acc.id_categoria,
+                'id_modelo': self.modelo_a51.id_modelo,
+                'stock_inicial': 5
+            }
+        )
+
+        soporte_univ = registrar_producto(
+            usuario_admin=self.admin_user,
+            datos_validados={
+                'nombre': 'Soporte Magnético Auto Universal',
+                'precio_venta': 8000.00,
+                'apto_venta': True,
+                'id_categoria': self.categoria_acc.id_categoria,
+                'es_universal': True,
+                'tipo_compatibilidad': 'UNIVERSAL',
+                'stock_inicial': 10
+            }
+        )
+
+        candidatos = obtener_productos_compatibles_con_equipo(
+            id_modelo=self.modelo_a51.id_modelo,
+            id_marca=self.marca_samsung.id_marca,
+            id_tipo_dispositivo=self.tipo_celular.id_tipo_dispositivo,
+            solo_con_stock=True
+        )
+        self.assertTrue(len(candidatos) >= 1)
+        self.assertEqual(candidatos[0].id_producto, funda_a51.id_producto)
+
+    def test_validacion_serializer_mono_modelo_sin_modelo_falla(self):
+        from catalog_app.serializers import ProductoCreateInputSerializer
+        data = {
+            'nombre': 'Funda Aislada Sin Modelo',
+            'id_categoria': self.categoria_acc.id_categoria,
+            'precio': 1200.00,
+            'apto_venta': True,
+            'tipo_compatibilidad': 'MONO_MODELO',
+        }
+        serializer = ProductoCreateInputSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('id_modelo', serializer.errors)
+
+    def test_validacion_serializer_multi_modelo_sin_modelos_falla(self):
+        from catalog_app.serializers import ProductoCreateInputSerializer
+        data = {
+            'nombre': 'Vidrio Múltiple Sin Modelos',
+            'id_categoria': self.categoria_acc.id_categoria,
+            'precio': 2500.00,
+            'apto_venta': True,
+            'tipo_compatibilidad': 'MULTI_MODELO',
+            'ids_modelos_compatibles': []
+        }
+        serializer = ProductoCreateInputSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('ids_modelos_compatibles', serializer.errors)
+
+    def test_validacion_serializer_marcas_sin_marcas_falla(self):
+        from catalog_app.serializers import ProductoCreateInputSerializer
+        data = {
+            'nombre': 'Cargador Samsung Sin Marcas',
+            'id_categoria': self.categoria_acc.id_categoria,
+            'precio': 4500.00,
+            'apto_venta': True,
+            'tipo_compatibilidad': 'MARCAS',
+            'ids_marcas_compatibles': []
+        }
+        serializer = ProductoCreateInputSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('ids_marcas_compatibles', serializer.errors)
+
+    def test_validacion_serializer_tipo_dispositivo_sin_tipo_falla(self):
+        from catalog_app.serializers import ProductoCreateInputSerializer
+        data = {
+            'nombre': 'Accesorio de Celular Sin Tipo',
+            'id_categoria': self.categoria_acc.id_categoria,
+            'precio': 3000.00,
+            'apto_venta': True,
+            'tipo_compatibilidad': 'TIPO_DISPOSITIVO',
+        }
+        serializer = ProductoCreateInputSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('id_tipo_dispositivo', serializer.errors)
+
+    def test_validacion_serializer_universal_exitoso(self):
+        from catalog_app.serializers import ProductoCreateInputSerializer
+        data = {
+            'nombre': 'Paño Microfibra Universal',
+            'id_categoria': self.categoria_acc.id_categoria,
+            'precio': 800.00,
+            'apto_venta': True,
+            'tipo_compatibilidad': 'UNIVERSAL',
+        }
+        serializer = ProductoCreateInputSerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertTrue(serializer.validated_data['es_universal'])
+        self.assertEqual(serializer.validated_data['tipo_compatibilidad'], 'UNIVERSAL')

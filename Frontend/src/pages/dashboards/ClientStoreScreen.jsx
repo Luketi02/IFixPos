@@ -8,6 +8,10 @@ import { formatearNombreConInicial } from '../../utils/roleRoutes';
 import { obtenerImagenProducto, obtenerGaleriaImagenes, formatearMoneda } from '../../utils/productImages';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 import CheckoutModal from '../../components/cart/CheckoutModal';
+import ClientBenefitsModal from '../../components/sales/ClientBenefitsModal';
+import GuestCheckoutChoiceModal from '../../components/cart/GuestCheckoutChoiceModal';
+import GuestCheckoutModal from '../../components/cart/GuestCheckoutModal';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -108,6 +112,26 @@ function BannerOrdenPendiente({ compra, onRetomar, onCancelar, onExpirado }) {
   );
 }
 
+
+// =============================================================================
+// UTILIDADES PARA EL CARRITO LOCAL DE INVITADOS (SIN SESIÓN)
+// =============================================================================
+const GUEST_CART_KEY = 'guest_cart_items';
+
+const obtenerCarritoLocal = () => {
+  try {
+    const raw = localStorage.getItem(GUEST_CART_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const guardarCarritoLocal = (items) => {
+  try {
+    localStorage.setItem(GUEST_CART_KEY, JSON.stringify(items));
+  } catch (e) {}
+};
 export default function ClientStoreScreen() {
   const { user, token } = useAuth();
 
@@ -131,8 +155,15 @@ export default function ClientStoreScreen() {
   const [agregandoId, setAgregandoId] = useState(null);
   const [quitandoId, setQuitandoId] = useState(null);
   const [resumenCarrito, setResumenCarrito] = useState({ total_articulos: 0, items: [], monto_subtotal: 0 });
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [carritoDrawerAbierto, setCarritoDrawerAbierto] = useState(false);
   const [checkoutModalAbierto, setCheckoutModalAbierto] = useState(false);
+  const [modalBeneficiosClienteAbierto, setModalBeneficiosClienteAbierto] = useState(false);
+  const [conteoBeneficiosActivos, setConteoBeneficiosActivos] = useState(0);
+  const [sugerenciaBeneficio, setSugerenciaBeneficio] = useState(null);
+  const [guestChoiceModalAbierto, setGuestChoiceModalAbierto] = useState(false);
+  const [guestCheckoutModalAbierto, setGuestCheckoutModalAbierto] = useState(false);
   const [toastNotificacion, setToastNotificacion] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -186,13 +217,26 @@ export default function ClientStoreScreen() {
       }
     };
     cargarCategorias();
-  }, []);
+    if (token) {
+      axios.get(`${API_BASE_URL}/api/sales/beneficios/mis-beneficios/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then((res) => {
+        setConteoBeneficiosActivos(res.data?.total_activos || 0);
+      }).catch(() => {});
+    }
+  }, [token]);
 
   // ---------------------------------------------------------------------------
   // Consulta de Resumen del Carrito Activo
   // ---------------------------------------------------------------------------
   const refrescarCarrito = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      const localItems = obtenerCarritoLocal();
+      const cantTotal = localItems.reduce((acc, i) => acc + Number(i.cantidad || 0), 0);
+      const subTotal = localItems.reduce((acc, i) => acc + Number(i.subtotal || 0), 0);
+      setResumenCarrito({ total_articulos: cantTotal, items: localItems, monto_subtotal: subTotal });
+      return;
+    }
     try {
       const res = await axios.get(`${API_BASE_URL}/api/sales/carrito/`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -206,6 +250,35 @@ export default function ClientStoreScreen() {
   useEffect(() => {
     refrescarCarrito();
   }, [refrescarCarrito]);
+  // Sincronizar items del carrito de invitado cuando el usuario se autentica
+  useEffect(() => {
+    const sincronizarCarritoInvitado = async () => {
+      if (!token) return;
+      const localItems = obtenerCarritoLocal();
+      if (localItems.length > 0) {
+        try {
+          for (const it of localItems) {
+            await axios.post(
+              `${API_BASE_URL}/api/sales/carrito/agregar/`,
+              { id_producto: it.id_producto, cantidad: it.cantidad },
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+          }
+          localStorage.removeItem(GUEST_CART_KEY);
+          await refrescarCarrito();
+        } catch (err) {
+          console.warn('Inconveniente al transferir carrito de invitado tras login:', err);
+        }
+      }
+
+      if (searchParams.get('checkout') === 'true') {
+        setCheckoutModalAbierto(true);
+      }
+    };
+
+    sincronizarCarritoInvitado();
+  }, [token, searchParams, refrescarCarrito]);
+
 
   // ---------------------------------------------------------------------------
   // Carga y Filtrado de Productos de la Tienda
@@ -250,12 +323,53 @@ export default function ClientStoreScreen() {
   }, [refrescarCarrito]);
 
   const actualizarCantidadItem = useCallback((idProducto, nuevaCantidad, productoInfo = null) => {
+    const cantidadObjetivo = Math.max(0, parseInt(nuevaCantidad, 10) || 0);
+
+    // Caso Invitado (sin sesión): sincroniza en localStorage
     if (!token) {
-      setErrorMessage('Debes iniciar sesión para administrar tu carrito de compras.');
+      setResumenCarrito((prev) => {
+        const itemsPrev = Array.isArray(prev?.items) ? prev.items : [];
+        let itemsCopia = [...itemsPrev];
+        const idx = itemsCopia.findIndex((i) => i.id_producto === idProducto);
+
+        if (cantidadObjetivo <= 0) {
+          itemsCopia = itemsCopia.filter((i) => i.id_producto !== idProducto);
+        } else if (idx >= 0) {
+          const itemActual = itemsCopia[idx];
+          const sub = cantidadObjetivo * Number(itemActual.precio_unitario || 0);
+          itemsCopia[idx] = {
+            ...itemActual,
+            cantidad: cantidadObjetivo,
+            subtotal: sub
+          };
+        } else if (productoInfo) {
+          const precioUnitario = Number(
+            productoInfo.tiene_descuento ? productoInfo.precio_final : productoInfo.precio_venta
+          ) || 0;
+          itemsCopia.push({
+            id_item: `guest-${idProducto}`,
+            id_producto: idProducto,
+            producto_nombre: productoInfo.nombre,
+            producto_codigo: productoInfo.codigo_barras || '',
+            cantidad: cantidadObjetivo,
+            precio_unitario: precioUnitario,
+            subtotal: cantidadObjetivo * precioUnitario,
+            imagen_url: productoInfo.imagen_url || null
+          });
+        }
+
+        const nuevoSubtotal = itemsCopia.reduce((acc, i) => acc + Number(i.subtotal || 0), 0);
+        const nuevaCantTotal = itemsCopia.reduce((acc, i) => acc + Number(i.cantidad || 0), 0);
+        guardarCarritoLocal(itemsCopia);
+
+        return {
+          items: itemsCopia,
+          monto_subtotal: nuevoSubtotal,
+          total_articulos: nuevaCantTotal
+        };
+      });
       return;
     }
-
-    const cantidadObjetivo = Math.max(0, parseInt(nuevaCantidad, 10) || 0);
 
     // 1. Actualización Optimista Instantánea (0ms de latencia visual, sin trabas)
     setResumenCarrito((prev) => {
@@ -350,11 +464,6 @@ export default function ClientStoreScreen() {
   const handleAgregarAlCarrito = async (producto, cantidadDeseada = 1) => {
     if (!producto || !producto.en_stock) return;
 
-    if (!token) {
-      setErrorMessage('Debes iniciar sesión para añadir productos a tu carrito.');
-      return;
-    }
-
     const cantidadFinal = Math.max(1, parseInt(cantidadDeseada, 10) || 1);
     const idProd = producto.id_producto;
     const precioUnitario = Number(producto.tiene_descuento ? producto.precio_final : producto.precio_venta) || 0;
@@ -374,10 +483,24 @@ export default function ClientStoreScreen() {
         cantidad: cantidadFinal
       });
     }
+
+    if (token) {
+      try {
+        const resRec = await axios.get(`${API_BASE_URL}/api/sales/beneficios/recomendacion-carrito/`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const recs = resRec.data?.recomendaciones || [];
+        if (recs.length > 0) {
+          setSugerenciaBeneficio(recs[0]);
+          setConteoBeneficiosActivos((prev) => prev + 1);
+        }
+      } catch (e) {
+        // Silencioso
+      }
+    }
   };
 
   const handleQuitarDelCarrito = (idProducto, cantidadAQuitar = null) => {
-    if (!token) return;
 
     if (cantidadAQuitar === null || cantidadAQuitar === undefined) {
       // Eliminar por completo
@@ -456,8 +579,8 @@ export default function ClientStoreScreen() {
 
   return (
     <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Barra de Navegación Lateral (Rol Cliente) */}
-      <AdminSidebar activeMenu="client-store" role="cliente" />
+      {/* Barra de Navegación Lateral (Solo si el cliente tiene sesión) */}
+      {token && <AdminSidebar activeMenu="client-store" role="cliente" />}
 
       {/* Contenedor Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto relative">
@@ -484,7 +607,30 @@ export default function ClientStoreScreen() {
             </div>
 
             {/* Acciones de Cabecera: Botón de Carrito y Menú de Perfil */}
-            <div className="flex items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Botón Acceso Rápido: Mis Beneficios y Cupones (Cliente Autenticado) */}
+              {token && (
+                <button
+                  type="button"
+                  onClick={() => setModalBeneficiosClienteAbierto(true)}
+                  className="relative p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/80 hover:border-violet-500/40 text-slate-200 hover:text-violet-400 transition-all active:scale-95 group cursor-pointer"
+                  title="Mis Beneficios y Cupones"
+                >
+                  <svg className="w-5 h-5 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                  </svg>
+                  {conteoBeneficiosActivos > 0 && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="absolute -top-1.5 -right-1.5 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center shadow-lg shadow-violet-500/40"
+                    >
+                      {conteoBeneficiosActivos}
+                    </motion.span>
+                  )}
+                </button>
+              )}
+
               {/* Botón Carrito con Badge Reactivo */}
               <button
                 type="button"
@@ -507,8 +653,25 @@ export default function ClientStoreScreen() {
                 )}
               </button>
 
-              {/* Menú Desplegable de Perfil */}
-              <UserProfileDropdown align="right" />
+              {/* Menú Desplegable de Perfil o Botones de Acceso */}
+              {token ? (
+                <UserProfileDropdown align="right" />
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to="/login"
+                    className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-1.5 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors"
+                  >
+                    Iniciar Sesión
+                  </Link>
+                  <Link
+                    to="/register"
+                    className="text-xs font-bold bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 px-3.5 py-1.5 rounded-xl shadow-[0_0_12px_rgba(6,182,212,0.3)] transition-all transform active:scale-95 hidden sm:inline-block"
+                  >
+                    Crear Cuenta
+                  </Link>
+                </div>
+              )}
             </div>
 
           </div>
@@ -779,9 +942,24 @@ export default function ClientStoreScreen() {
 
                     {/* Título o nombre del producto */}
                     <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                      <h2 className="text-[#F8FAFC] font-bold text-base line-clamp-2 group-hover:text-cyan-300 transition-colors leading-snug">
-                        {prod.nombre}
-                      </h2>
+                      <div className="space-y-1.5">
+                        {prod.es_universal ? (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1 w-fit">
+                            🌐 Universal
+                          </span>
+                        ) : prod.tipo_compatibilidad === 'MULTI_MODELO' ? (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 inline-flex items-center gap-1 w-fit">
+                            📱 Multi-modelo
+                          </span>
+                        ) : prod.tipo_compatibilidad === 'MARCAS' ? (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-300 border border-violet-500/30 inline-flex items-center gap-1 w-fit">
+                            🏷️ Multimarca
+                          </span>
+                        ) : null}
+                        <h2 className="text-[#F8FAFC] font-bold text-base line-clamp-2 group-hover:text-cyan-300 transition-colors leading-snug">
+                          {prod.nombre}
+                        </h2>
+                      </div>
                       <div className="pt-2 border-t border-slate-700/50 flex items-center justify-between text-xs text-cyan-400/90 font-medium">
                         <span className="group-hover:text-cyan-300 transition-colors">Ver especificaciones</span>
                         <svg className="w-4 h-4 transform group-hover:translate-x-1 transition-transform text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -950,9 +1128,13 @@ export default function ClientStoreScreen() {
 
                       {/* Modelo */}
                       <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
-                        <span className="text-slate-400 text-[10px] uppercase font-mono block">Modelo</span>
+                        <span className="text-slate-400 text-[10px] uppercase font-mono block">Modelo / Compatibilidad</span>
                         <span className="text-cyan-300 font-semibold text-sm truncate block mt-0.5">
-                          {productoDetalle.modelo_nombre || 'Universal / Compatible'}
+                          {productoDetalle.es_universal
+                            ? '🌐 Universal (Todos los equipos)'
+                            : productoDetalle.tipo_compatibilidad === 'MULTI_MODELO' && productoDetalle.modelos_compatibles?.length > 0
+                              ? `📱 Multi-modelo (${productoDetalle.modelos_compatibles.length})`
+                              : productoDetalle.modelo_nombre || 'Universal / Compatible'}
                         </span>
                       </div>
 
@@ -1244,9 +1426,15 @@ export default function ClientStoreScreen() {
                       onClick={async () => {
                         setSincronizandoCheckout(true);
                         try {
-                          await forzarSincronizacionCarrito();
-                          setCarritoDrawerAbierto(false);
-                          setCheckoutModalAbierto(true);
+                          if (token) {
+                            await forzarSincronizacionCarrito();
+                            setCarritoDrawerAbierto(false);
+                            setCheckoutModalAbierto(true);
+                          } else {
+                            // Invitado: abrir modal de decisión
+                            setCarritoDrawerAbierto(false);
+                            setGuestChoiceModalAbierto(true);
+                          }
                         } catch (err) {
                           console.error('Error al preparar orden:', err);
                         } finally {
@@ -1328,6 +1516,35 @@ export default function ClientStoreScreen() {
       </AnimatePresence>
 
       {/* ===================================================================== */}
+      {/* Modal de Elección: Registrarse vs Continuar como Invitado              */}
+      {/* ===================================================================== */}
+      <GuestCheckoutChoiceModal
+        isOpen={guestChoiceModalAbierto}
+        onClose={() => setGuestChoiceModalAbierto(false)}
+        onSelectRegister={() => {
+          setGuestChoiceModalAbierto(false);
+          navigate('/register?redirect=/tienda&checkout=true');
+        }}
+        onSelectGuest={() => {
+          setGuestChoiceModalAbierto(false);
+          setGuestCheckoutModalAbierto(true);
+        }}
+      />
+
+      {/* ===================================================================== */}
+      {/* Modal de Checkout de Invitado (Sin Cuenta Registrada)                  */}
+      {/* ===================================================================== */}
+      <GuestCheckoutModal
+        isOpen={guestCheckoutModalAbierto}
+        onClose={() => setGuestCheckoutModalAbierto(false)}
+        items={resumenCarrito.items || []}
+        onCompraExitosa={(venta) => {
+          localStorage.removeItem(GUEST_CART_KEY);
+          setResumenCarrito({ total_articulos: 0, items: [], monto_subtotal: 0 });
+        }}
+      />
+
+      {/* ===================================================================== */}
       {/* Modal de Checkout Virtual (CU-18)                                     */}
       {/* ===================================================================== */}
       <CheckoutModal
@@ -1362,6 +1579,55 @@ export default function ClientStoreScreen() {
           consultarCompraPendiente();
         }}
       />
+
+      {/* Modal de Mis Beneficios y Cupones (Motor Inteligente) */}
+      <ClientBenefitsModal
+        isOpen={modalBeneficiosClienteAbierto}
+        onClose={() => setModalBeneficiosClienteAbierto(false)}
+        onUsarEnTienda={() => setModalBeneficiosClienteAbierto(false)}
+      />
+
+      {/* Popover / Toast Flotante: Recomendación Predictiva en Tiempo Real */}
+      <AnimatePresence>
+        {sugerenciaBeneficio && (
+          <motion.div
+            initial={{ opacity: 0, y: 25, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 25, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 max-w-sm p-4 rounded-2xl bg-gradient-to-br from-[#0F172A] to-[#1E293B] border border-cyan-500/50 shadow-2xl shadow-cyan-950/70 space-y-2.5 backdrop-blur-xl"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-400">
+                <span>🎁</span>
+                <span>¡Recomendación Inteligente!</span>
+              </div>
+              <button
+                onClick={() => setSugerenciaBeneficio(null)}
+                className="text-slate-400 hover:text-white text-xs p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-300 leading-snug">
+              {sugerenciaBeneficio.motivo}
+            </p>
+            <div className="flex items-center justify-between pt-1 border-t border-slate-700/60">
+              <span className="text-xs font-bold font-mono text-emerald-400">
+                {sugerenciaBeneficio.por_desc}% OFF
+              </span>
+              <button
+                onClick={() => {
+                  setSugerenciaBeneficio(null);
+                  setModalBeneficiosClienteAbierto(true);
+                }}
+                className="px-3 py-1 rounded-lg text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors cursor-pointer"
+              >
+                Ver Cupón
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

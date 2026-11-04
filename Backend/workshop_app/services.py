@@ -170,8 +170,11 @@ def validar_imagen_dispositivo(archivo) -> None:
     if ext not in formatos_permitidos:
         raise ValidationError(f"Formato de imagen no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
 
-    if hasattr(archivo, 'size') and archivo.size > 5 * 1024 * 1024:
-        raise ValidationError("El archivo de imagen supera el tamaño máximo permitido de 5 MB.")
+    from core_app.selectors import obtener_tamano_maximo_archivo_bytes, obtener_tamano_maximo_archivo_mb
+    max_bytes = obtener_tamano_maximo_archivo_bytes()
+    max_mb = obtener_tamano_maximo_archivo_mb()
+    if hasattr(archivo, 'size') and archivo.size > max_bytes:
+        raise ValidationError(f"El archivo de imagen supera el tamaño máximo permitido de {max_mb} MB.")
 
 
 def guardar_archivo_imagen_dispositivo(*, archivo, id_propietario: int) -> str:
@@ -1147,6 +1150,11 @@ def cargar_diagnostico_tecnico(
     # Paso 1: Obtener reparación y verificar estado estricto 'EN_DIAGNOSTICO'
     reparacion = obtener_reparacion_para_diagnostico(id_reparacion)
 
+    # Paso 1.1: Aplicar configuración de Mano de Obra (costoManoDeObra) si no fue provisto
+    from core_app.selectors import obtener_configuracion_decimal
+    if datos_validados.get('costo_mano_obra') is None:
+        datos_validados['costo_mano_obra'] = obtener_configuracion_decimal('costoManoDeObra', Decimal('30000.00'))
+
     # Paso 2: Instanciar y guardar Diagnóstico técnico
     diagnostico = Diagnostico.objects.create(
         id_reparacion=reparacion,
@@ -1777,6 +1785,14 @@ def cambiar_estado_reparacion(
         except Exception:
             pass
 
+    # Hook Transaccional: Motor de Beneficios Post-Taller al entregar reparación
+    if nuevo_estado in ('ENTREGADO', 'ENTREGADA'):
+        try:
+            from sales_app.services import evaluar_beneficio_post_taller
+            evaluar_beneficio_post_taller(reparacion=reparacion)
+        except Exception as e:
+            logger.warning(f"[Motor Beneficios] Error evaluando post-taller: {e}")
+
     # Paso 7: Notificación automática por correo y campanita al cliente con link
     generar_y_enviar_notificacion_cambio_estado(
         reparacion=reparacion,
@@ -1996,6 +2012,14 @@ def calificar_reparacion(
         fecha=fecha_actual,
         id_reparacion=reparacion
     )
+
+    # Hook Transaccional: Recompensa por Calificación 5 Estrellas (CU-19)
+    if puntuacion == 5:
+        try:
+            from sales_app.services import evaluar_beneficio_post_calificacion
+            evaluar_beneficio_post_calificacion(calificacion=calificacion)
+        except Exception as e:
+            logger.warning(f"[Motor Beneficios] Error evaluando post-calificación: {e}")
 
     # Paso 4: Registro de auditoría inmutable en LogSistema
     email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))

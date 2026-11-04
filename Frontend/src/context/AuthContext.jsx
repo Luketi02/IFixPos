@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthContext } from './AuthContextDefinition';
+import { EVENTO_CUENTA_CAMBIADA } from '../utils/sesionExpirada';
 
 const getInitialSession = () => {
   try {
@@ -40,6 +41,75 @@ export const AuthProvider = ({ children }) => {
       )
     )
   );
+
+  // Sincronización multi-pestaña para evitar operar con 2 cuentas en el mismo navegador
+  useEffect(() => {
+    const sincronizarSesionStorage = (e) => {
+      // Ignorar cambios que no pertenezcan a las claves de autenticación
+      if (e.key && !['access_token', 'token', 'user'].includes(e.key)) {
+        return;
+      }
+
+      const storedToken = localStorage.getItem('access_token') || localStorage.getItem('token');
+      const storedUserStr = localStorage.getItem('user');
+
+      // Caso 1: Cierre de sesión en otra pestaña
+      if (!storedToken || !storedUserStr) {
+        if (session.token || session.user) {
+          setSession({ token: null, user: null });
+        }
+        return;
+      }
+
+      // Caso 2: Cambio de cuenta o inicio de sesión en otra pestaña
+      try {
+        const storedUser = JSON.parse(storedUserStr);
+        if (session.user && storedUser && session.user.id_usuario !== storedUser.id_usuario) {
+          // Se detectó cambio de cuenta en otra pestaña
+          setSession({ token: storedToken, user: storedUser });
+          window.dispatchEvent(new CustomEvent(EVENTO_CUENTA_CAMBIADA, {
+            detail: { anterior: session.user, nueva: storedUser }
+          }));
+        } else if (!session.token && storedToken) {
+          setSession({ token: storedToken, user: storedUser });
+        }
+      } catch (err) {
+        console.error('Error sincronizando sesión entre pestañas:', err);
+      }
+    };
+
+    const handleFocus = () => {
+      const storedToken = localStorage.getItem('access_token') || localStorage.getItem('token');
+      const storedUserStr = localStorage.getItem('user');
+
+      if (!storedToken || !storedUserStr) {
+        if (session.token || session.user) {
+          setSession({ token: null, user: null });
+        }
+        return;
+      }
+
+      try {
+        const storedUser = JSON.parse(storedUserStr);
+        if (session.user && storedUser && session.user.id_usuario !== storedUser.id_usuario) {
+          setSession({ token: storedToken, user: storedUser });
+          window.dispatchEvent(new CustomEvent(EVENTO_CUENTA_CAMBIADA, {
+            detail: { anterior: session.user, nueva: storedUser }
+          }));
+        }
+      } catch (err) {
+        console.error('Error verificando sesión en focus:', err);
+      }
+    };
+
+    window.addEventListener('storage', sincronizarSesionStorage);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      window.removeEventListener('storage', sincronizarSesionStorage);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [session]);
 
   const login = (tokens, userData) => {
     const accessToken = typeof tokens === 'string' ? tokens : (tokens?.access || tokens?.access_token);

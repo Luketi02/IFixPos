@@ -212,6 +212,11 @@ export default function CheckoutModal({
   const [mediosPago, setMediosPago] = useState([]);
   const [cargandoMediosPago, setCargandoMediosPago] = useState(false);
   const [medioPagoSeleccionadoId, setMedioPagoSeleccionadoId] = useState(null);
+
+  // Beneficios y Cupones Activos del Cliente (Motor Inteligente)
+  const [cuponesDisponibles, setCuponesDisponibles] = useState([]);
+  const [cuponesSeleccionados, setCuponesSeleccionados] = useState([]);
+  const [cargandoCupones, setCargandoCupones] = useState(false);
   const [errorMedioPago, setErrorMedioPago] = useState('');
 
   // ---------------------------------------------------------------------------
@@ -366,6 +371,21 @@ export default function CheckoutModal({
   // ---------------------------------------------------------------------------
   // Carga de Medios de Pago Activos
   // ---------------------------------------------------------------------------
+  const cargarCupones = useCallback(async () => {
+    if (!token) return;
+    setCargandoCupones(true);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/sales/beneficios/mis-beneficios/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCuponesDisponibles(res.data?.activos || []);
+    } catch (err) {
+      console.warn('No se pudieron cargar los cupones del cliente:', err);
+    } finally {
+      setCargandoCupones(false);
+    }
+  }, [token]);
+
   const cargarMediosPago = useCallback(async () => {
     if (!token) return;
     setCargandoMediosPago(true);
@@ -436,6 +456,7 @@ export default function CheckoutModal({
       } else {
         cargarDirecciones();
         cargarMediosPago();
+        cargarCupones();
         cargarCostoEnvio(direccionSeleccionadaId);
         setPasoActual(1);
         setEsperandoPagoMP(false);
@@ -461,10 +482,61 @@ export default function CheckoutModal({
   }, [isOpen, ordenParaRetomar?.id_venta]);
 
   // ---------------------------------------------------------------------------
-  // Cálculos Financieros
+  // Cálculos Financieros con Acumulación de Beneficios (Motor Inteligente)
   // ---------------------------------------------------------------------------
+  const calculoDescuentos = useMemo(() => {
+    if (!cuponesSeleccionados.length || !cuponesDisponibles.length) {
+      return { totalAhorro: 0, desglose: [] };
+    }
+
+    let subtotalRestante = Number(subtotalLocal || 0);
+    let totalAhorro = 0;
+    const desglose = [];
+
+    // 1. Primero cupones específicos por producto
+    cuponesSeleccionados.forEach((idB) => {
+      const cup = cuponesDisponibles.find((c) => c.id_beneficio === idB);
+      if (!cup) return;
+
+      const porc = Number(cup.por_desc || 0) / 100;
+      if (cup.id_producto) {
+        const item = (itemsCarrito || []).find((it) => (it.id_producto?.id_producto || it.id_producto) === cup.id_producto);
+        if (item) {
+          const precioItem = Number(item.subtotal || (Number(item.id_producto?.precio_venta || item.precio_unitario || 0) * Number(item.cantidad || 1)));
+          const ahorro = precioItem * porc;
+          totalAhorro += ahorro;
+          desglose.push({
+            id_beneficio: cup.id_beneficio,
+            nombre: `${cup.por_desc}% OFF en ${cup.producto_nombre}`,
+            monto: ahorro
+          });
+        }
+      }
+    });
+
+    // 2. Luego cupones generales sobre el subtotal restante
+    cuponesSeleccionados.forEach((idB) => {
+      const cup = cuponesDisponibles.find((c) => c.id_beneficio === idB);
+      if (!cup || cup.id_producto) return;
+
+      const porc = Number(cup.por_desc || 0) / 100;
+      const baseAplicable = Math.max(0, subtotalRestante - totalAhorro);
+      const ahorro = baseAplicable * porc;
+      totalAhorro += ahorro;
+      desglose.push({
+        id_beneficio: cup.id_beneficio,
+        nombre: `${cup.por_desc}% OFF General`,
+        monto: ahorro
+      });
+    });
+
+    totalAhorro = Math.min(totalAhorro, Number(subtotalLocal || 0));
+    return { totalAhorro, desglose };
+  }, [cuponesSeleccionados, cuponesDisponibles, subtotalLocal, itemsCarrito]);
+
+  const subtotalConDescuentos = Math.max(0, Number(subtotalLocal || 0) - calculoDescuentos.totalAhorro);
   const costoEnvioFinal = metodoEntrega === 'ENVIO' ? Number(costoEnvioEstimado || 0) : 0;
-  const montoTotalFinal = Number(subtotalLocal || 0) + costoEnvioFinal;
+  const montoTotalFinal = subtotalConDescuentos + costoEnvioFinal;
 
   // Total exacto de la orden a mostrar en pantalla de espera de Mercado Pago (sin depender del carrito vaciado)
   const totalEsperandoMP = useMemo(() => {
@@ -773,7 +845,8 @@ export default function CheckoutModal({
       const payload = {
         metodo_entrega: metodoEntrega,
         metodo_pago: medioPagoSeleccionadoId,
-        id_direccion_envio: metodoEntrega === 'ENVIO' ? direccionSeleccionadaId : null
+        id_direccion_envio: metodoEntrega === 'ENVIO' ? direccionSeleccionadaId : null,
+        beneficios_aplicados: cuponesSeleccionados
       };
 
       const res = await axios.post(`${API_BASE_URL}/api/sales/compras/virtual/`, payload, {
@@ -1648,12 +1721,82 @@ export default function CheckoutModal({
                 </div>
               </div>
 
+              {/* Selector de Beneficios y Cupones (Acumulable) */}
+              {cuponesDisponibles.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-cyan-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>🎁</span>
+                      <span>Tus Beneficios Disponibles (Acumulables)</span>
+                    </span>
+                    <span className="text-[10px] text-cyan-400 font-mono">
+                      {cuponesSeleccionados.length} seleccionado(s)
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar">
+                    {cuponesDisponibles.map((cup) => {
+                      const seleccionado = cuponesSeleccionados.includes(cup.id_beneficio);
+                      return (
+                        <label
+                          key={cup.id_beneficio}
+                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                            seleccionado
+                              ? 'bg-cyan-500/15 border-cyan-500/50 text-white'
+                              : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:border-slate-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <input
+                              type="checkbox"
+                              checked={seleccionado}
+                              onChange={() => {
+                                setCuponesSeleccionados((prev) =>
+                                  prev.includes(cup.id_beneficio)
+                                    ? prev.filter((id) => id !== cup.id_beneficio)
+                                    : [...prev, cup.id_beneficio]
+                                );
+                              }}
+                              className="rounded border-slate-600 text-cyan-500 focus:ring-cyan-500/40 cursor-pointer"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-semibold truncate leading-tight">
+                                {cup.producto_nombre}
+                              </p>
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {cup.motivo}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right flex-shrink-0 ml-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                              {cup.por_desc}% OFF
+                            </span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Desglose Total Financiero */}
               <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-500/30 space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-300">
                   <span>Subtotal Artículos:</span>
                   <span className="font-mono">{formatearMoneda(subtotalLocal)}</span>
                 </div>
+
+                {calculoDescuentos.totalAhorro > 0 && (
+                  <div className="flex items-center justify-between text-xs text-emerald-400 font-semibold">
+                    <span className="flex items-center gap-1">
+                      <span>🏷️</span>
+                      <span>Ahorro por Cupones Aplicados:</span>
+                    </span>
+                    <span className="font-mono">-{formatearMoneda(calculoDescuentos.totalAhorro)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-xs text-slate-300">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span>Costo de Entrega / Flete:</span>
@@ -1925,6 +2068,27 @@ export default function CheckoutModal({
                   Tu orden ha sido registrada y pagada. Los repuestos han sido reservados y descontados del inventario en tiempo real.
                 </p>
               </div>
+
+              {/* Desglose Detallado de Beneficios y Cupones Canjeados */}
+              {calculoDescuentos?.desglose?.length > 0 && (
+                <div className="max-w-md mx-auto p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-left space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-emerald-300">
+                    <span className="flex items-center gap-1.5">
+                      <span>🎁</span>
+                      <span>Beneficios y Ahorros Aplicados</span>
+                    </span>
+                    <span className="font-mono">-{formatearMoneda(calculoDescuentos.totalAhorro)}</span>
+                  </div>
+                  <div className="space-y-1 pt-1.5 border-t border-emerald-500/20">
+                    {calculoDescuentos.desglose.map((d, idx) => (
+                      <div key={idx} className="flex justify-between text-[11px] text-emerald-200">
+                        <span>{d.nombre}</span>
+                        <span className="font-mono">-{formatearMoneda(d.monto)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Tarjeta con Código Oficial de Orden: Retiro en Local vs Envío */}
               <div className="max-w-md mx-auto p-4 rounded-xl bg-slate-900/90 border border-cyan-500/40 space-y-2.5">

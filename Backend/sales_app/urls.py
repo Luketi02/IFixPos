@@ -1,5 +1,9 @@
 from django.urls import path
 from sales_app.apis import (
+    MisBeneficiosClienteApi,
+    BeneficioRecomendacionCarritoApi,
+    DepuracionMotorBeneficiosApi,
+    RealizarCompraInvitadoApi,
     RealizarCompraVirtualApi,
     AgregarAlCarritoApi,
     ActualizarCantidadCarritoApi,
@@ -26,7 +30,8 @@ from sales_app.apis import (
 )
 
 urlpatterns = [
-    # CU-18: Realizar Compra Virtual
+    # CU-18: Realizar Compra Virtual e Invitados
+    path('compras/invitado/', RealizarCompraInvitadoApi.as_view(), name='api_compra_invitado'),
     path('compras/virtual/', RealizarCompraVirtualApi.as_view(), name='api_realizar_compra_virtual'),
     path('checkout/', RealizarCompraVirtualApi.as_view(), name='api_checkout_virtual'),
 
@@ -56,6 +61,11 @@ urlpatterns = [
 
     # CU-71: Revocar Beneficio Activo
     path('beneficios/<int:id_beneficio>/revocar/', RevocarBeneficioApi.as_view(), name='api_revocar_beneficio'),
+
+    # Motor Inteligente de Beneficios: Cliente, Checkout y Depuración
+    path('beneficios/mis-beneficios/', MisBeneficiosClienteApi.as_view(), name='api_mis_beneficios_cliente'),
+    path('beneficios/recomendacion-carrito/', BeneficioRecomendacionCarritoApi.as_view(), name='api_beneficio_recomendacion_carrito'),
+    path('beneficios/depurar-predictivo/', DepuracionMotorBeneficiosApi.as_view(), name='api_depurar_motor_beneficios'),
 
     # CU-82: Registrar medio de pago
     path('medios-pago/registrar/', RegistrarMedioPagoApi.as_view(), name='api_registrar_medio_pago'),

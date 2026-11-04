@@ -30,6 +30,7 @@ export default function AdminInventoryScreen() {
   const [categoriaFiltro, setCategoriaFiltro] = useState('');
   const [nivelStockFiltro, setNivelStockFiltro] = useState('');
   const [propositoFiltro, setPropositoFiltro] = useState('');
+  const [compatibilidadFiltro, setCompatibilidadFiltro] = useState('');
 
   // ---------------------------------------------------------------------------
   // Estados de Modales y Feedback
@@ -37,6 +38,7 @@ export default function AdminInventoryScreen() {
   const [modalRegistroAbierto, setModalRegistroAbierto] = useState(false);
   const [productoAjuste, setProductoAjuste] = useState(null);
   const [productoEdicion, setProductoEdicion] = useState(null);
+  const [productoDetalleCompatibilidad, setProductoDetalleCompatibilidad] = useState(null);
   const [toastMensaje, setToastMensaje] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -97,6 +99,9 @@ export default function AdminInventoryScreen() {
       if (propositoFiltro) {
         params.proposito = propositoFiltro;
       }
+      if (compatibilidadFiltro) {
+        params.tipo_compatibilidad = compatibilidadFiltro;
+      }
 
       const res = await axios.get(`${API_BASE_URL}/api/inventory/stock/`, {
         params,
@@ -112,7 +117,7 @@ export default function AdminInventoryScreen() {
     } finally {
       setCargando(false);
     }
-  }, [token, debouncedBusqueda, categoriaFiltro, nivelStockFiltro, propositoFiltro]);
+  }, [token, debouncedBusqueda, categoriaFiltro, nivelStockFiltro, propositoFiltro, compatibilidadFiltro]);
 
   useEffect(() => {
     cargarInventario();
@@ -124,9 +129,10 @@ export default function AdminInventoryScreen() {
     setCategoriaFiltro('');
     setNivelStockFiltro('');
     setPropositoFiltro('');
+    setCompatibilidadFiltro('');
   };
 
-  const hayFiltrosActivos = textoBusqueda || categoriaFiltro || nivelStockFiltro || propositoFiltro;
+  const hayFiltrosActivos = textoBusqueda || categoriaFiltro || nivelStockFiltro || propositoFiltro || compatibilidadFiltro;
 
   return (
     <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -200,7 +206,7 @@ export default function AdminInventoryScreen() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 sm:gap-4 items-center">
               
               {/* Buscador de Texto (Nombre o Código) */}
-              <div className="lg:col-span-4 relative">
+              <div className="lg:col-span-3 relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -227,7 +233,7 @@ export default function AdminInventoryScreen() {
               </div>
 
               {/* Selector de Categoría */}
-              <div className="lg:col-span-3">
+              <div className="lg:col-span-2">
                 <select
                   value={categoriaFiltro}
                   onChange={(e) => setCategoriaFiltro(e.target.value)}
@@ -266,6 +272,22 @@ export default function AdminInventoryScreen() {
                   <option value="">Todos los propósitos</option>
                   <option value="VENTA">Venta al Público</option>
                   <option value="REPARACION">Uso en Taller</option>
+                </select>
+              </div>
+
+              {/* Selector de Ámbito de Compatibilidad Técnica */}
+              <div className="lg:col-span-2">
+                <select
+                  value={compatibilidadFiltro}
+                  onChange={(e) => setCompatibilidadFiltro(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer font-medium"
+                >
+                  <option value="">Todos los ámbitos</option>
+                  <option value="UNIVERSAL">🌐 Universal</option>
+                  <option value="MULTI_MODELO">📑 Multi-modelo</option>
+                  <option value="MARCAS">🏷️ Por Marca(s)</option>
+                  <option value="TIPO_DISPOSITIVO">💻 Por Formato</option>
+                  <option value="MONO_MODELO">📱 Modelo Único</option>
                 </select>
               </div>
 
@@ -377,15 +399,55 @@ export default function AdminInventoryScreen() {
                                 <span className="text-[11px] font-mono text-slate-400">
                                   ID: #{prod.id_producto}
                                 </span>
-                                {prod.marca && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300 border border-violet-500/20 font-medium">
-                                    🏷️ {prod.marca}
-                                  </span>
-                                )}
-                                {prod.modelo && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-medium">
-                                    📱 {prod.modelo}
-                                  </span>
+                                {prod.es_universal ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProductoDetalleCompatibilidad(prod)}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-medium hover:bg-emerald-500/20 transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Clic para ver detalle de compatibilidad"
+                                  >
+                                    🌐 Universal
+                                  </button>
+                                ) : prod.tipo_compatibilidad === 'MULTI_MODELO' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProductoDetalleCompatibilidad(prod)}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-medium hover:bg-cyan-500/20 transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Clic para ver lista de modelos compatibles"
+                                  >
+                                    📑 Multi-modelo {prod.modelos_compatibles?.length ? `(${prod.modelos_compatibles.length})` : ''}
+                                  </button>
+                                ) : prod.tipo_compatibilidad === 'MARCAS' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProductoDetalleCompatibilidad(prod)}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/30 font-medium hover:bg-violet-500/20 transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Clic para ver marcas compatibles"
+                                  >
+                                    🏷️ Por Marca {prod.marcas_compatibles?.length ? `(${prod.marcas_compatibles.length})` : ''}
+                                  </button>
+                                ) : prod.tipo_compatibilidad === 'TIPO_DISPOSITIVO' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProductoDetalleCompatibilidad(prod)}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-500/10 text-fuchsia-300 border border-fuchsia-500/30 font-medium hover:bg-fuchsia-500/20 transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Clic para ver formato compatible"
+                                  >
+                                    💻 Por Formato
+                                  </button>
+                                ) : (
+                                  <>
+                                    {prod.marca && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300 border border-violet-500/20 font-medium">
+                                        🏷️ {prod.marca}
+                                      </span>
+                                    )}
+                                    {prod.modelo && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-medium">
+                                        📱 {prod.modelo}
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </div>
@@ -537,6 +599,133 @@ export default function AdminInventoryScreen() {
           cargarInventario();
         }}
       />
+
+      {/* Modal 4: Vista Rápida de Compatibilidad Técnica */}
+      <AnimatePresence>
+        {productoDetalleCompatibilidad && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#1E293B] border border-cyan-500/30 rounded-2xl p-6 shadow-2xl space-y-4 text-left"
+            >
+              <div className="flex items-center justify-between border-b border-slate-700/60 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">⚡</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-white leading-tight">Ámbito de Compatibilidad Técnica</h3>
+                    <p className="text-[11px] text-slate-400 font-mono truncate max-w-[260px]">{productoDetalleCompatibilidad.nombre}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setProductoDetalleCompatibilidad(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Contenido según el modo */}
+              <div className="space-y-3">
+                {productoDetalleCompatibilidad.es_universal ? (
+                  <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-start gap-2.5">
+                    <span className="text-xl">🌐</span>
+                    <div className="space-y-0.5">
+                      <strong className="block text-emerald-200 font-semibold">Producto Universal / Genérico</strong>
+                      <p className="text-[11px] text-emerald-300/90 leading-relaxed">
+                        Apto para cualquier equipo y marca. Es sugerido libremente por el motor comercial en ventas y servicio técnico.
+                      </p>
+                    </div>
+                  </div>
+                ) : productoDetalleCompatibilidad.tipo_compatibilidad === 'MULTI_MODELO' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
+                      <span>Modelos compatibles asignados:</span>
+                      <span className="font-mono text-cyan-400 text-[11px]">{productoDetalleCompatibilidad.modelos_compatibles?.length || 0} modelos</span>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-700/60 max-h-48 overflow-y-auto flex flex-wrap gap-1.5">
+                      {productoDetalleCompatibilidad.modelos_compatibles && productoDetalleCompatibilidad.modelos_compatibles.length > 0 ? (
+                        productoDetalleCompatibilidad.modelos_compatibles.map((m) => (
+                          <span
+                            key={m.id_modelo}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-cyan-500/15 text-cyan-200 border border-cyan-500/30 font-medium"
+                          >
+                            📱 {m.nombre}
+                          </span>
+                        ))
+                      ) : (
+                        <p className="text-xs text-slate-500 italic">No tiene modelos asociados.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : productoDetalleCompatibilidad.tipo_compatibilidad === 'MARCAS' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
+                      <span>Marcas completas asignadas:</span>
+                      <span className="font-mono text-violet-400 text-[11px]">{productoDetalleCompatibilidad.marcas_compatibles?.length || 0} marcas</span>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-700/60 max-h-48 overflow-y-auto flex flex-wrap gap-1.5">
+                      {productoDetalleCompatibilidad.marcas_compatibles && productoDetalleCompatibilidad.marcas_compatibles.length > 0 ? (
+                        productoDetalleCompatibilidad.marcas_compatibles.map((mar) => (
+                          <span
+                            key={mar.id_marca}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-violet-500/15 text-violet-200 border border-violet-500/30 font-medium"
+                          >
+                            🏷️ {mar.nombre}
+                          </span>
+                        ))
+                      ) : (
+                        <p className="text-xs text-slate-500 italic">No tiene marcas asociadas.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : productoDetalleCompatibilidad.tipo_compatibilidad === 'TIPO_DISPOSITIVO' ? (
+                  <div className="p-3.5 rounded-xl bg-fuchsia-500/10 border border-fuchsia-500/30 text-fuchsia-300 text-xs flex items-start gap-2.5">
+                    <span className="text-xl">💻</span>
+                    <div className="space-y-0.5">
+                      <strong className="block text-fuchsia-200 font-semibold">Compatibilidad por Formato</strong>
+                      <p className="text-[11px] text-fuchsia-300/90 leading-relaxed">
+                        Apto para cualquier dispositivo de tipo {productoDetalleCompatibilidad.tipo_dispositivo || 'seleccionado'} sin distinción de marcas.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300 text-xs space-y-1">
+                    <strong className="block text-white font-semibold">Modelo Único Comercial</strong>
+                    <p className="text-[11px] text-slate-400">
+                      Marca: {productoDetalleCompatibilidad.marca || 'N/A'} — Modelo: {productoDetalleCompatibilidad.modelo || 'N/A'}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Botones de Acción */}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-700/60">
+                <button
+                  type="button"
+                  onClick={() => setProductoDetalleCompatibilidad(null)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const prod = productoDetalleCompatibilidad;
+                    setProductoDetalleCompatibilidad(null);
+                    setProductoEdicion(prod);
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg shadow-cyan-950/40"
+                >
+                  <span>✏️ Editar Producto</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Flotante de Notificación Exitosa */}
       <AnimatePresence>

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { normalizarUrlImagen } from '../../utils/productImages';
 import CyberNumberInput from '../common/CyberNumberInput';
+import ProductCompatibilitySection from './ProductCompatibilitySection';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -66,6 +67,10 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     id_marca: '',
     id_modelo: '',
     id_tipo_dispositivo: '',
+    tipo_compatibilidad: 'MONO_MODELO',
+    es_universal: false,
+    ids_modelos_compatibles: [],
+    ids_marcas_compatibles: [],
     imagen_principal: '',
     imagenes: [],
     descripcion: '',
@@ -159,6 +164,10 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
           id_marca: idMarca ? String(idMarca) : '',
           id_modelo: idModelo ? String(idModelo) : '',
           id_tipo_dispositivo: idTipo ? String(idTipo) : '',
+          tipo_compatibilidad: det.tipo_compatibilidad || 'MONO_MODELO',
+          es_universal: Boolean(det.es_universal),
+          ids_modelos_compatibles: (det.ids_modelos_compatibles || []).map(String),
+          ids_marcas_compatibles: (det.ids_marcas_compatibles || []).map(String),
           imagen_principal: det.imagen_principal || producto.imagen_principal || '',
           imagenes: Array.isArray(det.imagenes) ? det.imagenes : [],
           descripcion: det.descripcion || producto.descripcion || '',
@@ -599,11 +608,30 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
   const tieneProposito = formData.apto_venta || formData.apto_reparacion || formData.consumible;
   const tieneCategoria = (formData.ids_categorias && formData.ids_categorias.length > 0) || Boolean(formData.id_categoria);
 
+  // Validación de Compatibilidad Técnica Modular (CU-68)
+  const modoComp = formData.tipo_compatibilidad || 'MONO_MODELO';
+  const compatibilidadValida =
+    modoComp === 'UNIVERSAL' ||
+    (modoComp === 'MONO_MODELO' && Boolean(formData.id_modelo)) ||
+    (modoComp === 'MULTI_MODELO' && Array.isArray(formData.ids_modelos_compatibles) && formData.ids_modelos_compatibles.length > 0) ||
+    (modoComp === 'MARCAS' && Array.isArray(formData.ids_marcas_compatibles) && formData.ids_marcas_compatibles.length > 0) ||
+    (modoComp === 'TIPO_DISPOSITIVO' && Boolean(formData.id_tipo_dispositivo));
+
+  const getErrorCompatibilidad = () => {
+    if (compatibilidadValida) return '';
+    if (modoComp === 'MONO_MODELO') return 'Debe seleccionar el modelo comercial específico para el modo Modelo Único.';
+    if (modoComp === 'MULTI_MODELO') return 'Debe agregar al menos un modelo compatible en el modo Multi-Modelo.';
+    if (modoComp === 'MARCAS') return 'Debe agregar al menos una marca compatible en el modo Por Marca(s).';
+    if (modoComp === 'TIPO_DISPOSITIVO') return 'Debe seleccionar el formato/tipo de dispositivo compatible.';
+    return 'Complete la configuración del ámbito de compatibilidad técnica.';
+  };
+
   const paso1Valido =
     formData.nombre.trim() !== '' &&
     tieneCategoria &&
     formData.precio !== '' &&
-    Number(formData.precio) >= 0;
+    Number(formData.precio) >= 0 &&
+    compatibilidadValida;
 
   const paso2Valido =
     Number(formData.stock_minimo) >= 0 &&
@@ -615,8 +643,14 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     if (e) e.preventDefault();
     if (pasoActual === 1) {
       if (!paso1Valido) {
-        setErrorMessage('Complete los campos obligatorios del insumo (Nombre, Categoría y Precio válido).');
-        return;
+        if (!formData.nombre.trim() || !tieneCategoria || formData.precio === '' || Number(formData.precio) < 0) {
+          setErrorMessage('Complete los campos obligatorios del insumo (Nombre, Categoría y Precio válido).');
+          return;
+        }
+        if (!compatibilidadValida) {
+          setErrorMessage(getErrorCompatibilidad());
+          return;
+        }
       }
       setPasoActual(2);
     } else if (pasoActual === 2) {
@@ -640,7 +674,11 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
     if (!formularioValido) {
       if (!paso1Valido) {
         setPasoActual(1);
-        setErrorMessage('Complete los datos requeridos del insumo antes de guardar.');
+        if (!compatibilidadValida) {
+          setErrorMessage(getErrorCompatibilidad());
+        } else {
+          setErrorMessage('Complete los datos requeridos del insumo antes de guardar.');
+        }
         return;
       }
       if (!paso2Valido) {
@@ -673,6 +711,10 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
         id_marca: formData.id_marca ? Number(formData.id_marca) : null,
         id_modelo: formData.id_modelo ? Number(formData.id_modelo) : null,
         id_tipo_dispositivo: formData.id_tipo_dispositivo ? Number(formData.id_tipo_dispositivo) : null,
+        tipo_compatibilidad: formData.tipo_compatibilidad || 'MONO_MODELO',
+        es_universal: Boolean(formData.es_universal),
+        ids_modelos_compatibles: (formData.ids_modelos_compatibles || []).map(Number),
+        ids_marcas_compatibles: (formData.ids_marcas_compatibles || []).map(Number),
         imagen_principal: imagenPrincipalLimpia,
         imagenes: imagenesLimpias,
         descripcion: formData.descripcion.trim(),
@@ -1018,119 +1060,19 @@ export default function ModificarProductoModal({ isOpen, producto, onClose, onSu
                         />
                       </div>
 
-                      {/* Marca Comercial */}
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label htmlFor="edit-id-marca-producto" className="text-xs font-semibold text-slate-300">
-                            Marca Comercial
-                          </label>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={abrirModalNuevaMarca}
-                              className="text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors text-cyan-400 hover:text-cyan-300 hover:underline active:scale-95"
-                              title="Registrar y vincular una nueva marca comercial al vuelo"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                              </svg>
-                              <span>Nueva Marca</span>
-                            </button>
-                            <span className="text-[10px] text-slate-500 font-mono">Opcional</span>
-                          </div>
-                        </div>
-                        <select
-                          id="edit-id-marca-producto"
-                          name="id_marca"
-                          value={formData.id_marca}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val === '__crear_nueva_marca__') {
-                              abrirModalNuevaMarca();
-                              return;
-                            }
-                            handleCambiarMarca(e);
-                          }}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
-                        >
-                          <option value="">Sin marca / Genérico</option>
-                          {marcas.map((m) => (
-                            <option key={m.id_marca} value={m.id_marca}>
-                              {m.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      {/* Ámbito de Compatibilidad Técnica Modular (Mono-modelo, Multi-modelo, Marcas, Formato o Universal) */}
+                    <ProductCompatibilitySection
+                      formData={formData}
+                      setFormData={setFormData}
+                      marcas={marcas}
+                      modelos={modelos}
+                      tiposDispositivo={tiposDispositivo}
+                      cargandoModelos={cargandoModelos}
+                      abrirModalNuevaMarca={abrirModalNuevaMarca}
+                      abrirModalNuevoModelo={abrirModalNuevoModelo}
+                    />
 
-                      {/* Modelo Compatible */}
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label htmlFor="edit-id-modelo-producto" className="text-xs font-semibold text-slate-300">
-                            Modelo Compatible
-                          </label>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={abrirModalNuevoModelo}
-                              className={`text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors ${
-                                formData.id_marca
-                                  ? 'text-cyan-400 hover:text-cyan-300 hover:underline'
-                                  : 'text-slate-500 hover:text-cyan-400'
-                              }`}
-                              title={formData.id_marca ? 'Registrar y vincular nuevo modelo para esta marca' : 'Seleccione primero una marca comercial'}
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                              </svg>
-                              <span>Nuevo Modelo</span>
-                            </button>
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {cargandoModelos ? 'Cargando...' : 'Opcional'}
-                            </span>
-                          </div>
-                        </div>
-                        <select
-                          id="edit-id-modelo-producto"
-                          name="id_modelo"
-                          value={formData.id_modelo}
-                          onChange={handleModeloChange}
-                          disabled={!formData.id_marca || cargandoModelos}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer disabled:opacity-50"
-                        >
-                          <option value="">
-                            {!formData.id_marca ? 'Seleccione marca primero...' : 'No específico / Todos los modelos'}
-                          </option>
-                          {modelos.map((mod) => (
-                            <option key={mod.id_modelo} value={mod.id_modelo}>
-                              {mod.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Tipo de Dispositivo */}
-                      <div className="space-y-1.5 sm:col-span-2">
-                        <label htmlFor="edit-id-tipo-dispositivo-producto" className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                          <span>Tipo de Dispositivo</span>
-                          <span className="text-[10px] text-slate-500 font-mono">Opcional / Universal</span>
-                        </label>
-                        <select
-                          id="edit-id-tipo-dispositivo-producto"
-                          name="id_tipo_dispositivo"
-                          value={formData.id_tipo_dispositivo}
-                          onChange={handleChange}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer"
-                        >
-                          <option value="">Selección automática por modelo o no especificado</option>
-                          {tiposDispositivo.map((t) => (
-                            <option key={t.id_tipo_dispositivo} value={t.id_tipo_dispositivo}>
-                              {t.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Descripción Técnica */}
+                    {/* Descripción Técnica */}
                       <div className="sm:col-span-2 space-y-1.5">
                         <label htmlFor="edit-desc-producto" className="text-xs font-semibold text-slate-300">
                           Descripción Técnica o Comercial

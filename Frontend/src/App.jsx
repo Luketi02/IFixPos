@@ -6,6 +6,7 @@ import OnboardingGuard from './components/routes/OnboardingGuard';
 import PublicRoute from './components/routes/PublicRoute';
 import RoleRoute from './components/routes/RoleRoute';
 import DashboardRedirect from './components/routes/DashboardRedirect';
+import WelcomeHomeScreen from './pages/home/WelcomeHomeScreen';
 
 import LoginScreen from './pages/auth/LoginScreen';
 import RegisterScreen from './pages/auth/RegisterScreen';
@@ -52,6 +53,7 @@ import DispositivoDetalle from './pages/client/DispositivoDetalle';
 import ReparacionDetalle from './pages/client/ReparacionDetalle';
 import TecnicoReparacionDetalle from './pages/technician/TecnicoReparacionDetalle';
 import SessionExpiredModal from './components/auth/SessionExpiredModal';
+import AccountConflictModal from './components/auth/AccountConflictModal';
 import { instalarInterceptorSesion } from './utils/sesionExpirada';
 
 // Interceptor global de axios: token inválido/expirado -> modal de sesión expirada
@@ -65,6 +67,7 @@ function App() {
       <AuthProvider>
         <Router>
           <SessionExpiredModal />
+          <AccountConflictModal />
           <Routes>
             {/* Portal Público de Proveedores (Acceso directo seguro vía Token) */}
             <Route path="/portal-proveedor/cotizar" element={<PortalProveedorCotizarScreen />} />
@@ -82,14 +85,12 @@ function App() {
               <Route path="/completar-perfil" element={<CompleteProfileScreen />} />
             </Route>
 
+            {/* Rutas Públicas de Bienvenida y Tienda (Acceso libre sin cuenta) */}
+            <Route path="/" element={<WelcomeHomeScreen />} />
+            <Route path="/tienda" element={<ClientStoreScreen />} />
+
             {/* Rutas Protegidas: Requiere autenticación Y perfil 100% completo */}
             <Route element={<ProtectedRoute />}>
-              {/* Redirección dinámica desde la raíz hacia el dashboard según el rol */}
-              <Route path="/" element={<DashboardRedirect />} />
-
-              {/* Vista de Cliente (/tienda) */}
-              <Route path="/tienda" element={<ClientStoreScreen />} />
-
               {/* Dispositivos y Reparaciones del Cliente */}
               <Route path="/cliente/dispositivos" element={<MisDispositivos />} />
               <Route path="/cliente/dispositivos/nuevo" element={<RegisterDeviceScreen />} />

@@ -64,12 +64,14 @@ def generar_tokens_jwt(usuario: Usuario) -> Dict[str, str]:
         'email': usuario.email,
         'rol': rol_nombre,
         'iat': now,
-        'exp': now + timedelta(days=1)
+        'exp': now + timedelta(minutes=60)
     }
+    from core_app.selectors import obtener_tiempo_sesion_inactiva_horas
+    horas_inactiva = obtener_tiempo_sesion_inactiva_horas()
     refresh_payload = {
         'id_usuario': usuario.id_usuario,
         'iat': now,
-        'exp': now + timedelta(days=7)
+        'exp': now + timedelta(hours=horas_inactiva)
     }
     access_token = jwt.encode(access_payload, settings.SECRET_KEY, algorithm='HS256')
     refresh_token = jwt.encode(refresh_payload, settings.SECRET_KEY, algorithm='HS256')
@@ -81,15 +83,60 @@ def generar_tokens_jwt(usuario: Usuario) -> Dict[str, str]:
         
     return {"access": access_token, "refresh": refresh_token}
 
+
+def refrescar_token_jwt(*, refresh_token: str) -> Dict[str, str]:
+    """
+    Valida un refresh token JWT y emite un nuevo par de tokens (access y refresh)
+    para mantener la sesión activa mientras el usuario opere en el sistema.
+    """
+    if not refresh_token:
+        raise ValidationError("El token de refresco es obligatorio.")
+
+    try:
+        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        raise ValidationError("El token de sesión ha expirado por inactividad. Debe iniciar sesión nuevamente.")
+    except jwt.InvalidTokenError:
+        raise ValidationError("Token de refresco inválido.")
+
+    id_usuario = payload.get('id_usuario')
+    if not id_usuario:
+        raise ValidationError("El token no contiene un identificador de usuario válido.")
+
+    try:
+        usuario = Usuario.objects.select_related('id_rol').get(id_usuario=id_usuario, is_active=True)
+    except Usuario.DoesNotExist:
+        raise ValidationError("Usuario inactivo o no encontrado.")
+
+    return generar_tokens_jwt(usuario)
+
 def autenticar_y_obtener_tokens(email: str, password_plano: str) -> Dict[str, Any]:
     """Busca al usuario, valida su contraseña y estado activo, y genera los tokens JWT."""
+    from django.core.cache import cache
+    from core_app.selectors import obtener_max_intentos_login
+
+    email_limpio = (email or '').strip().lower()
+    cache_key = f"intentos_login_fallidos_{email_limpio}"
+    max_intentos = obtener_max_intentos_login()
+    intentos_previos = cache.get(cache_key, 0)
+
+    if intentos_previos >= max_intentos:
+        raise CredencialesInvalidasError(
+            f"Tu cuenta ha sido bloqueada temporalmente por superar el límite de {max_intentos} intentos fallidos de inicio de sesión. Por favor, intenta más tarde."
+        )
+
     try:
         usuario = obtener_usuario_por_email(email)
     except ValidationError:
+        cache.set(cache_key, intentos_previos + 1, timeout=900)
         raise CredencialesInvalidasError("Correo o contraseña incorrectos.")
         
     if not check_password(password_plano, usuario.contrasena):
+        cache.set(cache_key, intentos_previos + 1, timeout=900)
         raise CredencialesInvalidasError("Correo o contraseña incorrectos.")
+
+    # Credenciales válidas: reiniciar contador de intentos fallidos
+    cache.delete(cache_key)
         
     if not usuario.is_active:
         raise CredencialesInvalidasError("Tu cuenta no ha sido verificada. Por favor, revisa tu correo electrónico para activarla.")
@@ -872,9 +919,12 @@ def guardar_archivo_foto_perfil(*, id_usuario: int, archivo) -> str:
     if ext not in formatos_permitidos:
         raise ValidationError(f"Formato no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
 
-    # Validar tamaño (máximo 5 MB)
-    if archivo.size > 5 * 1024 * 1024:
-        raise ValidationError("El archivo supera el tamaño máximo permitido de 5 MB.")
+    # Validar tamaño según configuración del sistema (tamanoMaxArchivoMB)
+    from core_app.selectors import obtener_tamano_maximo_archivo_bytes, obtener_tamano_maximo_archivo_mb
+    max_bytes = obtener_tamano_maximo_archivo_bytes()
+    max_mb = obtener_tamano_maximo_archivo_mb()
+    if archivo.size > max_bytes:
+        raise ValidationError(f"El archivo supera el tamaño máximo permitido de {max_mb} MB.")
 
     carpeta_destino = os.path.join(settings.MEDIA_ROOT, 'perfiles')
     os.makedirs(carpeta_destino, exist_ok=True)

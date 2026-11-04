@@ -459,6 +459,20 @@ def generar_copia_seguridad_manual(
         id_usuario=usuario_admin
     )
 
+    # 4.1 Aplicar política de retención histórica según configuración (backupRetencionCopias)
+    from core_app.selectors import obtener_retencion_copias_backup
+    limite_retencion = obtener_retencion_copias_backup()
+    todas_copias = list(CopiaSeguridad.objects.order_by('-fecha_creacion', '-id_backup'))
+    if len(todas_copias) > limite_retencion:
+        sobrantes = todas_copias[limite_retencion:]
+        for c_antigua in sobrantes:
+            if c_antigua.ubicacion_archivo and os.path.exists(c_antigua.ubicacion_archivo):
+                try:
+                    os.remove(c_antigua.ubicacion_archivo)
+                except OSError:
+                    pass
+            c_antigua.delete()
+
     # 5. Notificación por correo al administrador
     asunto = "Copia de Seguridad Generada Exitosamente - IFixPos"
     cuerpo = (
