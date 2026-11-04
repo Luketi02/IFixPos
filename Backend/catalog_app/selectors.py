@@ -314,7 +314,8 @@ def obtener_productos_compatibles_con_equipo(
     id_marca: Optional[int] = None,
     id_tipo_dispositivo: Optional[int] = None,
     categorias_ids: Optional[list] = None,
-    solo_con_stock: bool = True
+    solo_con_stock: bool = True,
+    limite: int = 10
 ) -> list:
     """
     Retorna productos compatibles con un equipo siguiendo una rigurosa jerarquía:
@@ -322,6 +323,7 @@ def obtener_productos_compatibles_con_equipo(
     2. Prioridad 2: Coincidencia por MARCA completa (marcas_compatibles).
     3. Prioridad 3: Coincidencia por TIPO DE DISPOSITIVO / FORMATO (id_tipo_dispositivo).
     4. Prioridad 4: Accesorios UNIVERSALES / GENÉRICOS (es_universal=True).
+    Optimizado con límite de evaluación para evitar consultas N+1 masivas de stock.
     """
     from django.db.models import Q
     from .models import Producto
@@ -343,6 +345,8 @@ def obtener_productos_compatibles_con_equipo(
         for p in qs_modelo:
             if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
                 productos_modelo.append(p)
+                if len(productos_modelo) >= limite:
+                    break
 
     if productos_modelo:
         return productos_modelo
@@ -356,6 +360,8 @@ def obtener_productos_compatibles_con_equipo(
         for p in qs_marca:
             if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
                 productos_marca.append(p)
+                if len(productos_marca) >= limite:
+                    break
 
     if productos_marca:
         return productos_marca
@@ -370,6 +376,8 @@ def obtener_productos_compatibles_con_equipo(
         for p in qs_tipo:
             if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
                 productos_tipo.append(p)
+                if len(productos_tipo) >= limite:
+                    break
 
     if productos_tipo:
         return productos_tipo
@@ -380,6 +388,8 @@ def obtener_productos_compatibles_con_equipo(
     for p in qs_univ:
         if not solo_con_stock or obtener_stock_actual_producto(p.id_producto) > 0:
             productos_universales.append(p)
+            if len(productos_universales) >= limite:
+                break
 
     return productos_universales
 

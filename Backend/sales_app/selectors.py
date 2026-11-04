@@ -1,8 +1,10 @@
 from decimal import Decimal
 from typing import Optional, List, Tuple, Any
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import QuerySet
+from django.db.models import QuerySet, Q
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from sales_app.models import Venta, CarritoCompra, CarritoProducto, MedioPago
+from users_app.models import Usuario
 
 
 def obtener_venta_por_id(id_venta: int) -> Optional[Venta]:
@@ -1031,7 +1033,12 @@ def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
         segundos_transcurridos = 0
     else:
         hora_log = log_creacion.fecha_hora
-        dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
+        if isinstance(hora_log, datetime.datetime):
+            dt_creacion = hora_log
+        elif isinstance(hora_log, datetime.time):
+            dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
+        else:
+            dt_creacion = ahora
         if timezone.is_naive(dt_creacion):
             dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
         segundos_transcurridos = (ahora - dt_creacion).total_seconds()

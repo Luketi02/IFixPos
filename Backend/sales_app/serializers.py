@@ -8,7 +8,7 @@ from geo_app.serializers import DireccionOutputSerializer
 
 
 # ==============================================================================
-# SERIALIZADORES DE ENTRADA (INPUT - LA ADUANA)
+# SERIALIZADORES DE ENTRADA 
 # ==============================================================================
 
 class RealizarCompraInputSerializer(serializers.Serializer):
@@ -142,7 +142,7 @@ class CompletarPagoInputSerializer(serializers.Serializer):
 
 
 # ==============================================================================
-# SERIALIZADORES DE SALIDA (OUTPUT)
+# SERIALIZADORES DE SALIDA
 # ==============================================================================
 
 class DetalleVentaOutputSerializer(serializers.ModelSerializer):
@@ -280,7 +280,7 @@ class CarritoResumenOutputSerializer(serializers.Serializer):
 
 
 # ==============================================================================
-# CU-38: FILTRAR COBROS Y PAGOS (LA ADUANA Y SERIALIZADORES)
+# CU-38: FILTRAR COBROS Y PAGOS
 # ==============================================================================
 
 class FiltroCobrosPagosInputSerializer(serializers.Serializer):

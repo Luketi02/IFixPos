@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { memo, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
@@ -132,6 +132,90 @@ const guardarCarritoLocal = (items) => {
     localStorage.setItem(GUEST_CART_KEY, JSON.stringify(items));
   } catch (e) {}
 };
+
+// =============================================================================
+// COMPONENTE DE TARJETA DE PRODUCTO OPTIMIZADO (MEMOIZADO, 60 FPS)
+// =============================================================================
+const ProductCard = memo(function ProductCard({ prod, onSelect }) {
+  const imagenSrc = obtenerImagenProducto(prod);
+  const estaAgotado = !prod.en_stock;
+
+  return (
+    <div
+      onClick={() => onSelect(prod)}
+      className={`bg-[#1E293B] border border-slate-700/70 hover:border-cyan-400/80 rounded-2xl overflow-hidden flex flex-col justify-between transition-all duration-200 hover:shadow-[0_12px_32px_rgba(6,182,212,0.22)] hover:-translate-y-1 cursor-pointer group ${
+        estaAgotado ? 'opacity-65 grayscale-[25%]' : ''
+      }`}
+    >
+      {/* Foto representativa única (1 sola foto) */}
+      <div className="relative h-56 w-full bg-slate-900 overflow-hidden">
+        <img
+          src={imagenSrc}
+          alt={prod.nombre}
+          loading="lazy"
+          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          onError={(e) => {
+            e.target.onerror = null;
+            e.target.src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80';
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#1E293B] via-transparent to-black/20 pointer-events-none" />
+
+        {/* Badge de descuento si aplica */}
+        {prod.tiene_descuento && (
+          <div className="absolute top-3 left-3">
+            <span className="px-2.5 py-1 rounded-full bg-violet-600/50 backdrop-blur-md text-violet-200 border border-violet-400/60 text-[11px] font-black tracking-wide shadow-lg">
+              -{Math.round(prod.porcentaje_descuento)}% OFF
+            </span>
+          </div>
+        )}
+
+        {/* Estado de stock en esquina */}
+        <div className="absolute top-3 right-3">
+          {prod.en_stock ? (
+            <span className="px-2 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-emerald-400 text-[10px] font-medium border border-emerald-500/30 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Disponible
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-rose-400 text-[10px] font-medium border border-rose-500/30">
+              Agotado
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Título o nombre del producto */}
+      <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+        <div className="space-y-1.5">
+          {prod.es_universal ? (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1 w-fit">
+              🌐 Universal
+            </span>
+          ) : prod.tipo_compatibilidad === 'MULTI_MODELO' ? (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 inline-flex items-center gap-1 w-fit">
+              📱 Multi-modelo
+            </span>
+          ) : prod.tipo_compatibilidad === 'MARCAS' ? (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-300 border border-violet-500/30 inline-flex items-center gap-1 w-fit">
+              🏷️ Multimarca
+            </span>
+          ) : null}
+          <h2 className="text-[#F8FAFC] font-bold text-base line-clamp-2 group-hover:text-cyan-300 transition-colors leading-snug">
+            {prod.nombre}
+          </h2>
+        </div>
+        <div className="pt-2 border-t border-slate-700/50 flex items-center justify-between text-xs text-cyan-400/90 font-medium">
+          <span className="group-hover:text-cyan-300 transition-colors">Ver especificaciones</span>
+          <svg className="w-4 h-4 transform group-hover:translate-x-1 transition-transform text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function ClientStoreScreen() {
   const { user, token } = useAuth();
 
@@ -461,7 +545,13 @@ export default function ClientStoreScreen() {
     };
   }, [token, refrescarCarrito]);
 
-  const handleAgregarAlCarrito = async (producto, cantidadDeseada = 1) => {
+  const handleSeleccionarProducto = useCallback((prod) => {
+    setProductoDetalle(prod);
+    setFotoActivaIndex(0);
+    setCantidadDetalle(1);
+  }, []);
+
+  const handleAgregarAlCarrito = useCallback((producto, cantidadDeseada = 1) => {
     if (!producto || !producto.en_stock) return;
 
     const cantidadFinal = Math.max(1, parseInt(cantidadDeseada, 10) || 1);
@@ -473,6 +563,7 @@ export default function ClientStoreScreen() {
     const cantidadPrevia = Number(itemExistente?.cantidad || 0);
     const nuevaCantidad = cantidadPrevia + cantidadFinal;
 
+    // Actualización optimista inmediata
     actualizarCantidadItem(idProd, nuevaCantidad, producto);
 
     if (cantidadDeseada === 1 && !carritoDrawerAbierto) {
@@ -484,21 +575,21 @@ export default function ClientStoreScreen() {
       });
     }
 
+    // Consulta de beneficios en background sin bloquear la interfaz de usuario
     if (token) {
-      try {
-        const resRec = await axios.get(`${API_BASE_URL}/api/sales/beneficios/recomendacion-carrito/`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+      axios.get(`${API_BASE_URL}/api/sales/beneficios/recomendacion-carrito/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then((resRec) => {
         const recs = resRec.data?.recomendaciones || [];
         if (recs.length > 0) {
           setSugerenciaBeneficio(recs[0]);
           setConteoBeneficiosActivos((prev) => prev + 1);
         }
-      } catch (e) {
+      }).catch(() => {
         // Silencioso
-      }
+      });
     }
-  };
+  }, [token, resumenCarrito, carritoDrawerAbierto, actualizarCantidadItem]);
 
   const handleQuitarDelCarrito = (idProducto, cantidadAQuitar = null) => {
 
@@ -880,96 +971,15 @@ export default function ClientStoreScreen() {
               </button>
             </motion.div>
           ) : (
-            /* Grid Responsivo de Tarjetas de Producto - Vista Pequeña */
+            /* Grid Responsivo de Tarjetas de Producto - Vista Pequeña (Memoizado 60fps) */
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {productos.map((prod) => {
-                const imagenSrc = obtenerImagenProducto(prod);
-                const estaAgotado = !prod.en_stock;
-
-                return (
-                  <motion.div
-                    key={prod.id_producto}
-                    layout
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    onClick={() => {
-                      setProductoDetalle(prod);
-                      setFotoActivaIndex(0);
-                      setCantidadDetalle(1);
-                    }}
-                    className={`bg-[#1E293B] border border-slate-700/70 hover:border-cyan-400/80 rounded-2xl overflow-hidden flex flex-col justify-between transition-all duration-300 hover:shadow-[0_12px_32px_rgba(6,182,212,0.22)] hover:-translate-y-1.5 cursor-pointer group ${
-                      estaAgotado ? 'opacity-65 grayscale-[25%]' : ''
-                    }`}
-                  >
-                    {/* Foto representativa única (1 sola foto) */}
-                    <div className="relative h-56 w-full bg-slate-900 overflow-hidden">
-                      <img
-                        src={imagenSrc}
-                        alt={prod.nombre}
-                        loading="lazy"
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        onError={(e) => {
-                          e.target.onerror = null;
-                          e.target.src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80';
-                        }}
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-[#1E293B] via-transparent to-black/20 pointer-events-none" />
-
-                      {/* Badge discreto si el producto cuenta con descuento especial */}
-                      {prod.tiene_descuento && (
-                        <div className="absolute top-3 left-3">
-                          <span className="px-2.5 py-1 rounded-full bg-violet-600/50 backdrop-blur-md text-violet-200 border border-violet-400/60 text-[11px] font-black tracking-wide shadow-lg animate-pulse">
-                            -{Math.round(prod.porcentaje_descuento)}% OFF
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Estado de stock en esquina */}
-                      <div className="absolute top-3 right-3">
-                        {prod.en_stock ? (
-                          <span className="px-2 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-emerald-400 text-[10px] font-medium border border-emerald-500/30 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                            Disponible
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-rose-400 text-[10px] font-medium border border-rose-500/30">
-                            Agotado
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Título o nombre del producto */}
-                    <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                      <div className="space-y-1.5">
-                        {prod.es_universal ? (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1 w-fit">
-                            🌐 Universal
-                          </span>
-                        ) : prod.tipo_compatibilidad === 'MULTI_MODELO' ? (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 inline-flex items-center gap-1 w-fit">
-                            📱 Multi-modelo
-                          </span>
-                        ) : prod.tipo_compatibilidad === 'MARCAS' ? (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-300 border border-violet-500/30 inline-flex items-center gap-1 w-fit">
-                            🏷️ Multimarca
-                          </span>
-                        ) : null}
-                        <h2 className="text-[#F8FAFC] font-bold text-base line-clamp-2 group-hover:text-cyan-300 transition-colors leading-snug">
-                          {prod.nombre}
-                        </h2>
-                      </div>
-                      <div className="pt-2 border-t border-slate-700/50 flex items-center justify-between text-xs text-cyan-400/90 font-medium">
-                        <span className="group-hover:text-cyan-300 transition-colors">Ver especificaciones</span>
-                        <svg className="w-4 h-4 transform group-hover:translate-x-1 transition-transform text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
+              {productos.map((prod) => (
+                <ProductCard
+                  key={prod.id_producto}
+                  prod={prod}
+                  onSelect={handleSeleccionarProducto}
+                />
+              ))}
             </div>
           )}
 
@@ -1236,9 +1246,11 @@ export default function ClientStoreScreen() {
 
                   <button
                     type="button"
-                    onClick={async () => {
-                      await handleAgregarAlCarrito(productoDetalle, cantidadDetalle);
+                    onClick={() => {
+                      const prod = productoDetalle;
+                      const cant = cantidadDetalle;
                       setProductoDetalle(null);
+                      handleAgregarAlCarrito(prod, cant);
                     }}
                     disabled={!productoDetalle.en_stock || agregandoId === productoDetalle.id_producto}
                     className={`flex-1 py-3 px-6 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer ${

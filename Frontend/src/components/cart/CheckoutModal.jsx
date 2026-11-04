@@ -443,6 +443,12 @@ export default function CheckoutModal({
   }, [metodoEntrega, direccionSeleccionadaId, cargarCostoEnvio]);
 
   useEffect(() => {
+    if (pasoActual === 4 && isOpen) {
+      cargarCupones();
+    }
+  }, [pasoActual, isOpen, cargarCupones]);
+
+  useEffect(() => {
     if (isOpen) {
       if (ordenParaRetomar) {
         setResultadoVenta(ordenParaRetomar);
@@ -489,39 +495,50 @@ export default function CheckoutModal({
       return { totalAhorro: 0, desglose: [] };
     }
 
-    let subtotalRestante = Number(subtotalLocal || 0);
+    const listaItems = (itemsLocales && itemsLocales.length > 0) ? itemsLocales : (itemsCarrito || []);
+    let subtotalBase = Number(subtotalLocal || 0);
+    if (subtotalBase <= 0 && listaItems.length > 0) {
+      subtotalBase = listaItems.reduce((acc, it) => {
+        const sub = Number(it.subtotal ?? (Number(it.precio_unitario || 0) * Number(it.cantidad || 1)));
+        return acc + sub;
+      }, 0);
+    }
+
     let totalAhorro = 0;
     const desglose = [];
 
     // 1. Primero cupones específicos por producto
     cuponesSeleccionados.forEach((idB) => {
-      const cup = cuponesDisponibles.find((c) => c.id_beneficio === idB);
-      if (!cup) return;
+      const cup = cuponesDisponibles.find((c) => Number(c.id_beneficio) === Number(idB));
+      if (!cup || !cup.id_producto) return;
 
       const porc = Number(cup.por_desc || 0) / 100;
-      if (cup.id_producto) {
-        const item = (itemsCarrito || []).find((it) => (it.id_producto?.id_producto || it.id_producto) === cup.id_producto);
-        if (item) {
-          const precioItem = Number(item.subtotal || (Number(item.id_producto?.precio_venta || item.precio_unitario || 0) * Number(item.cantidad || 1)));
-          const ahorro = precioItem * porc;
-          totalAhorro += ahorro;
-          desglose.push({
-            id_beneficio: cup.id_beneficio,
-            nombre: `${cup.por_desc}% OFF en ${cup.producto_nombre}`,
-            monto: ahorro
-          });
-        }
+      const item = listaItems.find((it) => {
+        const idProd = it.id_producto?.id_producto ?? it.id_producto_id ?? it.id_producto;
+        return Number(idProd) === Number(cup.id_producto);
+      });
+
+      if (item) {
+        const precioItem = Number(
+          item.subtotal ?? (Number(item.precio_unitario || item.id_producto?.precio_venta || 0) * Number(item.cantidad || 1))
+        );
+        const ahorro = precioItem * porc;
+        totalAhorro += ahorro;
+        desglose.push({
+          id_beneficio: cup.id_beneficio,
+          nombre: `${cup.por_desc}% OFF en ${cup.producto_nombre || item.producto_nombre || 'Producto'}`,
+          monto: ahorro
+        });
       }
     });
 
     // 2. Luego cupones generales sobre el subtotal restante
     cuponesSeleccionados.forEach((idB) => {
-      const cup = cuponesDisponibles.find((c) => c.id_beneficio === idB);
+      const cup = cuponesDisponibles.find((c) => Number(c.id_beneficio) === Number(idB));
       if (!cup || cup.id_producto) return;
 
       const porc = Number(cup.por_desc || 0) / 100;
-      const baseAplicable = Math.max(0, subtotalRestante - totalAhorro);
-      const ahorro = baseAplicable * porc;
+      const ahorro = subtotalBase * porc;
       totalAhorro += ahorro;
       desglose.push({
         id_beneficio: cup.id_beneficio,
@@ -530,9 +547,9 @@ export default function CheckoutModal({
       });
     });
 
-    totalAhorro = Math.min(totalAhorro, Number(subtotalLocal || 0));
+    totalAhorro = Math.min(totalAhorro, subtotalBase);
     return { totalAhorro, desglose };
-  }, [cuponesSeleccionados, cuponesDisponibles, subtotalLocal, itemsCarrito]);
+  }, [cuponesSeleccionados, cuponesDisponibles, subtotalLocal, itemsLocales, itemsCarrito]);
 
   const subtotalConDescuentos = Math.max(0, Number(subtotalLocal || 0) - calculoDescuentos.totalAhorro);
   const costoEnvioFinal = metodoEntrega === 'ENVIO' ? Number(costoEnvioEstimado || 0) : 0;
@@ -846,7 +863,7 @@ export default function CheckoutModal({
         metodo_entrega: metodoEntrega,
         metodo_pago: medioPagoSeleccionadoId,
         id_direccion_envio: metodoEntrega === 'ENVIO' ? direccionSeleccionadaId : null,
-        beneficios_aplicados: cuponesSeleccionados
+        beneficios_aplicados: cuponesSeleccionados.map((id) => Number(id))
       };
 
       const res = await axios.post(`${API_BASE_URL}/api/sales/compras/virtual/`, payload, {
@@ -880,11 +897,9 @@ export default function CheckoutModal({
           }
         } catch (prefErr) {
           console.warn('Inconveniente al generar preferencia de Mercado Pago:', prefErr);
-          setErrorMessage('Tu orden fue registrada, pero hubo un detalle al conectar con Mercado Pago. Podrás abonarla luego.');
-          setPasoActual(5);
-          if (onCompraCompletada) {
-            onCompraCompletada(datosVenta);
-          }
+          const errDetalle = prefErr.response?.data?.error || 'Inconveniente al conectar con Mercado Pago.';
+          setErrorMessage(`Tu orden fue reservada (#${datosVenta.codigo_sec || datosVenta.id_venta}), pero ocurrió un inconveniente con la pasarela: ${errDetalle}. Puedes reintentar la conexión o pagar desde el banner superior.`);
+          setEsperandoPagoMP(true);
         }
       } else {
         setPasoActual(5);
@@ -897,6 +912,33 @@ export default function CheckoutModal({
       const dataErr = err.response?.data;
       const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail || dataErr?.mensaje;
       setErrorMessage(msg || 'Ocurrió un inconveniente al procesar tu compra. Revisa el stock disponible de tus artículos.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReintentarMP = async () => {
+    const idVenta = resultadoVenta?.id_venta || ordenParaRetomar?.id_venta;
+    if (!idVenta || !token) return;
+    setIsSubmitting(true);
+    setErrorMessage('');
+    try {
+      const resPref = await axios.post(
+        `${API_BASE_URL}/api/sales/mercadopago/crear-preferencia/`,
+        { id_venta: idVenta },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setMpPreferencia(resPref.data);
+      setEsperandoPagoMP(true);
+      const urlPago = resPref.data.init_point || resPref.data.sandbox_init_point;
+      if (urlPago && !resPref.data.modo_simulacion) {
+        window.open(urlPago, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      console.warn('Reintento de Mercado Pago fallido:', err);
+      const dataErr = err.response?.data;
+      const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || 'No se pudo conectar con Mercado Pago.';
+      setErrorMessage(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -1729,50 +1771,93 @@ export default function CheckoutModal({
                       <span>🎁</span>
                       <span>Tus Beneficios Disponibles (Acumulables)</span>
                     </span>
-                    <span className="text-[10px] text-cyan-400 font-mono">
-                      {cuponesSeleccionados.length} seleccionado(s)
+                    <span className="text-[10px] text-cyan-400 font-mono font-bold">
+                      {cuponesSeleccionados.length} aplicado(s)
                     </span>
                   </div>
 
-                  <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar">
+                  <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                     {cuponesDisponibles.map((cup) => {
-                      const seleccionado = cuponesSeleccionados.includes(cup.id_beneficio);
+                      const idNum = Number(cup.id_beneficio);
+                      const seleccionado = cuponesSeleccionados.some((id) => Number(id) === idNum);
+
+                      // Evaluar si el cupón aplica a los artículos actualmente en el carrito
+                      const listaItems = (itemsLocales && itemsLocales.length > 0) ? itemsLocales : (itemsCarrito || []);
+                      const itemCoincidente = cup.id_producto
+                        ? listaItems.find((it) => {
+                            const idProd = it.id_producto?.id_producto ?? it.id_producto_id ?? it.id_producto;
+                            return Number(idProd) === Number(cup.id_producto);
+                          })
+                        : null;
+
+                      const esAplicable = !cup.id_producto || Boolean(itemCoincidente);
+
+                      // Cálculo previo del ahorro individual que genera este cupón
+                      let ahorroEstimado = 0;
+                      if (esAplicable) {
+                        const porc = Number(cup.por_desc || 0) / 100;
+                        if (cup.id_producto && itemCoincidente) {
+                          const precioItem = Number(
+                            itemCoincidente.subtotal ?? (Number(itemCoincidente.precio_unitario || 0) * Number(itemCoincidente.cantidad || 1))
+                          );
+                          ahorroEstimado = precioItem * porc;
+                        } else {
+                          ahorroEstimado = Number(subtotalLocal || 0) * porc;
+                        }
+                      }
+
                       return (
                         <label
                           key={cup.id_beneficio}
-                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
-                            seleccionado
-                              ? 'bg-cyan-500/15 border-cyan-500/50 text-white'
-                              : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:border-slate-600'
+                          className={`flex items-center justify-between p-2.5 rounded-xl border text-xs transition-all select-none ${
+                            !esAplicable
+                              ? 'bg-slate-900/40 border-slate-800 text-slate-500 opacity-60 cursor-not-allowed'
+                              : seleccionado
+                              ? 'bg-gradient-to-r from-cyan-950/60 to-slate-900 border-cyan-400/80 text-white shadow-md shadow-cyan-500/10 cursor-pointer ring-1 ring-cyan-400/40'
+                              : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70 cursor-pointer'
                           }`}
                         >
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <input
                               type="checkbox"
+                              disabled={!esAplicable}
                               checked={seleccionado}
                               onChange={() => {
+                                if (!esAplicable) return;
                                 setCuponesSeleccionados((prev) =>
-                                  prev.includes(cup.id_beneficio)
-                                    ? prev.filter((id) => id !== cup.id_beneficio)
-                                    : [...prev, cup.id_beneficio]
+                                  prev.some((id) => Number(id) === idNum)
+                                    ? prev.filter((id) => Number(id) !== idNum)
+                                    : [...prev, idNum]
                                 );
                               }}
-                              className="rounded border-slate-600 text-cyan-500 focus:ring-cyan-500/40 cursor-pointer"
+                              className="w-4 h-4 rounded border-slate-600 text-cyan-500 focus:ring-cyan-500/40 cursor-pointer disabled:cursor-not-allowed shrink-0"
                             />
                             <div className="min-w-0">
-                              <p className="font-semibold truncate leading-tight">
+                              <p className={`font-semibold truncate leading-tight ${seleccionado ? 'text-cyan-300' : 'text-white'}`}>
                                 {cup.producto_nombre}
                               </p>
-                              <p className="text-[10px] text-slate-400 truncate">
-                                {cup.motivo}
-                              </p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {cup.motivo}
+                                </p>
+                                {!esAplicable && (
+                                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                    No está en el carrito
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
 
-                          <div className="text-right flex-shrink-0 ml-2">
+                          <div className="text-right flex-shrink-0 ml-3 flex flex-col items-end">
                             <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                               {cup.por_desc}% OFF
                             </span>
+                            {esAplicable && ahorroEstimado > 0 && (
+                              <span className={`text-[10px] font-mono mt-0.5 font-bold ${seleccionado ? 'text-cyan-400' : 'text-slate-400'}`}>
+                                {seleccionado ? 'Aplicado: -' : 'Ahorro: -'}{formatearMoneda(ahorroEstimado)}
+                              </span>
+                            )}
                           </div>
                         </label>
                       );
@@ -1782,21 +1867,37 @@ export default function CheckoutModal({
               )}
 
               {/* Desglose Total Financiero */}
-              <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-500/30 space-y-2">
+              <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-500/30 space-y-2.5">
                 <div className="flex items-center justify-between text-xs text-slate-300">
                   <span>Subtotal Artículos:</span>
                   <span className="font-mono">{formatearMoneda(subtotalLocal)}</span>
                 </div>
 
+                {/* Ahorro reactivo por beneficios acumulados */}
                 {calculoDescuentos.totalAhorro > 0 && (
-                  <div className="flex items-center justify-between text-xs text-emerald-400 font-semibold">
-                    <span className="flex items-center gap-1">
-                      <span>🏷️</span>
-                      <span>Ahorro por Cupones Aplicados:</span>
-                    </span>
-                    <span className="font-mono">-{formatearMoneda(calculoDescuentos.totalAhorro)}</span>
+                  <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 space-y-1.5 transition-all">
+                    <div className="flex items-center justify-between text-xs text-emerald-400 font-bold">
+                      <span className="flex items-center gap-1.5">
+                        <span>🏷️</span>
+                        <span>Ahorro por Beneficios Aplicados ({calculoDescuentos.desglose.length}):</span>
+                      </span>
+                      <span className="font-mono text-sm font-black">-{formatearMoneda(calculoDescuentos.totalAhorro)}</span>
+                    </div>
+
+                    {/* Detalle línea por línea de cada beneficio canjeado */}
+                    {calculoDescuentos.desglose.length > 0 && (
+                      <div className="space-y-1 pt-1 border-t border-emerald-500/20 text-[11px]">
+                        {calculoDescuentos.desglose.map((d, idx) => (
+                          <div key={d.id_beneficio || idx} className="flex items-center justify-between text-emerald-300/80">
+                            <span className="truncate pr-2">• {d.nombre}</span>
+                            <span className="font-mono font-semibold shrink-0">-{formatearMoneda(d.monto)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
+
                 <div className="flex items-center justify-between text-xs text-slate-300">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span>Costo de Entrega / Flete:</span>
@@ -1821,11 +1922,19 @@ export default function CheckoutModal({
                     )}
                   </span>
                 </div>
-                <div className="pt-2 border-t border-slate-700/80 flex items-center justify-between text-base font-black">
-                  <span className="text-white">Total Final a Pagar:</span>
-                  <span className="text-xl font-mono text-cyan-400">
-                    {formatearMoneda(montoTotalFinal)}
-                  </span>
+
+                <div className="pt-2.5 border-t border-slate-700/80 flex items-center justify-between">
+                  <span className="text-sm font-bold text-white">Total Final a Pagar:</span>
+                  <div className="text-right">
+                    {calculoDescuentos.totalAhorro > 0 && (
+                      <span className="block text-xs text-slate-400 line-through font-mono">
+                        {formatearMoneda(Number(subtotalLocal || 0) + costoEnvioFinal)}
+                      </span>
+                    )}
+                    <span className="text-xl font-black font-mono text-cyan-400 transition-all duration-300">
+                      {formatearMoneda(montoTotalFinal)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -1873,45 +1982,65 @@ export default function CheckoutModal({
                 ) : (
                   <>
                     {/* Código QR Dinámico para pago ágil con el celular */}
-                    {(mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point) && (
-                      <div className="py-2 flex flex-col items-center justify-center space-y-2.5">
-                        <div className="p-3 bg-white rounded-2xl shadow-xl border-2 border-[#009EE3]/50 inline-flex items-center justify-center">
-                          <QRCodeSVG
-                            value={mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point}
-                            size={160}
-                            level="M"
-                            includeMargin={false}
-                          />
+                    {(mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point) ? (
+                      <>
+                        <div className="py-2 flex flex-col items-center justify-center space-y-2.5">
+                          <div className="p-3 bg-white rounded-2xl shadow-xl border-2 border-[#009EE3]/50 inline-flex items-center justify-center">
+                            <QRCodeSVG
+                              value={mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point}
+                              size={160}
+                              level="M"
+                              includeMargin={false}
+                            />
+                          </div>
+                          <div className="text-center space-y-1">
+                            <p className="text-[11px] text-slate-200 flex items-center justify-center gap-1.5 font-medium">
+                              <span>📱</span>
+                              <span>Escanea con la cámara de tu celular para pagar desde el móvil</span>
+                            </p>
+                            <p className="text-[10px] text-slate-400">
+                              Abre directamente la pasarela oficial de Mercado Pago en tu navegador móvil sin necesidad de iniciar sesión en la PC.
+                            </p>
+                          </div>
                         </div>
-                        <div className="text-center space-y-1">
-                          <p className="text-[11px] text-slate-200 flex items-center justify-center gap-1.5 font-medium">
-                            <span>📱</span>
-                            <span>Escanea con la cámara de tu celular para pagar desde el móvil</span>
-                          </p>
-                          <p className="text-[10px] text-slate-400">
-                            Abre directamente la pasarela oficial de Mercado Pago en tu navegador móvil sin necesidad de iniciar sesión en la PC.
-                          </p>
+
+                        <div className="relative flex py-0.5 items-center">
+                          <div className="flex-grow border-t border-slate-800"></div>
+                          <span className="flex-shrink mx-3 text-[10px] uppercase font-mono text-slate-400 tracking-wider">o si prefieres en la computadora</span>
+                          <div className="flex-grow border-t border-slate-800"></div>
                         </div>
+
+                        <a
+                          href={mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#009EE3] to-cyan-500 hover:from-[#0089c7] hover:to-cyan-400 text-white font-extrabold text-xs tracking-wide flex items-center justify-center gap-2 transition-colors cursor-pointer block"
+                        >
+                          <span>Abrir Pasarela en Mercado Pago Web</span>
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      </>
+                    ) : (
+                      <div className="py-4 text-center space-y-3 bg-slate-950/60 rounded-xl border border-amber-500/30 p-4">
+                        <p className="text-xs text-amber-300 font-semibold">
+                          ⚠️ No se pudo generar el enlace de pago automáticamente.
+                        </p>
+                        <button
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={handleReintentarMP}
+                          className="py-2.5 px-5 rounded-xl bg-gradient-to-r from-cyan-400 to-cyan-500 hover:from-cyan-300 hover:to-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/20 active:scale-95 transition-all inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {isSubmitting ? (
+                            <span>Generando enlace...</span>
+                          ) : (
+                            <span>🔄 Generar Link y Código QR de Mercado Pago</span>
+                          )}
+                        </button>
                       </div>
                     )}
-
-                    <div className="relative flex py-0.5 items-center">
-                      <div className="flex-grow border-t border-slate-800"></div>
-                      <span className="flex-shrink mx-3 text-[10px] uppercase font-mono text-slate-400 tracking-wider">o si prefieres en la computadora</span>
-                      <div className="flex-grow border-t border-slate-800"></div>
-                    </div>
-
-                    <a
-                      href={mpPreferencia?.init_point || mpPreferencia?.sandbox_init_point || resultadoVenta?.init_point || ordenParaRetomar?.init_point || '#'}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#009EE3] to-cyan-500 hover:from-[#0089c7] hover:to-cyan-400 text-white font-extrabold text-xs tracking-wide flex items-center justify-center gap-2 transition-colors cursor-pointer block"
-                    >
-                      <span>Abrir Pasarela en Mercado Pago Web</span>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                    </a>
                   </>
                 )}
 
@@ -2246,7 +2375,7 @@ export default function CheckoutModal({
                     </>
                   ) : (
                     <>
-                      <span>Confirmar y Procesar Compra</span>
+                      <span>Confirmar y Pagar • {formatearMoneda(montoTotalFinal)}</span>
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
