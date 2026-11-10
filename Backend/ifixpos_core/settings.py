@@ -12,7 +12,8 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 import os
 from pathlib import Path
-from decouple import config
+from urllib.parse import urlparse
+from decouple import config, Csv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,7 +28,21 @@ SECRET_KEY = config('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['*', 'localhost', '127.0.0.1']
+# URLs públicas del sistema (se leen primero porque derivan hosts y orígenes CORS).
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+BACKEND_URL = config('BACKEND_URL', default='http://localhost:8000')
+
+# Hosts permitidos: configurables por entorno (variable ALLOWED_HOSTS, separada por comas).
+# - En desarrollo (DEBUG=True) se permite cualquier host para facilitar túneles y pruebas en red local.
+# - En producción (DEBUG=False) solo localhost por defecto; se agrega automáticamente el host de BACKEND_URL.
+ALLOWED_HOSTS = list(config(
+    'ALLOWED_HOSTS',
+    default='*' if DEBUG else 'localhost,127.0.0.1',
+    cast=Csv()
+))
+_host_backend = urlparse(BACKEND_URL).hostname
+if _host_backend and '*' not in ALLOWED_HOSTS and _host_backend not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_host_backend)
 
 
 # Application definition
@@ -98,6 +113,16 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT', cast=int),
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=60, cast=int),
+    }
+}
+
+# Caché en memoria local por defecto (usado por ConfiguracionSistema y ModoMantenimientoMiddleware)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'ifixpos-cache-local',
+        'TIMEOUT': 60,
     }
 }
 
@@ -144,7 +169,11 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='lucas.mino1508@gmail.com')
+# Remitente por defecto: variable de entorno; si falta, la cuenta SMTP autenticada; como último recurso, noreply.
+DEFAULT_FROM_EMAIL = config(
+    'DEFAULT_FROM_EMAIL',
+    default=config('EMAIL_HOST_USER', default='noreply@ifixpos.com')
+)
 
 MAILERS = {
     'default': {
@@ -159,12 +188,31 @@ MAILERS = {
     },
 }
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
+# Orígenes CORS permitidos (variable CORS_ALLOWED_ORIGINS, separada por comas).
+# Siempre se incluye el origen de FRONTEND_URL.
+CORS_ALLOWED_ORIGINS = list(config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:5173,http://127.0.0.1:5173',
+    cast=Csv()
+))
+if FRONTEND_URL.rstrip('/') not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(FRONTEND_URL.rstrip('/'))
 
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
-BACKEND_URL = config('BACKEND_URL', default='http://localhost:8000')
+# ==============================================================================
+# SEGURIDAD HTTPS (se activa con FORZAR_HTTPS=True en el entorno de producción)
+# ==============================================================================
+# Se mantiene desactivado por defecto para no romper el desarrollo local ni las pruebas.
+# DETRAS_DE_PROXY_HTTPS=True debe usarse solo si hay un proxy/balanceador de confianza
+# (nginx, ngrok, etc.) que envía la cabecera X-Forwarded-Proto.
+FORZAR_HTTPS = config('FORZAR_HTTPS', default=False, cast=bool)
+if FORZAR_HTTPS:
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31536000, cast=int)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    if config('DETRAS_DE_PROXY_HTTPS', default=False, cast=bool):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # ==============================================================================
 # CONFIGURACIÓN DE MERCADO PAGO SDK (PASARELA OFICIAL)
@@ -173,8 +221,55 @@ MERCADOPAGO_ACCESS_TOKEN = config('MERCADOPAGO_ACCESS_TOKEN', default='')
 MERCADOPAGO_PUBLIC_KEY = config('MERCADOPAGO_PUBLIC_KEY', default='')
 MERCADOPAGO_WEBHOOK_SECRET = config('MERCADOPAGO_WEBHOOK_SECRET', default='')
 
+# Acreditación simulada de pagos (ids 'SIMULADO-<id_venta>') para demostraciones y pruebas.
+# Por defecto solo se habilita con DEBUG=True; en producción debe permanecer desactivada.
+MERCADOPAGO_PERMITIR_SIMULACION = config('MERCADOPAGO_PERMITIR_SIMULACION', default=DEBUG, cast=bool)
+
+HABILITAR_THROTTLING = config('HABILITAR_THROTTLING', default=True, cast=bool)
+THROTTLE_EN_TESTS = False
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'users_app.authentication.JWTAuthentication',
     ],
+    'DEFAULT_PAGINATION_CLASS': 'core_app.pagination.PaginacionEstandar',
+    'PAGE_SIZE': 25,
+    'DEFAULT_THROTTLE_CLASSES': [
+        'core_app.throttling.IFixPosAnonRateThrottle',
+        'core_app.throttling.IFixPosUserRateThrottle',
+        'core_app.throttling.IFixPosScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': config('THROTTLE_RATE_ANON', default='120/min'),
+        'user': config('THROTTLE_RATE_USER', default='300/min'),
+        'login': config('THROTTLE_RATE_LOGIN', default='10/min'),
+        'otp': config('THROTTLE_RATE_OTP', default='6/min'),
+        'checkout_invitado': config('THROTTLE_RATE_CHECKOUT_INVITADO', default='15/min'),
+    },
+    'EXCEPTION_HANDLER': 'core_app.exceptions.manejador_excepciones_ifixpos',
+}
+
+# ==============================================================================
+# LOGGING TÉCNICO CENTRALIZADO (Fase 2 — Auditoría de Trazabilidad)
+# ==============================================================================
+LOG_LEVEL = config('LOG_LEVEL', default='INFO').upper()
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'estandar': {
+            'format': '[{asctime}] {levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'consola': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'estandar',
+        },
+    },
+    'root': {
+        'handlers': ['consola'],
+        'level': LOG_LEVEL,
+    },
 }

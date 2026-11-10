@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { resolverUrlImagen } from '../../utils/imagenes';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 const INPUT_CLASS =
   'w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all duration-200 focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 focus:shadow-[0_0_15px_rgba(139,92,246,0.25)] disabled:opacity-50 disabled:cursor-not-allowed';
 const INPUT_OTRO_CLASS =
@@ -126,8 +125,7 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
     return () => {
       activo = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [isOpen, dispositivoData, cargarModelos]);
 
   // Cierre con tecla Escape
   useEffect(() => {
@@ -500,20 +498,6 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
                   </AnimatePresence>
                 </div>
               </div>
-
-              <AnimatePresence>
-                {esModoOtro && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-cyan-200 text-[11px] leading-relaxed"
-                  >
-                    Tu equipo quedará registrado de inmediato. Los tipos, marcas y modelos personalizados se
-                    promueven al catálogo oficial al alcanzar 8 registros en el taller.
-                  </motion.p>
-                )}
-              </AnimatePresence>
 
               {/* Número de serie */}
               <div className="space-y-1.5">

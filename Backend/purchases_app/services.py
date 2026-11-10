@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from core_app.selectors import obtener_dias_validez_cotizacion
 from django.core.exceptions import ValidationError
 
 from django.core.files.storage import default_storage
@@ -338,7 +339,7 @@ def generar_solicitud_cotizacion(
                 id_invitacion=invitacion,
                 tiempo_promesa=0,
                 estado_cotizacion=Cotizacion.ESTADO_PENDIENTE,
-                fecha_validez=timezone.now().date() + timezone.timedelta(days=15),
+                fecha_validez=timezone.now().date() + timezone.timedelta(days=obtener_dias_validez_cotizacion()),
                 comentarios=None,
                 archivo_adjunto=None
             )
@@ -465,7 +466,7 @@ def modificar_solicitud_cotizacion(
                 id_invitacion=invitacion,
                 tiempo_promesa=0,
                 estado_cotizacion=Cotizacion.ESTADO_PENDIENTE,
-                fecha_validez=timezone.now().date() + timezone.timedelta(days=15),
+                fecha_validez=timezone.now().date() + timezone.timedelta(days=obtener_dias_validez_cotizacion()),
                 comentarios=None,
                 archivo_adjunto=None
             )

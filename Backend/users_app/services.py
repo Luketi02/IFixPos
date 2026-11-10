@@ -1,6 +1,9 @@
 import jwt
+import logging
 import secrets
 import os
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from django.conf import settings
@@ -59,14 +62,18 @@ def generar_tokens_jwt(usuario: Usuario) -> Dict[str, str]:
     """Genera tokens de acceso y refresco JWT para el usuario especificado."""
     now = datetime.now(timezone.utc)
     rol_nombre = usuario.id_rol.nombre_rol if usuario.id_rol else None
+    from core_app.selectors import (
+        obtener_tiempo_sesion_inactiva_horas,
+        obtener_minutos_vida_access_token
+    )
+    minutos_access = obtener_minutos_vida_access_token()
     access_payload = {
         'id_usuario': usuario.id_usuario,
         'email': usuario.email,
         'rol': rol_nombre,
         'iat': now,
-        'exp': now + timedelta(minutes=60)
+        'exp': now + timedelta(minutes=minutos_access)
     }
-    from core_app.selectors import obtener_tiempo_sesion_inactiva_horas
     horas_inactiva = obtener_tiempo_sesion_inactiva_horas()
     refresh_payload = {
         'id_usuario': usuario.id_usuario,
@@ -313,8 +320,9 @@ def generar_y_enviar_codigo_verificacion(*, usuario: Usuario, nombre: Optional[s
     Genera un código OTP de 6 dígitos único en TokenSeguridad (tipo='ACTIVACION'),
     lo guarda con vigencia de 15 minutos y despacha el correo electrónico de verificación.
     """
+    from core_app.selectors import obtener_minutos_vida_otp_recuperacion
     codigo_otp = f"{secrets.randbelow(1000000):06d}"
-    expiracion = django_timezone.now() + timedelta(minutes=15)
+    expiracion = django_timezone.now() + timedelta(minutes=obtener_minutos_vida_otp_recuperacion())
     
     # Invalida códigos previos de activación sin utilizar
     TokenSeguridad.objects.filter(id_usuario=usuario, tipo='ACTIVACION', utilizado=False).update(utilizado=True)
@@ -610,9 +618,10 @@ def cerrar_sesion_usuario(*, id_usuario: int, refresh_token: str) -> None:
 def generar_token_seguridad(*, email: str) -> str:
     """Genera un token de restablecimiento de contraseña para un usuario dado (TTL 5 minutos CU-43)."""
     with transaction.atomic():
+        from core_app.selectors import obtener_minutos_vida_otp_admin
         usuario = obtener_usuario_por_email(email)
         codigo = get_random_string(length=6).upper()
-        expiracion = django_timezone.now() + timedelta(minutes=5)
+        expiracion = django_timezone.now() + timedelta(minutes=obtener_minutos_vida_otp_admin())
         
         TokenSeguridad.objects.filter(id_usuario=usuario, tipo='RECUPERACION', utilizado=False).update(utilizado=True)
         
@@ -729,8 +738,8 @@ def generar_token_seguridad(*, email: str) -> str:
             adjuntar_logo=True
         )
 
-        # Mensaje de simulación para auditoría y desarrollo local
-        print(f"SIMULACIÓN: Enviando token {codigo} al correo {email}")
+        # Registro técnico sin exponer el código sensible en texto plano
+        logger.info("[Recuperación] Token de recuperación generado y despachado al correo %s", email)
         
     return codigo
 

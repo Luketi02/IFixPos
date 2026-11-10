@@ -5,110 +5,87 @@ import useAuth from '../../context/useAuth';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import { formatearNombreConInicial } from '../../utils/roleRoutes';
-import { obtenerImagenProducto, obtenerGaleriaImagenes, formatearMoneda } from '../../utils/productImages';
+import {
+  obtenerImagenProducto,
+  obtenerGaleriaImagenes,
+  formatearMoneda,
+  PLACEHOLDER_PRODUCTO_DEFAULT
+} from '../../utils/productImages';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 import CheckoutModal from '../../components/cart/CheckoutModal';
 import ClientBenefitsModal from '../../components/sales/ClientBenefitsModal';
 import GuestCheckoutChoiceModal from '../../components/cart/GuestCheckoutChoiceModal';
 import GuestCheckoutModal from '../../components/cart/GuestCheckoutModal';
+import CuentaRegresiva from '../../components/common/CuentaRegresiva';
+import { API_BASE_URL } from '../../config/api';
+import { INTERVALOS_MS } from '../../config/constantes';
+import { useMensajeTemporal } from '../../utils/errores';
+import { useIntervaloVisible } from '../../utils/polling';
+import { obtenerCatalogoCacheado, esErrorCancelacion } from '../../utils/cacheCatalogos';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // =============================================================================
 // SUBCOMPONENTE AISLADO: BANNER DE ORDEN PENDIENTE (0 RE-RENDERS A LA TIENDA)
-// Sincronizado estrictamente con la hora oficial del sistema (Wall-Clock Time)
+// Utiliza el componente compartido <CuentaRegresiva /> (Fase 2 - F7)
 // =============================================================================
 function BannerOrdenPendiente({ compra, onRetomar, onCancelar, onExpirado }) {
-  const tiempoFinRef = useRef(Date.now() + Math.max(0, compra?.segundos_restantes || 0) * 1000);
-  const [segundos, setSegundos] = useState(Math.max(0, compra?.segundos_restantes || 0));
-
-  useEffect(() => {
-    tiempoFinRef.current = Date.now() + Math.max(0, compra?.segundos_restantes || 0) * 1000;
-    setSegundos(Math.max(0, compra?.segundos_restantes || 0));
-  }, [compra?.segundos_restantes, compra?.id_venta]);
-
-  useEffect(() => {
-    const calcularRestante = () => {
-      const difMs = tiempoFinRef.current - Date.now();
-      return Math.max(0, Math.ceil(difMs / 1000));
-    };
-
-    const sincronizarTiempo = () => {
-      const segs = calcularRestante();
-      setSegundos(segs);
-      if (segs <= 0 && onExpirado) {
-        onExpirado();
-      }
-    };
-
-    sincronizarTiempo();
-    const t = setInterval(sincronizarTiempo, 1000);
-
-    const handleVisibilidad = () => {
-      if (document.visibilityState === 'visible') {
-        sincronizarTiempo();
-      }
-    };
-    const handleFocus = () => {
-      sincronizarTiempo();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilidad);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', handleVisibilidad);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [onExpirado]);
-
-  if (!compra || segundos <= 0) return null;
+  if (!compra) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: 'auto' }}
-      exit={{ opacity: 0, height: 0 }}
-      className="bg-gradient-to-r from-cyan-950/95 via-[#1E293B] to-slate-900 border-b border-cyan-500/40 px-4 sm:px-6 lg:px-8 py-3 shadow-lg shadow-cyan-950/30 sticky top-16 z-20"
+    <CuentaRegresiva
+      expiraEn={compra?.expira_en}
+      segundosIniciales={Math.max(0, compra?.segundos_restantes || 0)}
+      identificador={compra?.id_venta}
+      onExpirado={onExpirado}
     >
-      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
-            <span className="text-base">⏱️</span>
-          </div>
-          <div>
-            <p className="text-xs font-bold text-white flex items-center gap-2">
-              <span>Tienes una orden de compra en curso con repuestos reservados</span>
-              <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono text-[11px] font-black">
-                {String(Math.floor(segundos / 60)).padStart(2, '0')}:{String(segundos % 60).padStart(2, '0')}
-              </span>
-            </p>
-            <p className="text-[11px] text-slate-400">
-              Total a abonar: <span className="text-cyan-400 font-mono font-bold">{formatearMoneda(compra.total)}</span> • Puedes retomar el pago o cancelar para liberar el stock a tu carrito.
-            </p>
-          </div>
-        </div>
+      {(segundos, textoMMSS) => {
+        if (segundos <= 0) return null;
+        return (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-gradient-to-r from-cyan-950/95 via-[#1E293B] to-slate-900 border-b border-cyan-500/40 px-4 sm:px-6 lg:px-8 py-3 shadow-lg shadow-cyan-950/30 sticky top-16 z-20"
+          >
+            <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+                  <span className="text-base">⏱️</span>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white flex items-center gap-2">
+                    <span>Tienes una orden de compra en curso con repuestos reservados</span>
+                    <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono text-[11px] font-black">
+                      {textoMMSS}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Total a abonar: <span className="text-cyan-400 font-mono font-bold">{formatearMoneda(compra.total)}</span> • Puedes retomar el pago o cancelar para liberar el stock a tu carrito.
+                  </p>
+                </div>
+              </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => onRetomar(compra)}
-            className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/25 transition-all flex items-center gap-1.5 cursor-pointer"
-          >
-            <span>⚡ Retomar Pago</span>
-          </button>
-          <button
-            type="button"
-            onClick={onCancelar}
-            className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:border-rose-400 text-xs font-medium transition-all cursor-pointer"
-          >
-            <span>✕ Cancelar Reserva</span>
-          </button>
-        </div>
-      </div>
-    </motion.div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onRetomar(compra)}
+                  className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/25 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>⚡ Retomar Pago</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelar}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:border-rose-400 text-xs font-medium transition-all cursor-pointer"
+                >
+                  <span>✕ Cancelar Reserva</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        );
+      }}
+    </CuentaRegresiva>
   );
 }
 
@@ -152,11 +129,14 @@ const ProductCard = memo(function ProductCard({ prod, onSelect }) {
         <img
           src={imagenSrc}
           alt={prod.nombre}
+          width="400"
+          height="224"
           loading="lazy"
+          decoding="async"
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           onError={(e) => {
             e.target.onerror = null;
-            e.target.src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80';
+            e.target.src = PLACEHOLDER_PRODUCTO_DEFAULT;
           }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-[#1E293B] via-transparent to-black/20 pointer-events-none" />
@@ -249,7 +229,7 @@ export default function ClientStoreScreen() {
   const [guestChoiceModalAbierto, setGuestChoiceModalAbierto] = useState(false);
   const [guestCheckoutModalAbierto, setGuestCheckoutModalAbierto] = useState(false);
   const [toastNotificacion, setToastNotificacion] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useMensajeTemporal();
 
   // ---------------------------------------------------------------------------
   // Estado para Órdenes Pendientes de Pago en Curso (Reserva TTL de 30 min)
@@ -265,13 +245,6 @@ export default function ClientStoreScreen() {
   const [productoDetalle, setProductoDetalle] = useState(null);
   const [fotoActivaIndex, setFotoActivaIndex] = useState(0);
   const [cantidadDetalle, setCantidadDetalle] = useState(1);
-
-  // Auto-ocultar alerta de error temporal a los 15 segundos (Regla 6)
-  useEffect(() => {
-    if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 15000);
-    return () => clearTimeout(timer);
-  }, [errorMessage]);
 
   // Auto-ocultar Toast de éxito a los 15 segundos
   useEffect(() => {
@@ -291,24 +264,44 @@ export default function ClientStoreScreen() {
   // ---------------------------------------------------------------------------
   // Carga de Categorías
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Monitoreo de Beneficios Activos del Cliente (Motor Inteligente)
+  // ---------------------------------------------------------------------------
+  const cargarBeneficiosActivos = useCallback(async () => {
+    if (!token) {
+      setConteoBeneficiosActivos(0);
+      return;
+    }
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/sales/beneficios/mis-beneficios/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setConteoBeneficiosActivos(res.data?.total_activos || 0);
+    } catch (_) {
+      // Silencioso
+    }
+  }, [token]);
+
   useEffect(() => {
+    const controller = new AbortController();
     const cargarCategorias = async () => {
       try {
-        const res = await axios.get(`${API_BASE_URL}/api/catalog/categorias/activas/`);
-        setCategorias(Array.isArray(res.data) ? res.data : []);
+        const datos = await obtenerCatalogoCacheado(
+          'catalog:categorias-activas',
+          '/api/catalog/categorias/activas/',
+          { signal: controller.signal }
+        );
+        setCategorias(Array.isArray(datos) ? datos : []);
       } catch (err) {
-        console.error('Error al cargar categorías:', err);
+        if (!esErrorCancelacion(err)) {
+          console.error('Error al cargar categorías:', err);
+        }
       }
     };
     cargarCategorias();
-    if (token) {
-      axios.get(`${API_BASE_URL}/api/sales/beneficios/mis-beneficios/`, {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then((res) => {
-        setConteoBeneficiosActivos(res.data?.total_activos || 0);
-      }).catch(() => {});
-    }
-  }, [token]);
+    cargarBeneficiosActivos();
+    return () => controller.abort();
+  }, [token, cargarBeneficiosActivos]);
 
   // ---------------------------------------------------------------------------
   // Consulta de Resumen del Carrito Activo
@@ -365,9 +358,9 @@ export default function ClientStoreScreen() {
 
 
   // ---------------------------------------------------------------------------
-  // Carga y Filtrado de Productos de la Tienda
+  // Carga y Filtrado de Productos de la Tienda (con AbortController - Fase 2 F8)
   // ---------------------------------------------------------------------------
-  const cargarProductos = useCallback(async () => {
+  const cargarProductos = useCallback(async (signal = undefined) => {
     setCargando(true);
     try {
       const params = {};
@@ -378,20 +371,30 @@ export default function ClientStoreScreen() {
         params.id_categoria = categoriaSeleccionada;
       }
 
-      const res = await axios.get(`${API_BASE_URL}/api/catalog/productos/`, { params });
-      setProductos(Array.isArray(res.data) ? res.data : []);
+      const res = await axios.get(`${API_BASE_URL}/api/catalog/productos/`, {
+        params,
+        ...(signal ? { signal } : {})
+      });
+      if (!signal?.aborted) {
+        setProductos(Array.isArray(res.data) ? res.data : []);
+      }
     } catch (err) {
+      if (esErrorCancelacion(err) || signal?.aborted) return;
       console.error('Error al cargar productos de la tienda:', err);
       const dataErr = err.response?.data;
       const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
       setErrorMessage(msg || 'No fue posible cargar el catálogo de productos. Intente nuevamente.');
     } finally {
-      setCargando(false);
+      if (!signal?.aborted) {
+        setCargando(false);
+      }
     }
   }, [debouncedBusqueda, categoriaSeleccionada]);
 
   useEffect(() => {
-    cargarProductos();
+    const controller = new AbortController();
+    cargarProductos(controller.signal);
+    return () => controller.abort();
   }, [cargarProductos]);
 
   // ---------------------------------------------------------------------------
@@ -626,11 +629,10 @@ export default function ClientStoreScreen() {
     }
   }, [token]);
 
-  useEffect(() => {
-    consultarCompraPendiente();
-    const interval = setInterval(consultarCompraPendiente, 15000);
-    return () => clearInterval(interval);
-  }, [consultarCompraPendiente]);
+  useIntervaloVisible(consultarCompraPendiente, token ? INTERVALOS_MS.ORDEN_PENDIENTE : null, {
+    ejecutarAlMontar: true,
+    sincronizarAlVolver: true
+  });
 
   const handleCancelarOrdenDesdeBanner = async () => {
     if (!compraPendiente?.id_venta || !token) return;
@@ -644,9 +646,10 @@ export default function ClientStoreScreen() {
       setOrdenParaRetomar(null);
       await refrescarCarrito();
       await cargarProductos();
+      await cargarBeneficiosActivos();
       setToastNotificacion({
         nombre: 'Reserva Cancelada',
-        mensaje: 'La orden fue cancelada y tus repuestos han vuelto a tu carrito.'
+        mensaje: 'La orden fue cancelada, tus repuestos han vuelto al carrito y tus beneficios fueron preservados.'
       });
       setCarritoDrawerAbierto(true);
     } catch (err) {
@@ -659,6 +662,7 @@ export default function ClientStoreScreen() {
     setOrdenParaRetomar(null);
     await refrescarCarrito();
     await cargarProductos();
+    await cargarBeneficiosActivos();
     setToastNotificacion({
       nombre: 'Compra Confirmada',
       mensaje: '¡Tu orden virtual ha sido registrada con éxito!',
@@ -784,6 +788,7 @@ export default function ClientStoreScreen() {
                 await consultarCompraPendiente();
                 await refrescarCarrito();
                 await cargarProductos();
+                await cargarBeneficiosActivos();
               }}
             />
           )}
@@ -1574,11 +1579,12 @@ export default function ClientStoreScreen() {
           setOrdenParaRetomar(null);
           await refrescarCarrito();
           await cargarProductos();
+          await cargarBeneficiosActivos();
           if (abrirCarrito) {
             setCarritoDrawerAbierto(true);
             setToastNotificacion({
               nombre: 'Retorno al Carrito',
-              mensaje: 'La reserva fue cancelada. Tus artículos siguen en el carrito para que sigas comprando.'
+              mensaje: 'La reserva fue cancelada. Tus artículos siguen en el carrito y tus beneficios fueron preservados.'
             });
           }
         }}

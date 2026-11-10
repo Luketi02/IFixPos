@@ -11,8 +11,7 @@ import ModificarSolicitudModal from '../../components/purchases/ModificarSolicit
 import ConfirmarEliminacionSolicitudModal from '../../components/purchases/ConfirmarEliminacionSolicitudModal';
 import RegistrarProductoModal from '../../components/inventory/RegistrarProductoModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminQuotationsScreen() {
   const { token } = useAuth();
   const navigate = useNavigate();

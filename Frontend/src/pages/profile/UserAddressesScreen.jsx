@@ -8,8 +8,7 @@ import UserProfileDropdown from '../../components/navigation/UserProfileDropdown
 import DireccionModal from '../../components/geo/DireccionModal';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function UserAddressesScreen() {
   const navigate = useNavigate();
   const { user, token } = useAuth();

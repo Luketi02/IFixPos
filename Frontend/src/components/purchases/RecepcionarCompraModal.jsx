@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function RecepcionarCompraModal({
   isOpen,
   onClose,
@@ -34,7 +33,7 @@ export default function RecepcionarCompraModal({
   }, [errorAlerta]);
 
   const obtenerHeaders = useCallback(() => {
-    const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+    const activeToken = token || localStorage.getItem('access_token');
     return {
       headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
     };

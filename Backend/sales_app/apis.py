@@ -57,6 +57,7 @@ class RealizarCompraVirtualApi(APIView):
             {
                 "mensaje": "Compra virtual procesada con éxito.",
                 "id_venta": venta.id_venta,
+                "expira_en": output.data.get("expira_en", 0),
                 "venta": output.data
             },
             status=status.HTTP_201_CREATED
@@ -300,6 +301,14 @@ class CompletarPagoApi(APIView):
                 })
             estado = operacion.etapa
 
+        from sales_app.selectors import _construir_desglose_cobro
+        desglose = _construir_desglose_cobro(
+            venta=operacion if isinstance(operacion, Venta) else getattr(operacion, 'id_venta', None),
+            reparacion=operacion if isinstance(operacion, Reparacion) else None,
+            monto_operacion=total_adeudado,
+            estado_pago='PENDIENTE'
+        )
+
         return Response(
             {
                 "id_operacion": id_operacion,
@@ -312,6 +321,7 @@ class CompletarPagoApi(APIView):
                     "dni": cliente_dni
                 },
                 "total_a_cobrar": str(total_adeudado),
+                "desglose_cobro": desglose,
                 "items": items
             },
             status=status.HTTP_200_OK
@@ -366,7 +376,8 @@ class CompletarPagoApi(APIView):
                 "mensaje": "Cobro registrado con éxito y comprobante generado.",
                 "id_pago": pago.id_pago,
                 "monto_pagado": str(pago.monto_pagado),
-                "ruta_comprobante": pago.ruta_comprobante
+                "ruta_comprobante": pago.ruta_comprobante,
+                "desglose_cobro": getattr(pago, 'desglose_cobro', None)
             },
             status=status.HTTP_201_CREATED
         )
@@ -930,8 +941,16 @@ class MercadoPagoWebhookApi(APIView):
 
         resultado = procesar_webhook_mercadopago(
             data=request.data if isinstance(request.data, dict) else {},
-            query_params=request.query_params.dict()
+            query_params=request.query_params.dict(),
+            firma=request.headers.get('x-signature', ''),
+            request_id=request.headers.get('x-request-id', '')
         )
+
+        estado = resultado.get('status')
+        if estado == 'forbidden':
+            return Response(resultado, status=status.HTTP_403_FORBIDDEN)
+        if estado == 'invalid_signature':
+            return Response(resultado, status=status.HTTP_401_UNAUTHORIZED)
         return Response(resultado, status=status.HTTP_200_OK)
 
 
@@ -998,7 +1017,7 @@ class ConsultarEstadoVentaApi(APIView):
             "id_venta": venta.id_venta,
             "estado_venta": venta.estado_venta,
             "codigo_sec": venta.codigo_sec,
-            "pagada": venta.estado_venta == "PAGADA",
+            "pagada": str(venta.estado_venta or "").upper() in ("PAGADA", "PAGADO"),
             "ruta_comprobante": ruta_comp
         }
         output_serializer = EstadoVentaOutputSerializer(data)
@@ -1074,21 +1093,25 @@ class ConsultarCompraPendienteActivaApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from sales_app.services import limpiar_ventas_pendientes_expiradas
         from sales_app.selectors import obtener_venta_pendiente_activa
         from sales_app.serializers import CompraPendienteActivaOutputSerializer
 
+        limpiar_ventas_pendientes_expiradas()
         datos = obtener_venta_pendiente_activa(request.user)
         if datos:
             payload = {
                 "tiene_pendiente": True,
                 "venta": datos,
-                "segundos_restantes": datos["segundos_restantes"]
+                "segundos_restantes": datos["segundos_restantes"],
+                "expira_en": datos["segundos_restantes"]
             }
         else:
             payload = {
                 "tiene_pendiente": False,
                 "venta": None,
-                "segundos_restantes": 0
+                "segundos_restantes": 0,
+                "expira_en": 0
             }
 
         serializer = CompraPendienteActivaOutputSerializer(payload)
@@ -1145,6 +1168,7 @@ class RealizarCompraInvitadoApi(APIView):
     - Descuenta stock en tiempo real y genera el link de pago o comprobante de retiro.
     """
     permission_classes = [AllowAny]
+    throttle_scope = 'checkout_invitado'
 
     def post(self, request):
         from sales_app.serializers import (
@@ -1220,19 +1244,13 @@ class BeneficioRecomendacionCarritoApi(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from sales_app.models import CarritoCompra, CarritoProducto
+        from sales_app.selectors import obtener_items_carrito_activo_usuario
         from sales_app.services import evaluar_beneficio_durante_carrito
         from sales_app.serializers import BeneficioClienteOutputSerializer
 
-        carrito = CarritoCompra.objects.filter(
-            id_usuario=request.user,
-            estado__iexact='activo'
-        ).first()
-
-        if not carrito:
+        items = obtener_items_carrito_activo_usuario(request.user)
+        if not items:
             return Response({"recomendaciones": []}, status=status.HTTP_200_OK)
-
-        items = list(CarritoProducto.objects.filter(id_carrito=carrito).select_related('id_producto'))
         nuevos_beneficios = evaluar_beneficio_durante_carrito(
             id_usuario=request.user.id_usuario,
             items_carrito=items

@@ -6,8 +6,7 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import { resolverUrlImagen } from '../../utils/imagenes';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 // Configuración visual y semántica de los estados de reparación
 const ESTADOS_MAP = {
   ESPERANDO_DISPOSITIVO: { label: 'Esperando dispositivo', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },

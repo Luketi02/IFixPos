@@ -6,8 +6,7 @@ import CatalogTable from '../../../components/catalogs/CatalogTable';
 import CatalogCreateModal from '../../../components/catalogs/CatalogCreateModal';
 import CatalogStatusConfirmModal from '../../../components/catalogs/CatalogStatusConfirmModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../../config/api';
 /**
  * Pantalla de Gestión de Categorías de Producto (Inventario y Tienda).
  * Integra selección múltiple, baja masiva, "Activar Todos" y activación directa sin advertencia.

@@ -6,8 +6,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminDashboardScreen() {
   const { user, token } = useAuth();
   const navigate = useNavigate();

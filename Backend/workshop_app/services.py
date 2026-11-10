@@ -1,8 +1,11 @@
 from typing import Any
 from decimal import Decimal
 import os
+import logging
 import secrets
 import string
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.utils import timezone as django_timezone
@@ -165,8 +168,9 @@ def validar_imagen_dispositivo(archivo) -> None:
     if not archivo or not hasattr(archivo, 'name'):
         return
 
+    from core_app.selectors import obtener_extensiones_permitidas_archivos
     ext = os.path.splitext(archivo.name)[1].lower()
-    formatos_permitidos = ['.png', '.jpg', '.jpeg', '.webp', '.jfif', '.avif', '.heic', '.heif']
+    formatos_permitidos = list(obtener_extensiones_permitidas_archivos(solo_imagenes=True))
     if ext not in formatos_permitidos:
         raise ValidationError(f"Formato de imagen no permitido. Solo se admiten: {', '.join(formatos_permitidos)}")
 
@@ -507,16 +511,47 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
         url_frontend = obtener_url_frontend()
         url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
 
-        asunto = f"Orden de Servicio #{reparacion.id_reparacion} - Ingreso de Reparación (IFixPos)"
+        venta = reparacion.id_venta
+        monto_diag_str = f"${venta.monto_subtotal:,.2f}" if (venta and venta.monto_subtotal) else "$5,000.00"
+        esta_pendiente_pago = (not venta) or str(venta.estado_venta).upper() == 'PENDIENTE'
+
+        if esta_pendiente_pago:
+            indicacion_pago_txt = (
+                f"- Diagnóstico Técnico: {monto_diag_str} (Pendiente de cobro en mostrador)\n"
+                f"- Importante: Debe asistir con su DNI y abonar el costo del diagnóstico para iniciar el proceso.\n"
+            )
+            indicacion_pago_html = (
+                f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Costo Diagnóstico:</strong></td>"
+                f"<td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='color: #d97706; font-weight: bold;'>{monto_diag_str} (Pendiente de pago)</span></td></tr>"
+                f"<tr><td colspan='2' style='padding: 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; color: #b45309; font-size: 13px; font-weight: bold;'>"
+                f"Debe asistir con su DNI y abonar el costo del diagnóstico para iniciar el proceso.</td></tr>"
+            )
+            mensaje_campana = (
+                f"Nueva orden de servicio generada para su dispositivo ({nombre_marca} {nombre_modelo}). "
+                f"Código de seguridad: {reparacion.codigo_sec}. Debe asistir con su DNI y abonar el costo del diagnóstico para iniciar el proceso."
+            )
+        else:
+            indicacion_pago_txt = f"- Diagnóstico Técnico: {monto_diag_str} (Abonado online exitosamente)\n"
+            indicacion_pago_html = (
+                f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Costo Diagnóstico:</strong></td>"
+                f"<td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='color: #10b981; font-weight: bold;'>{monto_diag_str} (Abonado Online)</span></td></tr>"
+            )
+            mensaje_campana = (
+                f"Nueva orden de servicio generada para su dispositivo ({nombre_marca} {nombre_modelo}). "
+                f"Código de seguridad: {reparacion.codigo_sec}. Diagnóstico abonado online exitosamente."
+            )
+
+        asunto = f"Orden de Servicio ({nombre_marca} {nombre_modelo}) - Ingreso de Reparación (IFixPos)"
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
-            f"Se ha iniciado formalmente la Orden de Servicio #{reparacion.id_reparacion} para su equipo.\n\n"
+            f"Se ha iniciado formalmente la Orden de Servicio para su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles del Ingreso:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
             f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
             f"- Estado Inicial: {reparacion.etapa}\n"
             f"- Código de Seguridad / Token: {reparacion.codigo_sec}\n"
-            f"- Problema Informado: {reparacion.desc_cliente}\n\n"
+            f"- Problema Informado: {reparacion.desc_cliente}\n"
+            f"{indicacion_pago_txt}\n"
             f"Presente el código de seguridad '{reparacion.codigo_sec}' en el mostrador del taller para confirmar la entrega física del equipo.\n\n"
             f"Acceda a los detalles y seguimiento en línea de su reparación aquí:\n"
             f"{url_reparacion}\n\n"
@@ -525,7 +560,7 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
 
         cuerpo_html = (
             f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
-            f"<h2 style='color: #06b6d4;'>IFixPos - Orden de Servicio #{reparacion.id_reparacion}</h2>"
+            f"<h2 style='color: #06b6d4;'>IFixPos - Orden de Servicio ({nombre_marca} {nombre_modelo})</h2>"
             f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
             f"<p>Confirmamos la apertura del servicio técnico para su dispositivo:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
@@ -534,8 +569,9 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.etapa}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Código de Seguridad:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>{reparacion.codigo_sec}</span></td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Descripción:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
+            f"{indicacion_pago_html}"
             f"</table>"
-            f"<p style='color: #64748b; font-size: 13px;'>Presente este código en el mostrador físico del taller al entregar su equipo.</p>"
+            f"<p style='color: #64748b; font-size: 13px;'>Presente su código de seguridad '{reparacion.codigo_sec}' en el mostrador físico del taller al entregar su equipo.</p>"
             f"<div style='margin: 24px 0; text-align: center;'>"
             f"<a href='{url_reparacion}' style='background-color: #06b6d4; color: #0f172a; padding: 12px 24px; border-radius: 8px; font-weight: bold; text-decoration: none; display: inline-block; font-size: 14px;'>Ver Reparación y Seguimiento</a>"
             f"</div>"
@@ -549,182 +585,16 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             cuerpo_texto=cuerpo_texto,
             tipo_notificacion="REPARACION",
             cuerpo_html=cuerpo_html,
-            mensaje_notificacion=f"Nueva orden de servicio generada para su dispositivo ({nombre_marca} {nombre_modelo}). Presione aquí para obtener más detalles.",
+            mensaje_notificacion=mensaje_campana,
             codigo_sensible=reparacion.codigo_sec,
             dispositivo=dispositivo,
             adjuntar_logo=True
         )
     except Exception as e:
-        print(f"[CU-26 Remito] Advertencia al generar o despachar remito: {e}")
+        logger.warning("[CU-26 Remito] Advertencia al generar o despachar remito: %s", e)
 
 
-def seleccionar_mejor_tecnico_para_reparacion(
-    *,
-    reparacion: Reparacion
-) -> tuple[Any, dict]:
-    """
-    Algoritmo Inteligente de Asignación de Reparaciones a Técnicos.
-    Evalúa a todos los técnicos activos del sistema según las 5 ponderaciones configurables:
-      1. Carga Laboral Activa (menor carga = mayor puntaje)
-      2. Calificación de Clientes (mayor promedio de estrellas = mayor puntaje)
-      3. Rapidez de Resolución (menor promedio de días = mayor puntaje)
-      4. Especialidad en Categoría (más reparaciones resueltas de la misma categoría = mayor puntaje)
-      5. Tasa de Efectividad (mayor porcentaje de reparaciones exitosas vs canceladas = mayor puntaje)
-    
-    Retorna una tupla: (Usuario_tecnico_ganador, dict_detalle_metricas)
-    """
-    tecnicos = list(Usuario.objects.filter(id_rol__codigo='TECNICO', is_active=True))
-    if not tecnicos:
-        return None, {"razon": "No hay técnicos activos registrados en el sistema."}
-
-    if len(tecnicos) == 1:
-        return tecnicos[0], {
-            "tecnico_id": tecnicos[0].id_usuario,
-            "email": tecnicos[0].email,
-            "razon": "Único técnico activo disponible en el sistema.",
-            "score_final": 100.0
-        }
-
-    peso_carga = obtener_configuracion_int('pesoAsignacion_CargaLaboral', 30)
-    peso_calif = obtener_configuracion_int('pesoAsignacion_Calificacion', 25)
-    peso_rapidez = obtener_configuracion_int('pesoAsignacion_Rapidez', 20)
-    peso_especialidad = obtener_configuracion_int('pesoAsignacion_Especialidad', 15)
-    peso_efectividad = obtener_configuracion_int('pesoAsignacion_Efectividad', 10)
-
-    suma_pesos = peso_carga + peso_calif + peso_rapidez + peso_especialidad + peso_efectividad
-    if suma_pesos <= 0:
-        peso_carga, peso_calif, peso_rapidez, peso_especialidad, peso_efectividad = 30, 25, 20, 15, 10
-        suma_pesos = 100
-
-    etapas_activas = [
-        'ESPERANDO_DIAGNOSTICO',
-        'EN_DIAGNOSTICO',
-        'ESPERANDO_CONFIRMACION',
-        'ESPERANDO_REPUESTOS',
-        'EN_REPARACION'
-    ]
-
-    cats_reparacion = list(reparacion.categorias.all().values_list('id_categoria', flat=True))
-    candidatos_metricas = []
-
-    for tec in tecnicos:
-        carga_raw = Reparacion.objects.filter(id_usuario=tec, etapa__in=etapas_activas).count()
-        calif_aggr = Calificacion.objects.filter(id_reparacion__id_usuario=tec).aggregate(prom=Avg('puntuacion'))['prom']
-        if calif_aggr is not None:
-            calif_promedio = float(calif_aggr)
-            calif_score = min(100.0, max(0.0, (calif_promedio / 5.0) * 100.0))
-        else:
-            calif_promedio = 3.5
-            calif_score = 70.0
-
-        resueltas = Reparacion.objects.filter(
-            id_usuario=tec,
-            etapa__in=['FINALIZADO', 'ENTREGADO'],
-            fecha_entrega__isnull=False
-        ).only('fecha_inicio', 'fecha_entrega')
-
-        if resueltas.exists():
-            dias_totales = [max(1, (r.fecha_entrega - r.fecha_inicio).days) for r in resueltas]
-            prom_dias = sum(dias_totales) / len(dias_totales)
-        else:
-            prom_dias = 3.0
-
-        if cats_reparacion:
-            esp_raw = Reparacion.objects.filter(
-                id_usuario=tec,
-                etapa__in=['FINALIZADO', 'ENTREGADO'],
-                categorias__in=cats_reparacion
-            ).distinct().count()
-        else:
-            esp_raw = 0
-
-        exitosas = Reparacion.objects.filter(id_usuario=tec, etapa__in=['FINALIZADO', 'ENTREGADO']).count()
-        canceladas = Reparacion.objects.filter(id_usuario=tec, etapa__in=['CANCELADA', 'CANCELADO', 'RECHAZADO', 'RECHAZADA']).count()
-        total_term = exitosas + canceladas
-        if total_term > 0:
-            efectividad_score = (exitosas / total_term) * 100.0
-        else:
-            efectividad_score = 85.0
-
-        candidatos_metricas.append({
-            'usuario': tec,
-            'carga_raw': carga_raw,
-            'calif_promedio': round(calif_promedio, 2),
-            'calif_score': calif_score,
-            'prom_dias': round(prom_dias, 2),
-            'esp_raw': esp_raw,
-            'efectividad_score': efectividad_score,
-            'exitosas': exitosas,
-            'total_term': total_term
-        })
-
-    min_carga = min(c['carga_raw'] for c in candidatos_metricas)
-    max_carga = max(c['carga_raw'] for c in candidatos_metricas)
-    min_dias = min(c['prom_dias'] for c in candidatos_metricas)
-    max_dias = max(c['prom_dias'] for c in candidatos_metricas)
-    min_esp = min(c['esp_raw'] for c in candidatos_metricas)
-    max_esp = max(c['esp_raw'] for c in candidatos_metricas)
-
-    for c in candidatos_metricas:
-        if min_carga == max_carga:
-            c['score_carga'] = 100.0
-        else:
-            c['score_carga'] = ((max_carga - c['carga_raw']) / (max_carga - min_carga)) * 100.0
-
-        if min_dias == max_dias:
-            c['score_rapidez'] = 100.0
-        else:
-            c['score_rapidez'] = ((max_dias - c['prom_dias']) / (max_dias - min_dias)) * 100.0
-
-        if max_esp == 0:
-            c['score_esp'] = 50.0
-        elif min_esp == max_esp:
-            c['score_esp'] = 100.0
-        else:
-            c['score_esp'] = ((c['esp_raw'] - min_esp) / (max_esp - min_esp)) * 100.0
-
-        c['score_final'] = round((
-            c['score_carga'] * (peso_carga / suma_pesos) +
-            c['calif_score'] * (peso_calif / suma_pesos) +
-            c['score_rapidez'] * (peso_rapidez / suma_pesos) +
-            c['score_esp'] * (peso_especialidad / suma_pesos) +
-            c['efectividad_score'] * (peso_efectividad / suma_pesos)
-        ), 2)
-
-    candidatos_metricas.sort(
-        key=lambda x: (-x['score_final'], x['carga_raw'], x['usuario'].id_usuario)
-    )
-
-    ganador = candidatos_metricas[0]
-    detalle = {
-        'tecnico_ganador_id': ganador['usuario'].id_usuario,
-        'tecnico_ganador_email': ganador['usuario'].email,
-        'score_final': ganador['score_final'],
-        'puntajes': {
-            'carga_laboral': round(ganador['score_carga'], 1),
-            'calificacion': round(ganador['calif_score'], 1),
-            'rapidez': round(ganador['score_rapidez'], 1),
-            'especialidad': round(ganador['score_esp'], 1),
-            'efectividad': round(ganador['efectividad_score'], 1)
-        },
-        'metricas_reales': {
-            'reparaciones_activas': ganador['carga_raw'],
-            'promedio_estrellas': ganador['calif_promedio'],
-            'dias_promedio_resolucion': ganador['prom_dias'],
-            'reparaciones_en_categoria': ganador['esp_raw'],
-            'tasa_efectividad_pct': round(ganador['efectividad_score'], 1)
-        },
-        'ponderaciones_aplicadas': {
-            'carga_laboral_pct': peso_carga,
-            'calificacion_pct': peso_calif,
-            'rapidez_pct': peso_rapidez,
-            'especialidad_pct': peso_especialidad,
-            'efectividad_pct': peso_efectividad
-        },
-        'total_tecnicos_evaluados': len(tecnicos)
-    }
-
-    return ganador['usuario'], detalle
+from workshop_app.services_metricas import seleccionar_mejor_tecnico_para_reparacion  # noqa: E402, F401
 
 
 @transaction.atomic
@@ -794,14 +664,14 @@ def iniciar_reparacion(
             reparacion.id_usuario = tecnico_asignado
             reparacion.save(update_fields=['id_usuario'])
 
-    # Paso 7: Registro en Bitácora Técnica
-    comentario_apertura = "Apertura de orden de servicio"
+    # Paso 7: Registro en Bitácora Técnica con trazabilidad rica
+    comentario_apertura = f"Proceso inicializado: Apertura de orden de servicio. El equipo ingresó al sistema en etapa '{reparacion.etapa}'."
     if tecnico_asignado:
-        comentario_apertura += f" (Asignado automáticamente al técnico {tecnico_asignado.email} - Score: {detalle_asignacion.get('score_final', 100)} pts)"
+        comentario_apertura += f" Asignado automáticamente al técnico {tecnico_asignado.email} (Score: {detalle_asignacion.get('score_final', 100)} pts)."
 
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
-        id_usuario=tecnico_asignado or usuario_ejecutor,
+        id_usuario=usuario_ejecutor,
         fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_alcanzado_int,
         comentario=comentario_apertura
@@ -819,7 +689,91 @@ def iniciar_reparacion(
                 id_dispositivo=dispositivo
             )
         except Exception as e:
-            print(f"[Notificación Asignación CU-26] Advertencia: {e}")
+            logger.warning("[Notificación Asignación CU-26] Advertencia: %s", e)
+
+    # Paso 7.1: Cobro por Adelantado / Deuda de Diagnóstico Técnico (CU-26)
+    # Regla de Negocio: El diagnóstico se cobra UNA SOLA VEZ por ciclo de reparación.
+    from core_app.selectors import obtener_costo_diagnostico_base
+    from sales_app.models import Venta, Pago, MedioPago
+
+    costo_diag = obtener_costo_diagnostico_base()
+    medio_pago_raw = str(datos_validados.get('medio_pago') or 'PRESENCIAL').strip()
+    medio_pago_upper = medio_pago_raw.upper()
+    id_pago_online = str(datos_validados.get('id_pago_online') or '').strip()
+
+    from core_app.constantes import CodigoMedioPago, deducir_codigo_medio_pago
+    medio_obj = None
+    if medio_pago_raw.isdigit():
+        medio_obj = MedioPago.objects.filter(id_mediopago=int(medio_pago_raw)).first()
+    if not medio_obj:
+        medio_obj = (
+            MedioPago.objects.filter(nombre_medio_pago__iexact=medio_pago_raw).first()
+            or MedioPago.objects.filter(codigo__iexact=medio_pago_raw).first()
+        )
+    if not medio_obj:
+        codigo_deducido = (
+            CodigoMedioPago.EFECTIVO
+            if medio_pago_upper in ('PRESENCIAL', 'MOSTRADOR', 'EFECTIVO')
+            else deducir_codigo_medio_pago(medio_pago_raw)
+        )
+        medio_obj = MedioPago.objects.filter(codigo=codigo_deducido).first()
+
+    es_canal_online = (
+        medio_pago_upper in ['MERCADOPAGO', 'MP', 'QR', 'ONLINE', 'TRANSFERENCIA']
+        or (medio_obj and (medio_obj.codigo or '').upper() in [CodigoMedioPago.MERCADO_PAGO, CodigoMedioPago.TRANSFERENCIA])
+    )
+    es_pago_online_inmediato = es_canal_online and bool(id_pago_online)
+
+    estado_venta_inicial = 'PAGADA' if es_pago_online_inmediato else 'PENDIENTE'
+
+    # Cliente titular de la cuenta contable es el dueño del dispositivo
+    cliente_titular = dispositivo.id_usuario
+
+    venta_diag = Venta.objects.create(
+        id_usuario=cliente_titular,
+        metodo_entrega='PRESENCIAL',
+        fecha_venta=django_timezone.now().date(),
+        estado_venta=estado_venta_inicial,
+        codigo_sec=codigo_seguridad,
+        monto_subtotal=costo_diag,
+        costo_envio=Decimal('0.00'),
+        id_direccion_envio=None
+    )
+    reparacion.id_venta = venta_diag
+    reparacion.save(update_fields=['id_venta'])
+
+    if not medio_obj:
+        es_mp = medio_pago_upper in ['MERCADOPAGO', 'MP', 'QR', 'ONLINE']
+        codigo_fallback = CodigoMedioPago.MERCADO_PAGO if es_mp else CodigoMedioPago.EFECTIVO
+        nombre_fallback = 'MERCADO PAGO' if es_mp else 'EFECTIVO'
+        medio_obj = (
+            MedioPago.objects.filter(codigo=codigo_fallback).first()
+            or MedioPago.objects.filter(estado=True).first()
+            or MedioPago.objects.create(
+                codigo=codigo_fallback,
+                nombre_medio_pago=nombre_fallback,
+                estado=True,
+                recargo=Decimal('0.00')
+            )
+        )
+
+    if es_pago_online_inmediato:
+        Pago.objects.create(
+            id_venta=venta_diag,
+            medio_pago=medio_obj,
+            monto_pagado=costo_diag,
+            fecha_pago=django_timezone.now().date(),
+            detalle=f"Abono de diagnóstico inicial para reparación #{reparacion.id_reparacion}",
+            cod_operacion=id_pago_online or f"MP-{codigo_seguridad}"
+        )
+    else:
+        Pago.objects.create(
+            id_venta=venta_diag,
+            medio_pago=medio_obj,
+            monto_pagado=Decimal('0.00'),
+            fecha_pago=django_timezone.now().date(),
+            detalle=f"Diagnóstico inicial pendiente de acreditación ({medio_obj.nombre_medio_pago}) para Reparación #{reparacion.id_reparacion}"
+        )
 
     # Paso 8: Auditoría y Despacho de Remito de Ingreso
     email_ejecutor = getattr(usuario_ejecutor, 'email', str(usuario_ejecutor))
@@ -873,10 +827,10 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
         url_frontend = obtener_url_frontend()
         url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
 
-        asunto = f"Comprobante de Recepción Física - Orden #{reparacion.id_reparacion} (IFixPos)"
+        asunto = f"Comprobante de Recepción Física - {nombre_marca} {nombre_modelo} (IFixPos)"
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
-            f"Confirmamos la recepción física de su equipo en nuestro mostrador para la Orden #{reparacion.id_reparacion}.\n\n"
+            f"Confirmamos la recepción física de su equipo ({nombre_marca} {nombre_modelo}) en nuestro mostrador.\n\n"
             f"Detalles de la Recepción:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
             f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
@@ -896,7 +850,7 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
             f"<p>Su equipo ha sido recibido en el mostrador del taller y ha pasado a la etapa de <strong>Esperando Diagnóstico</strong>:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Orden de Servicio:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>#{reparacion.id_reparacion}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Código de Servicio:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.codigo_sec}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado Físico / Estético:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{obs_texto}</td></tr>"
@@ -922,7 +876,7 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             adjuntar_logo=True
         )
     except Exception as e:
-        print(f"[CU-45 Comprobante] Advertencia al generar o despachar comprobante: {e}")
+        logger.warning("[CU-45 Comprobante] Advertencia al generar o despachar comprobante: %s", e)
 
 
 @transaction.atomic
@@ -966,8 +920,25 @@ def recepcionar_dispositivo_taller(
     reparacion.id_usuario = tecnico_final
     reparacion.save()
 
-    # Paso 6: Registro en Bitácora de Reparación
-    comentario_bitacora = f"Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    # Paso 5.2: Persistencia del Respaldo Fotográfico (CU-45)
+    from workshop_app.models import ImagenRecepcion
+    fotos_guardadas = 0
+    fotos = datos_validados.get('imagenes') or []
+    for f in fotos:
+        img_str = f.get('imagen') if isinstance(f, dict) else str(f)
+        desc_img = f.get('descripcion') if isinstance(f, dict) else ''
+        if img_str:
+            ImagenRecepcion.objects.create(
+                id_reparacion=reparacion,
+                imagen=img_str,
+                descripcion=desc_img or 'Constatación física de recepción en mostrador'
+            )
+            fotos_guardadas += 1
+
+    # Paso 6: Registro en Bitácora de Reparación con narrativa rica y compatible
+    comentario_bitacora = f"Cambio de etapa: Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    if fotos_guardadas > 0:
+        comentario_bitacora += f" | Respaldo fotográfico: {fotos_guardadas} foto(s) de constancia adjuntas."
     if auto_asignar and tecnico_final != usuario_tecnico:
         comentario_bitacora += f" | Asignado para diagnóstico a {tecnico_final.email} mediante distribución inteligente (Score: {detalle_auto.get('score_final', 100)} pts)."
 
@@ -991,7 +962,7 @@ def recepcionar_dispositivo_taller(
                 id_dispositivo=reparacion.id_dispositivo
             )
         except Exception as e:
-            print(f"[Notificación Asignación CU-45] Advertencia: {e}")
+            logger.warning("[Notificación Asignación CU-45] Advertencia: %s", e)
 
     # Paso 7: Auditoría en LogSistema y Despacho de Comprobante
     email_tecnico = getattr(usuario_tecnico, 'email', str(usuario_tecnico))
@@ -1043,7 +1014,7 @@ def generar_y_enviar_notificacion_diagnostico(
         url_frontend = obtener_url_frontend()
         url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
 
-        asunto = f"Diagnóstico y Presupuesto Disponible - Reparación #{reparacion.id_reparacion} (IFixPos)"
+        asunto = f"Diagnóstico y Presupuesto Disponible - {nombre_marca} {nombre_modelo} (IFixPos)"
 
         mano_obra_val = getattr(diagnostico, 'costo_diagnostico', None)
         mano_obra_str = f"${mano_obra_val}" if mano_obra_val is not None else "A convenir"
@@ -1056,7 +1027,7 @@ def generar_y_enviar_notificacion_diagnostico(
             filas_txt = []
             for item in insumos_data:
                 prod = Producto.objects.filter(pk=item.get('id_producto')).first()
-                nombre_prod = prod.nombre if prod else f"Insumo #{item.get('id_producto')}"
+                nombre_prod = prod.nombre if prod else "Insumo técnico"
                 cant = item.get('cantidad', 1)
                 precio = prod.precio_venta if prod else 0
                 filas_txt.append(f"  * {cant}x {nombre_prod} (${precio} c/u)")
@@ -1078,7 +1049,7 @@ def generar_y_enviar_notificacion_diagnostico(
 
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
-            f"Le informamos que el equipo técnico ha completado el diagnóstico para la Reparación #{reparacion.id_reparacion} "
+            f"Le informamos que el equipo técnico ha completado el diagnóstico para su dispositivo ({nombre_marca} {nombre_modelo}) "
             f"y el presupuesto ya se encuentra disponible para su revisión y confirmación.\n\n"
             f"Detalles del Diagnóstico:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
@@ -1095,7 +1066,7 @@ def generar_y_enviar_notificacion_diagnostico(
             f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
             f"<h2 style='color: #06b6d4;'>IFixPos - Diagnóstico y Presupuesto Disponible</h2>"
             f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
-            f"<p>El equipo técnico ha completado la revisión de su dispositivo. El presupuesto correspondiente a la <strong>Orden #{reparacion.id_reparacion}</strong> ya se encuentra disponible para su aprobación:</p>"
+            f"<p>El equipo técnico ha completado la revisión de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>. El presupuesto ya se encuentra disponible para su aprobación:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 15px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
@@ -1121,7 +1092,7 @@ def generar_y_enviar_notificacion_diagnostico(
             adjuntar_logo=True
         )
     except Exception as e:
-        print(f"[CU-08 Diagnóstico] Advertencia al generar o despachar notificación de diagnóstico: {e}")
+        logger.warning("[CU-08 Diagnóstico] Advertencia al generar o despachar notificación de diagnóstico: %s", e)
 
 
 # ==============================================================================
@@ -1184,7 +1155,8 @@ def cargar_diagnostico_tecnico(
     # Paso 5: Registro inmutable en BitacoraReparacion
     # Nota: estado_alcanzado se almacena numéricamente en BD (4: ESPERANDO_CONFIRMACION)
     es_primer_diagnostico = (reparacion.diagnostico_set.count() <= 1)
-    comentario_bitacora = "Carga de diagnóstico" if es_primer_diagnostico else "Carga de nuevo diagnóstico"
+    accion_diag = "Carga de nuevo diagnóstico" if not es_primer_diagnostico else "Carga de diagnóstico"
+    comentario_bitacora = f"Proceso: {accion_diag}. Cambio de etapa: El equipo pasó a 'Esperando Confirmación'. Falla constatada: {diagnostico.descripcion_falla[:200]}."
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
@@ -1296,12 +1268,12 @@ def procesar_decision_reparacion(
     if decision == 'RECHAZAR':
         reparacion.etapa = 'CANCELADO'
         estado_alcanzado_int = 8  # 8: CANCELADO / RECHAZADO
-        comentario_bitacora = "Diagnóstico rechazado" + (f": {comentarios}" if comentarios else "")
+        comentario_bitacora = "Diagnóstico rechazado. Resolución del cliente: Presupuesto rechazado. El equipo pasó a 'Cancelado'" + (f". Motivo: {comentarios}" if comentarios else ".")
 
     elif decision == 'ACEPTAR':
         reparacion.etapa = 'EN_REPARACION'
         estado_alcanzado_int = 5  # 5: EN_REPARACION
-        comentario_bitacora = "Diagnóstico aceptado" + (f": {comentarios}" if comentarios else "")
+        comentario_bitacora = "Diagnóstico aceptado. Resolución del cliente: Presupuesto aprobado. El equipo pasó a 'En Reparación' para ejecución técnica" + (f". Comentarios: {comentarios}" if comentarios else ".")
 
         # Recuperar insumos presupuestados en el diagnóstico
         insumos_presupuestados = list(
@@ -1375,16 +1347,21 @@ def procesar_decision_reparacion(
             )
 
         # Resolver MedioPago y registrar instancia de Pago pendiente
+        from core_app.constantes import deducir_codigo_medio_pago
         nombre_pago = str(datos_validados.get('metodo_pago') or 'EFECTIVO').strip()
+        codigo_pago = deducir_codigo_medio_pago(nombre_pago)
         medio_pago_obj = None
         if nombre_pago.isdigit():
             medio_pago_obj = MedioPago.objects.filter(id_mediopago=int(nombre_pago)).first()
+        if not medio_pago_obj:
+            medio_pago_obj = MedioPago.objects.filter(codigo=codigo_pago).first()
         if not medio_pago_obj:
             medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_pago).first()
         if not medio_pago_obj:
             medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__icontains=nombre_pago).first()
         if not medio_pago_obj:
             medio_pago_obj = MedioPago.objects.create(
+                codigo=codigo_pago,
                 nombre_medio_pago=nombre_pago.capitalize(),
                 estado=True,
                 recargo=Decimal('0.00')
@@ -1516,7 +1493,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
         url_reparacion = f"{url_frontend}/cliente/reparaciones/{reparacion.id_reparacion}"
 
         decision_humana = "Aceptado" if decision == 'ACEPTAR' else "Rechazado"
-        asunto = f"Presupuesto {decision_humana} - Orden #{reparacion.id_reparacion} (IFixPos)"
+        asunto = f"Presupuesto {decision_humana} - {nombre_marca} {nombre_modelo} (IFixPos)"
 
         detalle_decision = (
             "Su presupuesto ha sido aprobado. El equipo técnico iniciará de inmediato los trabajos de reparación."
@@ -1526,7 +1503,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
 
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
-            f"Confirmamos el registro de su decisión para la Reparación #{reparacion.id_reparacion}.\n\n"
+            f"Confirmamos el registro de su decisión para la reparación de su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
             f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
@@ -1545,7 +1522,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
             f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
             f"<h2 style='color: #06b6d4;'>IFixPos - Confirmación de Decisión</h2>"
             f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
-            f"<p>Confirmamos la recepción de su decisión para la <strong>Orden #{reparacion.id_reparacion}</strong>:</p>"
+            f"<p>Confirmamos la recepción de su decisión para la reparación de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
@@ -1575,7 +1552,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
             adjuntar_logo=True
         )
     except Exception as e:
-        print(f"[CU-09 Decisión] Advertencia al generar o despachar notificación de decisión al cliente: {e}")
+        logger.warning("[CU-09 Decisión] Advertencia al generar o despachar notificación de decisión al cliente: %s", e)
 
 
 def generar_y_enviar_notificacion_cambio_estado(
@@ -1620,11 +1597,11 @@ def generar_y_enviar_notificacion_cambio_estado(
         }
         estado_humano = TITULOS_ESTADOS.get(nuevo_estado, nuevo_estado.replace('_', ' ').title())
 
-        asunto = f"Actualización de Estado: {estado_humano} - Orden #{reparacion.id_reparacion} (IFixPos)"
+        asunto = f"Actualización de Estado: {estado_humano} - {nombre_marca} {nombre_modelo} (IFixPos)"
 
         cuerpo_texto = (
             f"Estimado/a {nombre_cliente},\n\n"
-            f"Le informamos que se ha registrado una actualización en el estado de su Orden de Servicio #{reparacion.id_reparacion}.\n\n"
+            f"Le informamos que se ha registrado una actualización en el estado de la reparación de su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles de la Actualización:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
             f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
@@ -1639,7 +1616,7 @@ def generar_y_enviar_notificacion_cambio_estado(
             f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
             f"<h2 style='color: #06b6d4;'>IFixPos - Actualización de Reparación</h2>"
             f"<p>Estimado/a <strong>{nombre_cliente}</strong>,</p>"
-            f"<p>Se ha registrado un nuevo avance en la <strong>Orden #{reparacion.id_reparacion}</strong> de su dispositivo:</p>"
+            f"<p>Se ha registrado un nuevo avance en la reparación de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
@@ -1664,7 +1641,7 @@ def generar_y_enviar_notificacion_cambio_estado(
             adjuntar_logo=True
         )
     except Exception as e:
-        print(f"[CU-10 Cambio Estado] Advertencia al generar o despachar notificación de cambio de estado: {e}")
+        logger.warning("[CU-10 Cambio Estado] Advertencia al generar o despachar notificación de cambio de estado: %s", e)
 
 
 # ==============================================================================
@@ -1765,12 +1742,13 @@ def cambiar_estado_reparacion(
 
     # Paso 8: Registro inmutable en BitacoraReparacion
     estado_int = MAPA_ESTADOS_NUMERICOS.get(nuevo_estado, 5)
+    comentario_enriquecido = f"Cambio de etapa: El equipo pasó de '{etapa_actual}' a '{nuevo_estado}'. Detalle técnico: {comentario}"
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
         fecha_hora=django_timezone.now(),
         estado_alcanzado=estado_int,
-        comentario=comentario
+        comentario=comentario_enriquecido
     )
 
     # Hook Transaccional: Disparo del Motor de Abastecimiento Automático para urgencia de taller
@@ -1782,8 +1760,8 @@ def cambiar_estado_reparacion(
                 forzar_ejecucion=False,
                 origen_disparo='TRANSACCIONAL'
             )
-        except Exception:
-            pass
+        except Exception as exc_abast:
+            logger.warning("[Motor Abastecimiento] Advertencia en disparo transaccional desde taller: %s", exc_abast)
 
     # Hook Transaccional: Motor de Beneficios Post-Taller al entregar reparación
     if nuevo_estado in ('ENTREGADO', 'ENTREGADA'):
@@ -1846,7 +1824,7 @@ def generar_y_enviar_comprobante_entrega(reparacion: Reparacion):
 
             cuerpo_texto = (
                 f"Hola. Confirmamos la entrega física de tu dispositivo ({disp_nombre}).\n\n"
-                f"Orden #{reparacion.id_reparacion} cerrada con éxito. Tu servicio cuenta con garantía legal de reparación.\n\n"
+                f"La reparación de tu equipo ha sido cerrada con éxito. Tu servicio cuenta con garantía legal de reparación.\n\n"
                 f"¡Valora la reparación, te lo agradeceremos mucho! Tu opinión nos ayuda a seguir mejorando nuestro servicio técnico.\n"
                 f"Puedes calificar tu experiencia aquí: {url_reparacion}\n\n"
                 f"IFixPos - Taller de Reparaciones"
@@ -1855,7 +1833,7 @@ def generar_y_enviar_comprobante_entrega(reparacion: Reparacion):
             cuerpo_html = (
                 f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;'>"
                 f"<h2 style='color: #06b6d4;'>IFixPos - ¡Dispositivo Entregado!</h2>"
-                f"<p>Confirmamos la entrega física de tu dispositivo <strong>{disp_nombre}</strong> correspondiente a la <strong>Orden #{reparacion.id_reparacion}</strong>.</p>"
+                f"<p>Confirmamos la entrega física de tu dispositivo <strong>{disp_nombre}</strong>.</p>"
                 f"<p>Tu servicio cuenta con garantía oficial de reparación.</p>"
                 f"<div style='margin: 24px 0; padding: 16px; background-color: #0f172a; border: 1px solid #06b6d4; border-radius: 8px; text-align: center; color: #f8fafc;'>"
                 f"<p style='font-size: 15px; margin: 0 0 12px 0; color: #38bdf8; font-weight: bold;'>⭐ ¡Valora la reparación, te lo agradeceremos mucho!</p>"
@@ -1937,7 +1915,7 @@ def entregar_dispositivo_cliente(
 
     # Paso 6: Asentar en BitacoraReparacion (estado 7 = ENTREGADO)
     comentarios_adicionales = (datos_validados.get('comentarios_entrega') or '').strip()
-    texto_bitacora = "Entrega física del equipo al cliente. " + comentarios_adicionales
+    texto_bitacora = f"Cierre de orden: El equipo fue entregado físicamente al cliente finalizando formalmente el servicio técnico. Observaciones de entrega: {comentarios_adicionales or 'Conformidad de entrega sin observaciones adicionales.'}"
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
@@ -1969,248 +1947,16 @@ def entregar_dispositivo_cliente(
 
 
 # ==============================================================================
-# CU-19: CALIFICAR SERVICIO TÉCNICO (SERVICES)
+# RE-EXPORTACIÓN DE SUBMÓDULOS DE SERVICIOS (Modularización §3.6)
 # ==============================================================================
 
-@transaction.atomic
-def calificar_reparacion(
-    *,
-    usuario_cliente: Usuario,
-    id_reparacion: int,
-    datos_validados: dict
-) -> Calificacion:
-    """
-    CU-19: Calificar Servicio Técnico.
-    Permite al cliente valorar una reparación culminada (estado 'ENTREGADO').
-    Persiste de forma inmutable la calificación (puntuación cuantitativa 1 a 5 y opinión)
-    asentando la auditoría de calidad en LogSistema.
-
-    Reglas de Arquitectura HackSoftware:
-    - @transaction.atomic para consistencia transaccional.
-    - No recibe el objeto request; recibe usuario_cliente, id_reparacion y datos_validados.
-    - Ejecuta validaciones de precondición y pertenencia a través del selector especializado.
-    - Persiste el log de auditoría inmutable en LogSistema.
-    """
-    from workshop_app.selectors import obtener_reparacion_para_calificar
-    from workshop_app.models import Calificacion
-
-    # Paso 1: Validar precondiciones operativas, pertenencia y unicidad vía selector
-    reparacion = obtener_reparacion_para_calificar(
-        usuario_cliente=usuario_cliente,
-        id_reparacion=id_reparacion
-    )
-
-    # Paso 2: Extraer datos validados
-    puntuacion = datos_validados['puntuacion']
-    comentario = datos_validados.get('comentario')
-
-    # Paso 3: Persistir la calificación inmutable vinculada relacionalmente a la reparación
-    fecha_actual = django_timezone.now().date()
-    calificacion = Calificacion.objects.create(
-        puntuacion=puntuacion,
-        comentario=comentario,
-        fecha=fecha_actual,
-        id_reparacion=reparacion
-    )
-
-    # Hook Transaccional: Recompensa por Calificación 5 Estrellas (CU-19)
-    if puntuacion == 5:
-        try:
-            from sales_app.services import evaluar_beneficio_post_calificacion
-            evaluar_beneficio_post_calificacion(calificacion=calificacion)
-        except Exception as e:
-            logger.warning(f"[Motor Beneficios] Error evaluando post-calificación: {e}")
-
-    # Paso 4: Registro de auditoría inmutable en LogSistema
-    email_cliente = getattr(usuario_cliente, 'email', str(usuario_cliente))
-    comentario_log = f"'{calificacion.comentario}'" if calificacion.comentario else "Sin comentario"
-    LogSistema.objects.create(
-        fecha_hora=django_timezone.now(),
-        accion="Calificar Servicio Técnico (CU-19)",
-        detalle=(
-            f"El cliente {email_cliente} emitió una calificación de {calificacion.puntuacion}/5 estrellas "
-            f"para la Orden de Reparación #{reparacion.id_reparacion}. Comentario: {comentario_log}"
-        )[:1000],
-        tipo="AUDITORIA_CALIDAD",
-        modulo_origen="workshop_app",
-        tabla_afectada="calificacion",
-        id_registro_afectado=str(calificacion.id_calificacion),
-        id_usuario=usuario_cliente if hasattr(usuario_cliente, 'pk') else None
-    )
-
-    return calificacion
-
-
-# ==============================================================================
-# CU-72 & CU-73: INTELIGENCIA DE NEGOCIOS Y REPORTES BI (SERVICES)
-# ==============================================================================
-
-@transaction.atomic
-def generar_auditoria_reporte_conversion(
-    *,
-    usuario_admin: Usuario,
-    filtros_validados: dict
-) -> dict:
-    """
-    CU-72: Generar Reporte de Conversión de Presupuestos (Capa Transaccional / Auditoría).
-    Ejecuta el cálculo estadístico macro y micro a través del selector y sienta
-    la traza de auditoría inmutable en LogSistema.
-    """
-    from workshop_app.selectors import calcular_reporte_conversion
-    from core_app.models import LogSistema
-
-    # Invocación al selector especializado
-    resultado = calcular_reporte_conversion(
-        fecha_inicio=filtros_validados['fecha_inicio'],
-        fecha_fin=filtros_validados['fecha_fin'],
-        id_categoria=filtros_validados.get('id_categoria'),
-        id_medio_pago=filtros_validados.get('id_medio_pago')
-    )
-
-    # Asiento de auditoría inmutable
-    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
-    f_ini = filtros_validados['fecha_inicio']
-    f_fin = filtros_validados['fecha_fin']
-    LogSistema.objects.create(
-        fecha_hora=django_timezone.now(),
-        accion="Generar Reporte de Conversión (CU-72)",
-        detalle=f"El administrador {id_admin} generó el Reporte de Conversión de Presupuestos para el periodo {f_ini} al {f_fin}.",
-        tipo="REPORTE_BI",
-        modulo_origen="workshop_app",
-        tabla_afectada="diagnostico",
-        id_registro_afectado="0",
-        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
-    )
-
-    return resultado
-
-
-@transaction.atomic
-def generar_auditoria_reporte_eficiencia(
-    *,
-    usuario_admin: Usuario,
-    filtros_validados: dict
-) -> list[dict]:
-    """
-    CU-73: Generar Reporte de Demanda y Eficiencia por Categoría (Capa Transaccional / Auditoría).
-    Ejecuta el cálculo de volumen, facturación y eficiencia temporal vía selector y
-    registra el asiento de auditoría en LogSistema.
-    """
-    from workshop_app.selectors import calcular_reporte_eficiencia
-    from core_app.models import LogSistema
-
-    # Invocación al selector especializado
-    resultado = calcular_reporte_eficiencia(
-        fecha_inicio=filtros_validados['fecha_inicio'],
-        fecha_fin=filtros_validados['fecha_fin'],
-        id_categoria=filtros_validados.get('id_categoria'),
-        id_tipo_dispositivo=filtros_validados.get('id_tipo_dispositivo'),
-        id_medio_pago=filtros_validados.get('id_medio_pago')
-    )
-
-    # Asiento de auditoría inmutable
-    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
-    f_ini = filtros_validados['fecha_inicio']
-    f_fin = filtros_validados['fecha_fin']
-    LogSistema.objects.create(
-        fecha_hora=django_timezone.now(),
-        accion="Generar Reporte de Demanda y Eficiencia (CU-73)",
-        detalle=f"El administrador {id_admin} generó el Reporte de Demanda y Eficiencia para el periodo {f_ini} al {f_fin}.",
-        tipo="REPORTE_BI",
-        modulo_origen="workshop_app",
-        tabla_afectada="reparacion",
-        id_registro_afectado="0",
-        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
-    )
-
-    return resultado
-
-
-# ==============================================================================
-# CU-74: GENERAR REPORTE DE PRODUCTIVIDAD Y CARGA DE TRABAJO TÉCNICA
-# ==============================================================================
-
-@transaction.atomic
-def generar_auditoria_productividad(
-    *,
-    usuario_admin: Usuario,
-    filtros_validados: dict
-) -> list[dict]:
-    """
-    CU-74: Generar Reporte de Productividad y Carga de Trabajo Técnica (Capa Transaccional / Auditoría).
-    Invoca el selector de cálculo de indicadores de productividad, disciplina operativa y carga actual,
-    y asienta el evento de auditoría en LogSistema.
-    """
-    from workshop_app.selectors import calcular_reporte_productividad
-    from core_app.models import LogSistema
-
-    # Invocación al selector
-    resultado = calcular_reporte_productividad(
-        fecha_inicio=filtros_validados['fecha_inicio'],
-        fecha_fin=filtros_validados['fecha_fin'],
-        id_tecnico=filtros_validados.get('id_tecnico')
-    )
-
-    # Asiento de auditoría inmutable
-    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
-    f_ini = filtros_validados['fecha_inicio']
-    f_fin = filtros_validados['fecha_fin']
-    LogSistema.objects.create(
-        fecha_hora=django_timezone.now(),
-        accion="Generar Reporte de Productividad (CU-74)",
-        detalle=f"El administrador {id_admin} generó el Reporte de Productividad y Carga de Trabajo Técnica para el periodo {f_ini} al {f_fin}.",
-        tipo="REPORTE_BI",
-        modulo_origen="workshop_app",
-        tabla_afectada="reparacion",
-        id_registro_afectado="0",
-        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
-    )
-
-    return resultado
-
-
-# ==============================================================================
-# CU-76: GENERAR REPORTE DE SATISFACCIÓN Y CALIDAD
-# ==============================================================================
-
-@transaction.atomic
-def generar_auditoria_reporte_satisfaccion(
-    *,
-    usuario_admin: Usuario,
-    filtros_validados: dict
-) -> dict:
-    """
-    CU-76: Generar Reporte de Satisfacción y Calidad (Capa Transaccional / Auditoría).
-    Invoca el selector de cálculo de indicadores de satisfacción, promedios por técnico,
-    por categoría y comentarios, y asienta el evento de auditoría en LogSistema.
-    """
-    from workshop_app.selectors import calcular_reporte_satisfaccion
-    from core_app.models import LogSistema
-
-    resultado = calcular_reporte_satisfaccion(
-        fecha_inicio=filtros_validados['fecha_inicio'],
-        fecha_fin=filtros_validados['fecha_fin'],
-        id_tecnico=filtros_validados.get('id_tecnico'),
-        id_categoria=filtros_validados.get('id_categoria'),
-        rango_estrellas_min=filtros_validados.get('rango_estrellas_min'),
-        rango_estrellas_max=filtros_validados.get('rango_estrellas_max')
-    )
-
-    id_admin = getattr(usuario_admin, 'id_usuario', str(usuario_admin))
-    f_ini = filtros_validados['fecha_inicio']
-    f_fin = filtros_validados['fecha_fin']
-    LogSistema.objects.create(
-        fecha_hora=django_timezone.now(),
-        accion="Generar Reporte de Satisfacción y Calidad (CU-76)",
-        detalle=f"El administrador {id_admin} generó el Reporte de Satisfacción y Calidad (CSAT) para el periodo {f_ini} al {f_fin}.",
-        tipo="REPORTE_BI",
-        modulo_origen="workshop_app",
-        tabla_afectada="calificacion",
-        id_registro_afectado="0",
-        id_usuario=usuario_admin if hasattr(usuario_admin, 'pk') else None
-    )
-
-    return resultado
+from workshop_app.services_calificaciones import calificar_reparacion  # noqa: E402, F401
+from workshop_app.services_metricas import (  # noqa: E402, F401
+    generar_auditoria_reporte_conversion,
+    generar_auditoria_reporte_eficiencia,
+    generar_auditoria_productividad,
+    generar_auditoria_reporte_satisfaccion,
+)
 
 
 

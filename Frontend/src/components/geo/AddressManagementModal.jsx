@@ -3,8 +3,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import CyberNumberInput from '../common/CyberNumberInput';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AddressManagementModal({
   isOpen,
   onClose,

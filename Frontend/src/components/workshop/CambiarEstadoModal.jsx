@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 /**
  * Modal Inteligente Cyber-Tech para el CU-10: Actualizar estado de reparación.
  * Permite al técnico seleccionar el nuevo estado operativo de avance o retrabajo,
@@ -74,19 +73,19 @@ export default function CambiarEstadoModal({
       return [
         { value: 'FINALIZADO', label: 'Finalizado (Reparación completada y verificada)' },
         { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos (Pausa por falta de insumos)' },
-        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Nuevo Diagnóstico (Reevaluación / Presupuesto)' }
       ];
     }
     if (estadoActualNorm === 'ESPERANDO_REPUESTOS') {
       return [
         { value: 'EN_REPARACION', label: 'En Reparación (Reanudación de trabajo técnico)' },
-        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Nuevo Diagnóstico (Reevaluación / Presupuesto)' }
       ];
     }
     if (estadoActualNorm === 'FINALIZADO') {
       return [
         { value: 'EN_REPARACION', label: 'En Reparación (Retrabajo por control de calidad)' },
-        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' }
+        { value: 'ESPERANDO_DIAGNOSTICO', label: 'Nuevo Diagnóstico (Reevaluación / Presupuesto)' }
       ];
     }
     // Estados iniciales o intermedios
@@ -100,7 +99,7 @@ export default function CambiarEstadoModal({
 
   // Lista exhaustiva para cuando el técnico activa el selector completo
   const todasLasOpciones = useMemo(() => [
-    { value: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico (Nuevo Diagnóstico / Reevaluación)' },
+    { value: 'ESPERANDO_DIAGNOSTICO', label: 'Nuevo Diagnóstico (Reevaluación / Presupuesto)' },
     { value: 'EN_DIAGNOSTICO', label: 'En Diagnóstico' },
     { value: 'EN_REPARACION', label: 'En Reparación' },
     { value: 'ESPERANDO_REPUESTOS', label: 'Esperando Repuestos' },
@@ -360,12 +359,12 @@ export default function CambiarEstadoModal({
               {isSubmitting ? (
                 <>
                   <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                  <span>Actualizando estado...</span>
+                  <span>Transaccionando estado...</span>
                 </>
               ) : (
                 <>
                   <span>⚙️</span>
-                  <span>Confirmar Cambio</span>
+                  <span>Transaccionar Estado</span>
                 </>
               )}
             </button>

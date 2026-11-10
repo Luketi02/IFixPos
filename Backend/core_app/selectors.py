@@ -1,76 +1,248 @@
 
-from typing import Any
-from typing import Optional
+from decimal import Decimal
+from typing import Any, Optional
+from django.core.cache import cache
+from django.db import connection
 from django.db.models import QuerySet
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from core_app.models import ConfiguracionSistema, Notificacion, CopiaSeguridad
 
-def obtener_configuracion_texto(clave: str, fallback: str = "noreply@ifixpos.com") -> str:
-    """Obtiene un valor de texto de ConfiguracionSistema. Fail-safe a fallback."""
+PREFIJO_CACHE_CONFIG = "cfg_sistema:"
+TTL_CACHE_CONFIG_SEGUNDOS = 60
+_CACHE_NO_EXISTE = "__CFG_NO_EXISTE__"
+
+
+def _construir_clave_cache_config(clave: str) -> str:
+    """Construye la clave de caché aislando automáticamente el savepoint raíz de cada TestCase."""
+    sp_list = getattr(connection, 'savepoint_ids', None) or []
+    sp = sp_list[0] if sp_list else ""
+    return f"{PREFIJO_CACHE_CONFIG}{sp}:{clave}" if sp else f"{PREFIJO_CACHE_CONFIG}{clave}"
+
+
+def invalidar_cache_configuracion(claves: Optional[list] = None) -> None:
+    """Invalida las claves indicadas (o limpia el caché de configuración) en ConfiguracionSistema."""
+    cache.clear()
+
+
+@receiver((post_save, post_delete), sender=ConfiguracionSistema, dispatch_uid="invalidar_cache_cfg_sistema")
+def _on_cambio_configuracion_sistema(sender, instance, **kwargs):
+    clave = getattr(instance, 'clave', None)
+    if clave:
+        invalidar_cache_configuracion([clave])
+
+
+def _obtener_valor_crudo_configuracion(clave: str) -> Optional[str]:
+    """Obtiene el valor crudo de ConfiguracionSistema usando caché con TTL de 60 segundos."""
+    cache_key = _construir_clave_cache_config(clave)
+    en_cache = cache.get(cache_key)
+    if en_cache is not None:
+        return None if en_cache == _CACHE_NO_EXISTE else str(en_cache)
     try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip()
-        return val if val and val != "S/N" else fallback
-    except ConfiguracionSistema.DoesNotExist:
+        config = ConfiguracionSistema.objects.filter(clave=clave).order_by('-id_config').first()
+        if config is not None:
+            val = str(config.valor) if config.valor is not None else ""
+            cache.set(cache_key, val, timeout=TTL_CACHE_CONFIG_SEGUNDOS)
+            return val
+    except Exception:
+        pass
+
+    # Autosanado on-demand en BD si la clave pertenece al catálogo canónico (CU-42)
+    try:
+        from core_app.constantes import CATALOGO_CONFIGURACIONES_SISTEMA
+        if clave in CATALOGO_CONFIGURACIONES_SISTEMA:
+            info = CATALOGO_CONFIGURACIONES_SISTEMA[clave]
+            val_defecto = str(info.get('valor_defecto', ''))
+            nueva_cfg = ConfiguracionSistema.objects.create(
+                clave=clave,
+                descripcion=info.get('descripcion', f"Parámetro {clave}"),
+                valor=val_defecto
+            )
+            val_ret = str(nueva_cfg.valor) if nueva_cfg.valor is not None else val_defecto
+            cache.set(cache_key, val_ret, timeout=TTL_CACHE_CONFIG_SEGUNDOS)
+            return val_ret
+    except Exception:
+        pass
+
+    cache.set(cache_key, _CACHE_NO_EXISTE, timeout=TTL_CACHE_CONFIG_SEGUNDOS)
+    return None
+
+
+def obtener_configuracion_texto(clave: str, fallback: str = "") -> str:
+    """Obtiene un valor de texto de ConfiguracionSistema (cacheado). Fail-safe a fallback."""
+    raw = _obtener_valor_crudo_configuracion(clave)
+    if raw is None:
         return fallback
+    val = raw.strip()
+    return val if val and val != "S/N" else fallback
+
 
 def obtener_configuracion_bool(clave: str) -> bool:
-    """Obtiene un flag booleano de ConfiguracionSistema. Fail-safe a False."""
-    try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip().lower()
-        return val in ('true', '1', 't', 'y', 'yes')
-    except ConfiguracionSistema.DoesNotExist:
+    """Obtiene un flag booleano de ConfiguracionSistema (cacheado). Fail-safe a False."""
+    raw = _obtener_valor_crudo_configuracion(clave)
+    if raw is None:
         return False
+    return raw.strip().lower() in ('true', '1', 't', 'y', 'yes')
 
-from decimal import Decimal
 
 def obtener_configuracion_int(clave: str, fallback: int = 0) -> int:
-    """Obtiene un valor numérico entero de ConfiguracionSistema. Fail-safe a fallback."""
-    try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip()
-        return int(val) if val.isdigit() or (val.startswith('-') and val[1:].isdigit()) else fallback
-    except (ConfiguracionSistema.DoesNotExist, ValueError):
+    """Obtiene un valor numérico entero de ConfiguracionSistema (cacheado). Fail-safe a fallback."""
+    raw = _obtener_valor_crudo_configuracion(clave)
+    if raw is None:
         return fallback
+    val = raw.strip()
+    return int(val) if val.isdigit() or (val.startswith('-') and val[1:].isdigit()) else fallback
+
 
 def obtener_configuracion_decimal(clave: str, fallback: Decimal = Decimal('0.00')) -> Decimal:
-    """Obtiene un valor numérico decimal de ConfiguracionSistema. Fail-safe a fallback."""
+    """Obtiene un valor numérico decimal de ConfiguracionSistema (cacheado). Fail-safe a fallback."""
+    raw = _obtener_valor_crudo_configuracion(clave)
+    if raw is None:
+        return fallback
     try:
-        config = ConfiguracionSistema.objects.get(clave=clave)
-        val = str(config.valor).strip().replace(',', '.')
-        return Decimal(val)
+        return Decimal(raw.strip().replace(',', '.'))
     except Exception:
         return fallback
+
+def obtener_costo_diagnostico_base() -> Decimal:
+    """
+    Obtiene el costo base configurado para el diagnóstico técnico inicial al abrir una orden.
+    Fallback a 5000.00 ARS.
+    """
+    val = obtener_configuracion_decimal('costo_diagnostico_base', fallback=Decimal('-1.00'))
+    if val < 0:
+        val = obtener_configuracion_decimal('costoDiagnosticoBase', fallback=Decimal('5000.00'))
+    return max(Decimal('0.00'), val)
 
 def obtener_tamano_maximo_archivo_mb() -> int:
     """Obtiene el tamaño máximo en Megabytes permitido para la subida de archivos (ej. fotos)."""
     return max(1, obtener_configuracion_int('tamanoMaxArchivoMB', fallback=10))
 
 def obtener_tamano_maximo_archivo_bytes() -> int:
-    """Retorna el tamaño máximo en bytes para validación física de archivos en memoria/disco."""
+    """
+    Retorna el tamaño máximo en bytes para validación física de archivos.
+    Prioriza `maxTamanoArchivoBytes` en ConfiguracionSistema; si no está definido,
+    calcula a partir de `tamanoMaxArchivoMB`.
+    """
+    val_bytes = obtener_configuracion_int('maxTamanoArchivoBytes', fallback=0)
+    if val_bytes > 0:
+        return max(1024, val_bytes)
     return obtener_tamano_maximo_archivo_mb() * 1024 * 1024
+
+def obtener_max_tamano_archivo_bytes() -> int:
+    """Alias canónico para `maxTamanoArchivoBytes` (§2.3)."""
+    return obtener_tamano_maximo_archivo_bytes()
+
+def obtener_extensiones_permitidas_archivos(*, solo_imagenes: bool = False) -> tuple:
+    """
+    Obtiene la tupla de extensiones permitidas configuradas en `extensionesPermitidasArchivos`.
+    Si `solo_imagenes=True`, filtra formatos gráficos seguros.
+    """
+    from core_app.constantes import (
+        EXTENSIONES_IMAGEN_PERMITIDAS_DEFECTO,
+        EXTENSIONES_ARCHIVO_PERMITIDAS_DEFECTO,
+    )
+    raw = obtener_configuracion_texto('extensionesPermitidasArchivos', fallback='')
+    if not raw:
+        return EXTENSIONES_IMAGEN_PERMITIDAS_DEFECTO if solo_imagenes else EXTENSIONES_ARCHIVO_PERMITIDAS_DEFECTO
+    partes = [
+        p.strip().lower() if p.strip().startswith('.') else f".{p.strip().lower()}"
+        for p in raw.split(',')
+        if p.strip()
+    ]
+    if solo_imagenes:
+         base = set(EXTENSIONES_IMAGEN_PERMITIDAS_DEFECTO) | {p for p in partes if p != '.pdf'}
+         return tuple(sorted(base))
+    return tuple(partes) if partes else EXTENSIONES_ARCHIVO_PERMITIDAS_DEFECTO
+
+def obtener_minutos_reserva_venta_pendiente() -> int:
+    """Minutos de gracia para abonar una venta PENDIENTE antes de liberar su stock (`minutosReservaVentaPendiente`)."""
+    from core_app.constantes import RESERVA_VENTA_PENDIENTE_MINUTOS_DEFECTO
+    return max(1, obtener_configuracion_int('minutosReservaVentaPendiente', fallback=RESERVA_VENTA_PENDIENTE_MINUTOS_DEFECTO))
+
+def obtener_dias_validez_cotizacion() -> int:
+    """Cantidad de días de vigencia por defecto para cotizaciones de proveedores (`diasValidezCotizacion`)."""
+    from core_app.constantes import VALIDEZ_COTIZACION_DIAS_DEFECTO
+    return max(1, obtener_configuracion_int('diasValidezCotizacion', fallback=VALIDEZ_COTIZACION_DIAS_DEFECTO))
+
+def obtener_minutos_vida_access_token() -> int:
+    """Minutos de vigencia del token JWT de acceso (`minutosVidaAccessToken`)."""
+    from core_app.constantes import VIDA_ACCESS_TOKEN_MINUTOS_DEFECTO
+    return max(5, obtener_configuracion_int('minutosVidaAccessToken', fallback=VIDA_ACCESS_TOKEN_MINUTOS_DEFECTO))
+
+def obtener_minutos_vida_otp_recuperacion() -> int:
+    """Minutos de validez del código OTP para activación/recuperación (`minutosVidaOtpRecuperacion`)."""
+    from core_app.constantes import VIDA_OTP_RECUPERACION_MINUTOS_DEFECTO
+    return max(1, obtener_configuracion_int('minutosVidaOtpRecuperacion', fallback=VIDA_OTP_RECUPERACION_MINUTOS_DEFECTO))
+
+def obtener_minutos_vida_otp_admin() -> int:
+    """Minutos de validez del código OTP de seguridad rápida (`minutosVidaOtpAdmin`)."""
+    from core_app.constantes import VIDA_OTP_ADMIN_MINUTOS_DEFECTO
+    return max(1, obtener_configuracion_int('minutosVidaOtpAdmin', fallback=VIDA_OTP_ADMIN_MINUTOS_DEFECTO))
+
+def obtener_longitud_codigo_seguridad() -> int:
+    """Cantidad de caracteres alfanuméricos de los códigos de seguridad (`longitudCodigoSeguridad`)."""
+    from core_app.constantes import LONGITUD_CODIGO_SEGURIDAD_DEFECTO
+    return max(6, min(32, obtener_configuracion_int('longitudCodigoSeguridad', fallback=LONGITUD_CODIGO_SEGURIDAD_DEFECTO)))
+
+def obtener_limite_resultados_geo() -> int:
+    """Tope de resultados en búsquedas geográficas globales (`limiteResultadosBusquedaGeo`)."""
+    from core_app.constantes import LIMITE_RESULTADOS_GEO_DEFECTO
+    return max(10, min(500, obtener_configuracion_int('limiteResultadosBusquedaGeo', fallback=LIMITE_RESULTADOS_GEO_DEFECTO)))
 
 def obtener_retencion_copias_backup() -> int:
     """Obtiene la cantidad máxima de copias históricas de respaldo a conservar en el servidor."""
     return max(1, obtener_configuracion_int('backupRetencionCopias', fallback=5))
 
+def obtener_configuracion_backups_completa() -> dict:
+    """
+    Retorna la configuración completa y estructurada del subsistema de respaldos (CU-22).
+    """
+    return {
+        'automatico': obtener_configuracion_bool('backupAutomatico'),
+        'modalidad': obtener_configuracion_texto('backupModalidad', fallback='MULTINIVEL'),
+        'diario': {
+            'activo': obtener_configuracion_bool('backupDiarioActivo'),
+            'frecuencia_horas': max(1, obtener_configuracion_int('backupFrecuenciaHoras', fallback=24)),
+            'hora_ejecucion': obtener_configuracion_texto('backupHoraEjecucion', fallback='03:00'),
+        },
+        'semanal': {
+            'activo': obtener_configuracion_bool('backupSemanalActivo'),
+            'dia_semana': obtener_configuracion_texto('backupDiaSemana', fallback='SABADO').upper(),
+            'hora_ejecucion': obtener_configuracion_texto('backupHoraSemanal', fallback='02:00'),
+        },
+        'quincenal': {
+            'activo': obtener_configuracion_bool('backupQuincenalActivo'),
+            'hora_ejecucion': obtener_configuracion_texto('backupHoraQuincenal', fallback='04:00'),
+        },
+        'mensual': {
+            'activo': obtener_configuracion_bool('backupMensualActivo'),
+            'hora_ejecucion': obtener_configuracion_texto('backupHoraMensual', fallback='05:00'),
+        },
+        'retencion_copias': obtener_retencion_copias_backup(),
+        'ultima_ejecucion': obtener_configuracion_texto('backupUltimaEjecucion', fallback=''),
+    }
+
 def obtener_max_intentos_login() -> int:
     """Obtiene el límite de intentos fallidos antes de bloquear la cuenta frente a ataques."""
-    return max(3, obtener_configuracion_int('maxIntentosLogin', fallback=10))
+    from core_app.constantes import MIN_INTENTOS_LOGIN_PERMITIDOS
+    return max(MIN_INTENTOS_LOGIN_PERMITIDOS, obtener_configuracion_int('maxIntentosLogin', fallback=10))
 
 def obtener_tiempo_sesion_inactiva_horas() -> float:
     """Obtiene el tiempo en horas para control de inactividad de sesión de usuarios."""
+    raw = _obtener_valor_crudo_configuracion('tiempoSesionInactiva')
+    if raw is None:
+        return 168.0
     try:
-        config = ConfiguracionSistema.objects.get(clave='tiempoSesionInactiva')
-        val = str(config.valor).strip().replace(',', '.')
-        return float(val) if float(val) > 0 else 168.0
+        val = float(raw.strip().replace(',', '.'))
+        return val if val > 0 else 168.0
     except Exception:
         return 168.0
 
 def obtener_email_emisor() -> str:
     """Obtiene la casilla de correo configurada para envíos del sistema con fallback."""
     from django.conf import settings
-    fallback = getattr(settings, 'DEFAULT_FROM_EMAIL', 'lucas.mino1508@gmail.com')
+    fallback = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@ifixpos.com')
     emisor = obtener_configuracion_texto('emailInfo', fallback=fallback)
     if not emisor or emisor == 'S/N' or '@' not in emisor:
         return fallback
@@ -201,10 +373,25 @@ def obtener_todas_las_configuraciones() -> dict:
     """
     Consulta todos los registros de ConfiguracionSistema y
     retorna un diccionario simple: {clave: valor} para poblar el frontend.
+    Ejecuta autosanado preventivo si faltan claves del catálogo canónico (CU-42).
     Incluye fallback a settings para llaves de pasarela si no estuviesen presentes.
     """
     from django.conf import settings
-    configuraciones = ConfiguracionSistema.objects.all()
+    from core_app.constantes import CATALOGO_CONFIGURACIONES_SISTEMA
+
+    configuraciones = list(ConfiguracionSistema.objects.all().order_by('id_config'))
+    claves_presentes = {c.clave for c in configuraciones if c.clave is not None}
+
+    # Autosanado si faltan claves del catálogo canónico en la BD
+    claves_faltantes = set(CATALOGO_CONFIGURACIONES_SISTEMA.keys()) - claves_presentes
+    if claves_faltantes:
+        try:
+            from core_app.services import asegurar_configuraciones_predeterminadas
+            asegurar_configuraciones_predeterminadas()
+            configuraciones = list(ConfiguracionSistema.objects.all().order_by('id_config'))
+        except Exception:
+            pass
+
     res = {
         config.clave: config.valor
         for config in configuraciones
@@ -218,6 +405,34 @@ def obtener_todas_las_configuraciones() -> dict:
         res['mpWebhookSecret'] = getattr(settings, 'MERCADOPAGO_WEBHOOK_SECRET', '') or 'S/N'
 
     return res
+
+
+def obtener_datos_bancarios_comercio() -> dict:
+    """
+    Obtiene los datos bancarios oficiales del comercio desde ConfiguracionSistema (CU-42).
+    """
+    return {
+        'banco': obtener_configuracion_texto('bancoLocal', 'Banco de la Nación Argentina'),
+        'titular': obtener_configuracion_texto('titularCuentaLocal', 'IFix Servicio Técnico S.R.L.'),
+        'cbu': obtener_configuracion_texto('cbuLocal', '0110599540000012345678'),
+        'alias': obtener_configuracion_texto('aliasLocal', 'IFIX.TALLER.POS'),
+    }
+
+
+def obtener_dias_garantia_reparacion() -> int:
+    """Plazo formal de garantía técnica en días posteriores a la entrega (CU-42)."""
+    return max(1, obtener_configuracion_int('diasGarantiaReparacion', fallback=90))
+
+
+def obtener_dias_limite_retiro_equipo() -> int:
+    """Días límite de guarda tras finalizar la reparación antes de aplicar costos o rezago (CU-42)."""
+    return max(1, obtener_configuracion_int('diasLimiteRetiroEquipo', fallback=60))
+
+
+def obtener_minutos_expiracion_mp() -> int:
+    """Minutos de vigencia de la preferencia y código QR generado por Mercado Pago (CU-42)."""
+    return max(5, obtener_configuracion_int('minutosExpiracionPreferenciaMP', fallback=30))
+
 
 
 # ==============================================================================

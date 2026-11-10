@@ -18,15 +18,17 @@ import {
   Search01Icon,
   Copy01Icon,
   Cancel01Icon,
-  ShieldAlertIcon
+  ShieldAlertIcon,
+  CleanIcon,
+  PlayIcon,
+  Folder01Icon
 } from '@hugeicons/core-free-icons';
 
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminBackupsScreen() {
   const { token, logout, user } = useAuth();
   const navigate = useNavigate();
@@ -38,6 +40,9 @@ export default function AdminBackupsScreen() {
   const [estadoAlmacenamiento, setEstadoAlmacenamiento] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [filtroTexto, setFiltroTexto] = useState('');
+  const [categoriaFiltro, setCategoriaFiltro] = useState('TODAS');
+  const [depurandoHuerfanos, setDepurandoHuerfanos] = useState(false);
+  const [ejecutandoCiclo, setEjecutandoCiclo] = useState(false);
   const [alerta, setAlerta] = useState(null);
 
   // ============================================================================
@@ -108,18 +113,138 @@ export default function AdminBackupsScreen() {
   }, [cargarDatos]);
 
   // ============================================================================
-  // FILTRADO DINÁMICO DE RESPALDOS
+  // CONTEO Y FILTRADO MULTI-NIVEL DE RESPALDOS
   // ============================================================================
+  const conteoCategorias = useMemo(() => {
+    const counts = { TODAS: backups.length, DIARIOS: 0, SEMANALES: 0, QUINCENALES: 0, MENSUALES: 0, MANUALES: 0 };
+    backups.forEach(b => {
+      const cat = b.categoria_backup || (b.automatico ? 'DIARIO' : 'MANUAL');
+      if (cat === 'DIARIO') counts.DIARIOS++;
+      else if (cat === 'SEMANAL') counts.SEMANALES++;
+      else if (cat === 'QUINCENAL') counts.QUINCENALES++;
+      else if (cat === 'MENSUAL') counts.MENSUALES++;
+      else if (cat === 'MANUAL') counts.MANUALES++;
+    });
+    return counts;
+  }, [backups]);
+
   const respaldosFiltrados = useMemo(() => {
-    if (!filtroTexto.trim()) return backups;
+    let lista = backups;
+    if (categoriaFiltro !== 'TODAS') {
+      lista = lista.filter(b => {
+        const cat = b.categoria_backup || (b.automatico ? 'DIARIO' : 'MANUAL');
+        if (categoriaFiltro === 'DIARIOS') return cat === 'DIARIO';
+        if (categoriaFiltro === 'SEMANALES') return cat === 'SEMANAL';
+        if (categoriaFiltro === 'QUINCENALES') return cat === 'QUINCENAL';
+        if (categoriaFiltro === 'MENSUALES') return cat === 'MENSUAL';
+        if (categoriaFiltro === 'MANUALES') return cat === 'MANUAL';
+        return true;
+      });
+    }
+
+    if (!filtroTexto.trim()) return lista;
     const q = filtroTexto.toLowerCase().trim();
-    return backups.filter(b => {
+    return lista.filter(b => {
       const nombre = (b.nombre_archivo || '').toLowerCase();
       const ver = (b.version || '').toLowerCase();
       const usuario = (b.nombre_usuario || b.email_usuario || '').toLowerCase();
-      return nombre.includes(q) || ver.includes(q) || usuario.includes(q);
+      const carpeta = (b.carpeta_relativa || '').toLowerCase();
+      const categoria = (b.categoria_backup || '').toLowerCase();
+      return nombre.includes(q) || ver.includes(q) || usuario.includes(q) || carpeta.includes(q) || categoria.includes(q);
     });
-  }, [backups, filtroTexto]);
+  }, [backups, categoriaFiltro, filtroTexto]);
+
+  const getBadgeCategoria = (categoria) => {
+    switch (categoria) {
+      case 'DIARIO':
+        return {
+          label: 'Diario',
+          className: 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40'
+        };
+      case 'SEMANAL':
+        return {
+          label: 'Semanal',
+          className: 'bg-cyan-950/40 text-cyan-300 border-cyan-500/40'
+        };
+      case 'QUINCENAL':
+        return {
+          label: 'Quincenal',
+          className: 'bg-purple-950/40 text-purple-300 border-purple-500/40'
+        };
+      case 'MENSUAL':
+        return {
+          label: 'Mensual',
+          className: 'bg-amber-950/40 text-amber-300 border-amber-500/40'
+        };
+      case 'MANUAL':
+      default:
+        return {
+          label: 'Manual',
+          className: 'bg-blue-950/40 text-blue-300 border-blue-500/40'
+        };
+    }
+  };
+
+  // ============================================================================
+  // ACCIONES AVANZADAS: DEPURACIÓN DE HUÉRFANOS Y CICLO PROGRAMADO
+  // ============================================================================
+  const ejecutarDepuracionHuerfanos = async () => {
+    setDepurandoHuerfanos(true);
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/core/backups/depurar-huerfanos/`,
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+      const detalle = res.data?.detalle || {};
+      const eliminados = detalle.eliminados ?? 0;
+      const mb = detalle.mb_liberados ?? 0;
+      if (eliminados > 0) {
+        dispararAlerta('exito', `Depuración completa: se eliminaron ${eliminados} archivo(s) huérfano(s) del disco (${mb} MB liberados).`);
+      } else {
+        dispararAlerta('info', 'El repositorio físico se encuentra íntegro y sincronizado. No hay archivos huérfanos.');
+      }
+      await cargarDatos();
+    } catch (error) {
+      const msg = error.response?.data?.detail || error.response?.data?.mensaje || 'Error al depurar archivos huérfanos del servidor.';
+      dispararAlerta('error', msg);
+    } finally {
+      setDepurandoHuerfanos(false);
+    }
+  };
+
+  const ejecutarCicloProgramado = async () => {
+    setEjecutandoCiclo(true);
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/core/backups/ejecutar-ciclo/`,
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+      const resultados = res.data?.resultados || {};
+      if (resultados.ejecutado && resultados.nivel) {
+        dispararAlerta('exito', `Ciclo ejecutado exitosamente. Se generó respaldo nivel: ${resultados.nivel}.`);
+      } else if (resultados.motivo) {
+        dispararAlerta('info', `Ciclo evaluado: ${resultados.motivo}`);
+      } else {
+        dispararAlerta('info', 'Ciclo evaluado con éxito: ningún nivel programado requería ejecución en este momento.');
+      }
+      await cargarDatos();
+    } catch (error) {
+      const msg = error.response?.data?.detail || error.response?.data?.mensaje || 'Error al evaluar ciclo de respaldos.';
+      dispararAlerta('error', msg);
+    } finally {
+      setEjecutandoCiclo(false);
+    }
+  };
 
   // ============================================================================
   // FLUJO CU-22: GENERAR COPIA DE SEGURIDAD MANUAL
@@ -474,7 +599,27 @@ export default function AdminBackupsScreen() {
             </div>
 
             {/* Botonera de Acción */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center flex-wrap gap-2.5">
+              <button
+                onClick={ejecutarDepuracionHuerfanos}
+                disabled={depurandoHuerfanos || cargando}
+                title="Escanear y eliminar archivos .sql que no pertenezcan a ninguna copia registrada"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-950/30 hover:bg-amber-900/50 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-all disabled:opacity-50"
+              >
+                <HugeiconsIcon icon={CleanIcon} size={16} className={depurandoHuerfanos ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">Depurar Huérfanos</span>
+              </button>
+
+              <button
+                onClick={ejecutarCicloProgramado}
+                disabled={ejecutandoCiclo || cargando}
+                title="Evaluar y ejecutar el ciclo de respaldos automáticos programados"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-950/40 hover:bg-violet-900/60 text-violet-300 border border-violet-500/40 text-xs font-semibold transition-all disabled:opacity-50"
+              >
+                <HugeiconsIcon icon={PlayIcon} size={16} className={ejecutandoCiclo ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">Ejecutar Ciclo</span>
+              </button>
+
               <button
                 onClick={cargarDatos}
                 disabled={cargando}
@@ -492,6 +637,40 @@ export default function AdminBackupsScreen() {
                 <span>Generar Respaldo Manual</span>
               </button>
             </div>
+          </div>
+
+          {/* Selector de Pestañas / Filtro por Nivel de Respaldo */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-700">
+            {[
+              { id: 'TODAS', label: 'Todos los Respaldos', count: conteoCategorias.TODAS },
+              { id: 'DIARIOS', label: 'Diarios', count: conteoCategorias.DIARIOS },
+              { id: 'SEMANALES', label: 'Semanales', count: conteoCategorias.SEMANALES },
+              { id: 'QUINCENALES', label: 'Quincenales', count: conteoCategorias.QUINCENALES },
+              { id: 'MENSUALES', label: 'Mensuales', count: conteoCategorias.MENSUALES },
+              { id: 'MANUALES', label: 'Manuales', count: conteoCategorias.MANUALES }
+            ].map(pill => {
+              const activo = categoriaFiltro === pill.id;
+              return (
+                <button
+                  key={pill.id}
+                  onClick={() => setCategoriaFiltro(pill.id)}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap border ${
+                    activo
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-sm shadow-cyan-500/10'
+                      : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 border-slate-700/60 hover:border-slate-600'
+                  }`}
+                >
+                  <span>{pill.label}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      activo ? 'bg-cyan-400/20 text-cyan-200' : 'bg-slate-900 text-slate-400'
+                    }`}
+                  >
+                    {pill.count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Tabla de Copias de Seguridad */}
@@ -556,10 +735,16 @@ export default function AdminBackupsScreen() {
                               <div className="font-semibold text-slate-100 truncate max-w-xs" title={b.nombre_archivo}>
                                 {b.nombre_archivo}
                               </div>
-                              <div className="flex items-center gap-1.5 mt-0.5">
+                              <div className="flex items-center gap-2 mt-0.5">
                                 <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono border border-cyan-500/30">
                                   v{b.version}
                                 </span>
+                                {b.carpeta_relativa && (
+                                  <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+                                    <HugeiconsIcon icon={Folder01Icon} size={12} className="text-slate-500" />
+                                    {b.carpeta_relativa}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -578,17 +763,16 @@ export default function AdminBackupsScreen() {
                           {b.tamano_formateado || (b.tamano_mb ? `${b.tamano_mb} MB` : 'N/D')}
                         </td>
 
-                        {/* Tipo */}
+                        {/* Nivel / Tipo */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
-                              b.automatico
-                                ? 'bg-violet-950/40 text-violet-300 border-violet-500/40'
-                                : 'bg-cyan-950/40 text-cyan-300 border-cyan-500/40'
-                            }`}
-                          >
-                            {b.automatico ? 'Automático' : 'Manual'}
-                          </span>
+                          {(() => {
+                            const badge = getBadgeCategoria(b.categoria_backup || (b.automatico ? 'DIARIO' : 'MANUAL'));
+                            return (
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                            );
+                          })()}
                         </td>
 
                         {/* Generado Por */}
@@ -1057,9 +1241,29 @@ export default function AdminBackupsScreen() {
                       <span className="font-semibold text-cyan-300">v{detalleBackup.version}</span>
                     </div>
                     <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Tipo de Generación</span>
+                      <span className="text-xs text-slate-500 block uppercase font-mono">Nivel / Categoría</span>
+                      {(() => {
+                        const badge = getBadgeCategoria(detalleBackup.categoria_backup || (detalleBackup.automatico ? 'DIARIO' : 'MANUAL'));
+                        return (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border mt-0.5 ${badge.className}`}>
+                            {badge.label}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-xs text-slate-500 block uppercase font-mono">Subcarpeta de Destino</span>
+                      <span className="font-semibold text-slate-200 font-mono text-xs">
+                        {detalleBackup.carpeta_relativa || 'backups/'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-500 block uppercase font-mono">Tipo de Ejecución</span>
                       <span className="font-semibold text-slate-200">
-                        {detalleBackup.automatico ? 'Automático' : 'Manual'}
+                        {detalleBackup.automatico ? 'Automático (Programado)' : 'Manual (Bajo Demanda)'}
                       </span>
                     </div>
                   </div>

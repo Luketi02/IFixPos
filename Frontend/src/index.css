@@ -2,6 +2,17 @@
 
 @theme {
   --font-sans: "Lexend", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+
+  /* Tokens Semánticos de Identidad Visual Cyber-Tech Dark Mode (Regla 6 / Fase 3 F5) */
+  --color-fondo: #0F172A;
+  --color-tarjeta: #1E293B;
+  --color-acento-1: #06B6D4;
+  --color-acento-2: #8B5CF6;
+
+  --color-cyber-bg: #0F172A;
+  --color-cyber-card: #1E293B;
+  --color-cyber-cyan: #06B6D4;
+  --color-cyber-violet: #8B5CF6;
 }
 
 /* ==============================================================================

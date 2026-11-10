@@ -7,8 +7,7 @@ import { getDashboardPath } from '../../utils/roleRoutes';
 import NotificationBell from './NotificationBell';
 import ClientBenefitsModal from '../sales/ClientBenefitsModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function UserProfileDropdown({ align = 'right', showNotificationBell = true }) {
   const { user, login, logout } = useAuth();
   const navigate = useNavigate();

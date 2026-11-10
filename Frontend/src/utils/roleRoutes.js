@@ -1,9 +1,13 @@
+import { ROLES, ventaEstaPagada } from '../config/constantes';
+
 /**
  * Utilidades para normalización de roles y enrutamiento dinámico en IFixPos.
  */
 
+export { ROLES, ventaEstaPagada };
+
 export const normalizeRole = (role) => {
-  if (!role || typeof role !== 'string') return 'cliente';
+  if (!role || typeof role !== 'string') return ROLES.CLIENTE;
   
   // Normalizar removiendo tildes y pasando a minúsculas
   const clean = role
@@ -13,12 +17,12 @@ export const normalizeRole = (role) => {
     .trim();
 
   if (clean.includes('admin')) {
-    return 'admin';
+    return ROLES.ADMIN;
   }
   if (clean.includes('tecnic')) {
-    return 'tecnico';
+    return ROLES.TECNICO;
   }
-  return 'cliente';
+  return ROLES.CLIENTE;
 };
 
 /**
@@ -27,11 +31,11 @@ export const normalizeRole = (role) => {
 export const getDashboardPath = (role) => {
   const normalized = normalizeRole(role);
   switch (normalized) {
-    case 'admin':
+    case ROLES.ADMIN:
       return '/admin/dashboard';
-    case 'tecnico':
-      return '/tecnico/dispositivos/en-curso';
-    case 'cliente':
+    case ROLES.TECNICO:
+      return '/tecnico/dashboard';
+    case ROLES.CLIENTE:
     default:
       return '/tienda';
   }

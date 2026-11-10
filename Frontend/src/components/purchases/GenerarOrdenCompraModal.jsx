@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function GenerarOrdenCompraModal({
   isOpen,
   onClose,
@@ -72,7 +71,7 @@ export default function GenerarOrdenCompraModal({
     const cargarProductos = async () => {
       setCargandoCatalogo(true);
       try {
-        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+        const activeToken = token || localStorage.getItem('access_token');
         const config = {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         };
@@ -190,7 +189,7 @@ export default function GenerarOrdenCompraModal({
 
     setCalculando(true);
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: {
           'Content-Type': 'application/json',
@@ -294,7 +293,7 @@ export default function GenerarOrdenCompraModal({
     }
 
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: {
           'Content-Type': 'application/json',

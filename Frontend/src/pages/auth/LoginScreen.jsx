@@ -7,7 +7,8 @@ import { motion } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { getDashboardPath } from '../../utils/roleRoutes';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '../../config/api';
+import { obtenerRecaptchaSiteKey } from '../../config/recaptcha';
 
 const LoginScreen = () => {
   const navigate = useNavigate();
@@ -90,8 +91,8 @@ const LoginScreen = () => {
     }
   };
 
-  // Clave de prueba de Google ReCAPTCHA v2 (Fallback)
-  const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
+  // Clave de Google ReCAPTCHA v2 centralizada (Fase 1 - F2)
+  const recaptchaSiteKey = obtenerRecaptchaSiteKey();
 
   // Si ya existe una sesión activa en este navegador, bloqueamos la creación de otra sesión simultánea
   if (isAuthenticated && user) {

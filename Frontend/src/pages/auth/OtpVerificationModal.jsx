@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../../config/api';
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -123,8 +124,6 @@ const OtpVerificationModal = ({ isOpen, email, onClose, onSuccess }) => {
     setErrorMsg('');
     setSuccessMsg('');
 
-    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
     try {
       const response = await axios.post(`${API_BASE_URL}/api/auth/verificar-correo/`, {
         email: email,
@@ -140,7 +139,7 @@ const OtpVerificationModal = ({ isOpen, email, onClose, onSuccess }) => {
 
       if (accessToken) {
         localStorage.setItem('access_token', accessToken);
-        localStorage.setItem('token', accessToken);
+        localStorage.removeItem('token');
       }
       if (refreshToken) {
         localStorage.setItem('refresh_token', refreshToken);

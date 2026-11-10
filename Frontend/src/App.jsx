@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AuthProvider } from './context/AuthContext';
@@ -5,70 +6,111 @@ import ProtectedRoute from './components/routes/ProtectedRoute';
 import OnboardingGuard from './components/routes/OnboardingGuard';
 import PublicRoute from './components/routes/PublicRoute';
 import RoleRoute from './components/routes/RoleRoute';
-import DashboardRedirect from './components/routes/DashboardRedirect';
-import WelcomeHomeScreen from './pages/home/WelcomeHomeScreen';
-
-import LoginScreen from './pages/auth/LoginScreen';
-import RegisterScreen from './pages/auth/RegisterScreen';
-import RecoverPasswordScreen from './pages/auth/RecoverPasswordScreen';
-import CompleteProfileScreen from './pages/auth/CompleteProfileScreen';
-import EditProfileScreen from './pages/auth/EditProfileScreen';
-import UserAddressesScreen from './pages/profile/UserAddressesScreen';
-import UserPreferencesScreen from './pages/profile/UserPreferencesScreen';
-
-import ClientStoreScreen from './pages/dashboards/ClientStoreScreen';
-import TechnicianTasksScreen from './pages/dashboards/TechnicianTasksScreen';
-import TechnicianModuleScreen from './pages/dashboards/TechnicianModuleScreen';
-import AdminDashboardScreen from './pages/dashboards/AdminDashboardScreen';
-import AdminConfigScreen from './pages/admin/AdminConfigScreen';
-import CoverageZonesScreen from './pages/admin/CoverageZonesScreen';
-import AdminInventoryScreen from './pages/admin/AdminInventoryScreen';
-import AdminRepairsScreen from './pages/admin/AdminRepairsScreen';
-import MediosPagoScreen from './pages/admin/MediosPagoScreen';
-import AdminUsersScreen from './pages/admin/AdminUsersScreen';
-import AdminRolesScreen from './pages/admin/AdminRolesScreen';
-import AdminSuppliersScreen from './pages/admin/AdminSuppliersScreen';
-import AdminDirectPurchasesScreen from './pages/admin/AdminDirectPurchasesScreen';
-import AdminQuotationsScreen from './pages/admin/AdminQuotationsScreen';
-import AdminManageQuotationsScreen from './pages/admin/AdminManageQuotationsScreen';
-import AdminPurchaseOrdersScreen from './pages/admin/AdminPurchaseOrdersScreen';
-import AdminBenefitsScreen from './pages/admin/AdminBenefitsScreen';
-import AdminAuditLogsScreen from './pages/admin/AdminAuditLogsScreen';
-import AdminBackupsScreen from './pages/admin/AdminBackupsScreen';
-import AdminConversionReportScreen from './pages/admin/metrics/AdminConversionReportScreen';
-import AdminEfficiencyReportScreen from './pages/admin/metrics/AdminEfficiencyReportScreen';
-import AdminProductivityReportScreen from './pages/admin/metrics/AdminProductivityReportScreen';
-import AdminLogisticsReportScreen from './pages/admin/metrics/AdminLogisticsReportScreen';
-import AdminSatisfactionReportScreen from './pages/admin/metrics/AdminSatisfactionReportScreen';
-import VentaPresencialScreen from './pages/sales/VentaPresencialScreen';
-import PortalProveedorCotizarScreen from './pages/portal/PortalProveedorCotizarScreen';
-import MarcasScreen from './pages/admin/catalogs/MarcasScreen';
-import ModelosScreen from './pages/admin/catalogs/ModelosScreen';
-import TiposDispositivoScreen from './pages/admin/catalogs/TiposDispositivoScreen';
-import CategoriasProductoScreen from './pages/admin/catalogs/CategoriasProductoScreen';
-import CategoriasReparacionScreen from './pages/admin/catalogs/CategoriasReparacionScreen';
-import RegisterDeviceScreen from './pages/client/RegisterDeviceScreen';
-import MisDispositivos from './pages/client/MisDispositivos';
-import DispositivoDetalle from './pages/client/DispositivoDetalle';
-import ReparacionDetalle from './pages/client/ReparacionDetalle';
-import TecnicoReparacionDetalle from './pages/technician/TecnicoReparacionDetalle';
 import SessionExpiredModal from './components/auth/SessionExpiredModal';
 import AccountConflictModal from './components/auth/AccountConflictModal';
 import { instalarInterceptorSesion } from './utils/sesionExpirada';
+import { useTituloPagina } from './hooks/useTituloPagina';
+
+// =============================================================================
+// CARGA DIFERIDA POR RUTA (CODE SPLITTING - FASE 2 F6)
+// =============================================================================
+const WelcomeHomeScreen = lazy(() => import('./pages/home/WelcomeHomeScreen'));
+
+// Autenticación y Perfil
+const LoginScreen = lazy(() => import('./pages/auth/LoginScreen'));
+const RegisterScreen = lazy(() => import('./pages/auth/RegisterScreen'));
+const RecoverPasswordScreen = lazy(() => import('./pages/auth/RecoverPasswordScreen'));
+const CompleteProfileScreen = lazy(() => import('./pages/auth/CompleteProfileScreen'));
+const EditProfileScreen = lazy(() => import('./pages/auth/EditProfileScreen'));
+const UserAddressesScreen = lazy(() => import('./pages/profile/UserAddressesScreen'));
+const UserPreferencesScreen = lazy(() => import('./pages/profile/UserPreferencesScreen'));
+
+// Tienda, Portal Público y Cliente
+const ClientStoreScreen = lazy(() => import('./pages/dashboards/ClientStoreScreen'));
+const TerminosCondicionesScreen = lazy(() => import('./pages/public/TerminosCondicionesScreen'));
+const PortalProveedorCotizarScreen = lazy(() => import('./pages/portal/PortalProveedorCotizarScreen'));
+const RegisterDeviceScreen = lazy(() => import('./pages/client/RegisterDeviceScreen'));
+const MisDispositivos = lazy(() => import('./pages/client/MisDispositivos'));
+const DispositivoDetalle = lazy(() => import('./pages/client/DispositivoDetalle'));
+const ReparacionDetalle = lazy(() => import('./pages/client/ReparacionDetalle'));
+
+// Módulos de Técnico y Caja
+const TechnicianTasksScreen = lazy(() => import('./pages/dashboards/TechnicianTasksScreen'));
+const TechnicianModuleScreen = lazy(() => import('./pages/dashboards/TechnicianModuleScreen'));
+const TecnicoReparacionDetalle = lazy(() => import('./pages/technician/TecnicoReparacionDetalle'));
+const VentaPresencialScreen = lazy(() => import('./pages/sales/VentaPresencialScreen'));
+
+// Panel de Administración y Abastecimiento
+const AdminDashboardScreen = lazy(() => import('./pages/dashboards/AdminDashboardScreen'));
+const AdminConfigScreen = lazy(() => import('./pages/admin/AdminConfigScreen'));
+const CoverageZonesScreen = lazy(() => import('./pages/admin/CoverageZonesScreen'));
+const AdminInventoryScreen = lazy(() => import('./pages/admin/AdminInventoryScreen'));
+const AdminRepairsScreen = lazy(() => import('./pages/admin/AdminRepairsScreen'));
+const MediosPagoScreen = lazy(() => import('./pages/admin/MediosPagoScreen'));
+const AdminUsersScreen = lazy(() => import('./pages/admin/AdminUsersScreen'));
+const AdminRolesScreen = lazy(() => import('./pages/admin/AdminRolesScreen'));
+const AdminSuppliersScreen = lazy(() => import('./pages/admin/AdminSuppliersScreen'));
+const AdminDirectPurchasesScreen = lazy(() => import('./pages/admin/AdminDirectPurchasesScreen'));
+const AdminQuotationsScreen = lazy(() => import('./pages/admin/AdminQuotationsScreen'));
+const AdminManageQuotationsScreen = lazy(() => import('./pages/admin/AdminManageQuotationsScreen'));
+const AdminPurchaseOrdersScreen = lazy(() => import('./pages/admin/AdminPurchaseOrdersScreen'));
+const AdminBenefitsScreen = lazy(() => import('./pages/admin/AdminBenefitsScreen'));
+const AdminAuditLogsScreen = lazy(() => import('./pages/admin/AdminAuditLogsScreen'));
+const AdminBackupsScreen = lazy(() => import('./pages/admin/AdminBackupsScreen'));
+
+// Métricas y Reportes Gerenciales
+const AdminConversionReportScreen = lazy(() => import('./pages/admin/metrics/AdminConversionReportScreen'));
+const AdminEfficiencyReportScreen = lazy(() => import('./pages/admin/metrics/AdminEfficiencyReportScreen'));
+const AdminProductivityReportScreen = lazy(() => import('./pages/admin/metrics/AdminProductivityReportScreen'));
+const AdminLogisticsReportScreen = lazy(() => import('./pages/admin/metrics/AdminLogisticsReportScreen'));
+const AdminSatisfactionReportScreen = lazy(() => import('./pages/admin/metrics/AdminSatisfactionReportScreen'));
+
+// Catálogos y Taxonomías Base
+const MarcasScreen = lazy(() => import('./pages/admin/catalogs/MarcasScreen'));
+const ModelosScreen = lazy(() => import('./pages/admin/catalogs/ModelosScreen'));
+const TiposDispositivoScreen = lazy(() => import('./pages/admin/catalogs/TiposDispositivoScreen'));
+const CategoriasProductoScreen = lazy(() => import('./pages/admin/catalogs/CategoriasProductoScreen'));
+const CategoriasReparacionScreen = lazy(() => import('./pages/admin/catalogs/CategoriasReparacionScreen'));
 
 // Interceptor global de axios: token inválido/expirado -> modal de sesión expirada
 instalarInterceptorSesion();
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_OAUTH2_CLIENT_ID || '';
 
+/**
+ * Fallback visual Cyber-Tech Dark Mode sin saltos de layout (CLS) durante la descarga de chunks.
+ */
+function CargadorRutaCyberTech() {
+  return (
+    <div className="min-h-screen w-full bg-[#0F172A] text-slate-200 flex flex-col items-center justify-center p-6 select-none transition-opacity duration-200">
+      <div className="bg-[#1E293B]/90 border border-slate-700/80 rounded-2xl px-8 py-6 shadow-2xl flex flex-col items-center gap-3.5">
+        <div className="relative w-10 h-10 flex items-center justify-center">
+          <div className="absolute inset-0 rounded-full border-2 border-[#06B6D4]/25"></div>
+          <div className="w-10 h-10 rounded-full border-2 border-[#06B6D4] border-t-transparent animate-spin"></div>
+        </div>
+        <p className="text-xs font-semibold tracking-wider text-cyan-300 uppercase font-mono">
+          Cargando módulo...
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SincronizadorTituloRuta() {
+  useTituloPagina();
+  return null;
+}
+
 function App() {
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AuthProvider>
         <Router>
+          <SincronizadorTituloRuta />
           <SessionExpiredModal />
           <AccountConflictModal />
-          <Routes>
+          <Suspense fallback={<CargadorRutaCyberTech />}>
+            <Routes>
             {/* Portal Público de Proveedores (Acceso directo seguro vía Token) */}
             <Route path="/portal-proveedor/cotizar" element={<PortalProveedorCotizarScreen />} />
             <Route path="/portal-proveedor/cotizar/:tokenAcceso" element={<PortalProveedorCotizarScreen />} />
@@ -88,6 +130,7 @@ function App() {
             {/* Rutas Públicas de Bienvenida y Tienda (Acceso libre sin cuenta) */}
             <Route path="/" element={<WelcomeHomeScreen />} />
             <Route path="/tienda" element={<ClientStoreScreen />} />
+            <Route path="/terminos" element={<TerminosCondicionesScreen />} />
 
             {/* Rutas Protegidas: Requiere autenticación Y perfil 100% completo */}
             <Route element={<ProtectedRoute />}>
@@ -99,6 +142,7 @@ function App() {
 
               {/* Vistas y Módulos de Técnico: Técnicos y Administradores */}
               <Route element={<RoleRoute allowedRoles={['tecnico', 'admin']} />}>
+                <Route path="/tecnico/dashboard" element={<TechnicianTasksScreen />} />
                 <Route path="/tareas-tecnico" element={<TechnicianTasksScreen />} />
                 <Route path="/tecnico/dispositivos/nueva-reparacion" element={<TechnicianModuleScreen forcedModule="nueva-reparacion" />} />
                 <Route path="/tecnico/dispositivos/en-curso" element={<TechnicianModuleScreen forcedModule="en-curso" />} />
@@ -169,7 +213,8 @@ function App() {
 
             {/* Ruta comodín / fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+            </Routes>
+          </Suspense>
         </Router>
       </AuthProvider>
     </GoogleOAuthProvider>

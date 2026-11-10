@@ -6,8 +6,7 @@ import useAuth from '../../context/useAuth';
 import IniciarReparacionModal from '../devices/IniciarReparacionModal';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 /**
  * Función auxiliar para verificar si un dispositivo tiene una reparación activa en curso.
  * Según el flujo de taller (CU-26 y CU-33), una reparación está activa si su etapa

@@ -991,4 +991,356 @@ class FiltrarLogsAuditoriaTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
 
+# ==============================================================================
+# PRUEBAS DEL SISTEMA AVANZADO DE BACKUPS MULTI-NIVEL Y ROTACIÓN FIFO
+# ==============================================================================
+
+class SistemaBackupsNivelesYRotacionTests(TestCase):
+    """
+    Pruebas unitarias y de integración para la arquitectura avanzada de respaldos:
+    - Almacenamiento en 5 subcarpetas (diarios, semanales, quincenales, mensuales, manuales).
+    - Rotación FIFO estricta previa a la creación para evitar acumulación infinita.
+    - Supresión jerárquica por precedencia (Mensual > Quincenal > Semanal > Diario).
+    - Depuración de archivos .sql huérfanos sin correspondencia en BD.
+    - Endpoints de depuración y ejecución de ciclo programado.
+    """
+
+    def setUp(self):
+        import os
+        from django.contrib.auth.hashers import make_password
+        from django.core.cache import cache
+        from users_app.models import Usuario, RolUsuario, PerfilUsuario
+        from core_app.services import asegurar_configuraciones_predeterminadas
+
+        self.client = APIClient()
+        cache.clear()
+        asegurar_configuraciones_predeterminadas()
+
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol admin'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol cliente'}
+        )
+
+        self.admin = Usuario.objects.create(
+            email='admin_rotation@test.com',
+            contrasena=make_password('AdminPass123!'),
+            fecha_registro=date.today(),
+            id_rol=self.rol_admin,
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.admin,
+            nombre='Admin',
+            apellido='Rotacion',
+            dni='44332211'
+        )
+
+        self.cliente = Usuario.objects.create(
+            email='cliente_rotation@test.com',
+            contrasena=make_password('ClientePass123!'),
+            fecha_registro=date.today(),
+            id_rol=self.rol_cliente,
+            is_active=True
+        )
+
+        from core_app.models import CopiaSeguridad
+        CopiaSeguridad.objects.all().delete()
+
+        self.archivos_creados = []
+
+    def tearDown(self):
+        import os
+        from django.core.cache import cache
+        cache.clear()
+        for ruta in self.archivos_creados:
+            if os.path.exists(ruta):
+                try:
+                    os.remove(ruta)
+                except OSError:
+                    pass
+
+    def test_subdirectorios_por_categoria(self):
+        """Verifica que cada nivel de backup guarde físicamente en su subcarpeta asignada."""
+        import os
+        from core_app.services import generar_copia_seguridad_manual, generar_copia_seguridad_automatica
+
+        # 1. Manual -> backups/manuales/
+        c_manual = generar_copia_seguridad_manual(usuario_admin=self.admin, version="1.0.0")
+        self.archivos_creados.append(c_manual.ubicacion_archivo)
+        self.assertIn("manuales", c_manual.ubicacion_archivo.replace("\\", "/"))
+        self.assertTrue(os.path.exists(c_manual.ubicacion_archivo))
+
+        # 2. Diario -> backups/diarios/
+        c_diario = generar_copia_seguridad_automatica(tipo_backup="DIARIO")
+        self.archivos_creados.append(c_diario.ubicacion_archivo)
+        self.assertIn("diarios", c_diario.ubicacion_archivo.replace("\\", "/"))
+        self.assertTrue(os.path.exists(c_diario.ubicacion_archivo))
+
+        # 3. Semanal -> backups/semanales/
+        c_semanal = generar_copia_seguridad_automatica(tipo_backup="SEMANAL")
+        self.archivos_creados.append(c_semanal.ubicacion_archivo)
+        self.assertIn("semanales", c_semanal.ubicacion_archivo.replace("\\", "/"))
+        self.assertTrue(os.path.exists(c_semanal.ubicacion_archivo))
+
+        # 4. Quincenal -> backups/quincenales/
+        c_quincenal = generar_copia_seguridad_automatica(tipo_backup="QUINCENAL")
+        self.archivos_creados.append(c_quincenal.ubicacion_archivo)
+        self.assertIn("quincenales", c_quincenal.ubicacion_archivo.replace("\\", "/"))
+        self.assertTrue(os.path.exists(c_quincenal.ubicacion_archivo))
+
+        # 5. Mensual -> backups/mensuales/
+        c_mensual = generar_copia_seguridad_automatica(tipo_backup="MENSUAL")
+        self.archivos_creados.append(c_mensual.ubicacion_archivo)
+        self.assertIn("mensuales", c_mensual.ubicacion_archivo.replace("\\", "/"))
+        self.assertTrue(os.path.exists(c_mensual.ubicacion_archivo))
+
+    def test_rotacion_fifo_estricta_elimina_mas_antiguo_antes_de_crear(self):
+        """Verifica que con límite N, antes de generar el (N+1)-ésimo backup se elimine el más antiguo."""
+        import os
+        from core_app.models import CopiaSeguridad, ConfiguracionSistema
+        from core_app.services import (
+            generar_copia_seguridad_automatica,
+            invalidar_cache_configuracion,
+            obtener_directorio_backup_por_tipo
+        )
+
+        # Asegurar estado limpio inicial para copias diarias
+        dir_diarios = obtener_directorio_backup_por_tipo('DIARIO')
+        if os.path.exists(dir_diarios):
+            for f in os.listdir(dir_diarios):
+                if f.lower().endswith('.sql'):
+                    try:
+                        os.remove(os.path.join(dir_diarios, f))
+                    except OSError:
+                        pass
+        CopiaSeguridad.objects.all().delete()
+
+        # Parametrizar límite de retención en 2 e invalidar caché
+        ConfiguracionSistema.objects.filter(clave="backupRetencionCopias").update(valor="2")
+        invalidar_cache_configuracion(["backupRetencionCopias"])
+
+        # Generar 2 copias diarias
+        import time
+        c1 = generar_copia_seguridad_automatica(tipo_backup="DIARIO")
+        ruta_c1 = c1.ubicacion_archivo
+        self.archivos_creados.append(ruta_c1)
+        self.assertTrue(os.path.exists(ruta_c1))
+
+        time.sleep(0.02)
+        c2 = generar_copia_seguridad_automatica(tipo_backup="DIARIO")
+        ruta_c2 = c2.ubicacion_archivo
+        self.archivos_creados.append(ruta_c2)
+        self.assertTrue(os.path.exists(ruta_c2))
+
+        self.assertEqual(CopiaSeguridad.objects.filter(ubicacion_archivo__contains="diarios").count(), 2)
+
+        # Generar 3ra copia diaria: debe purgar a c1 ANTES de que se almacene c3
+        time.sleep(0.02)
+        c3 = generar_copia_seguridad_automatica(tipo_backup="DIARIO")
+        ruta_c3 = c3.ubicacion_archivo
+        self.archivos_creados.append(ruta_c3)
+
+        # c1 debe haberse eliminado tanto de BD como del disco
+        self.assertFalse(os.path.exists(ruta_c1))
+        self.assertFalse(CopiaSeguridad.objects.filter(id_backup=c1.id_backup).exists())
+
+        # c2 y c3 deben permanecer en disco y en BD
+        self.assertTrue(os.path.exists(ruta_c2))
+        self.assertTrue(os.path.exists(ruta_c3))
+        self.assertEqual(CopiaSeguridad.objects.filter(ubicacion_archivo__contains="diarios").count(), 2)
+
+    def test_precedencia_jerarquica_supresion(self):
+        """
+        Verifica que:
+        - Si corre un Mensual, suprime quincenal, semanal y diario.
+        - Si corre un Semanal, suprime diario.
+        """
+        from datetime import date, time
+        from core_app.models import ConfiguracionSistema, CopiaSeguridad
+        from core_app.services import evaluar_y_ejecutar_backups_programados, invalidar_cache_configuracion
+
+        dia_semana_map = {
+            0: "LUNES", 1: "MARTES", 2: "MIERCOLES", 3: "JUEVES",
+            4: "VIERNES", 5: "SABADO", 6: "DOMINGO"
+        }
+        hoy = date.today()
+        dia_hoy_str = dia_semana_map[hoy.weekday()]
+
+        # Escenario 1: Semanal activo coincidiendo hoy a las 03:00, y Diario activo a las 03:00.
+        # El Semanal debe ejecutarse y suprimir el Diario de hoy.
+        ConfiguracionSistema.objects.filter(clave="backupAutomatico").update(valor="true")
+        ConfiguracionSistema.objects.filter(clave="backupModalidad").update(valor="AUTOMATICO")
+        ConfiguracionSistema.objects.filter(clave="backupDiarioActivo").update(valor="true")
+        ConfiguracionSistema.objects.filter(clave="backupHoraEjecucion").update(valor="03:00")
+        ConfiguracionSistema.objects.filter(clave="backupSemanalActivo").update(valor="true")
+        ConfiguracionSistema.objects.filter(clave="backupDiaSemana").update(valor=dia_hoy_str)
+        ConfiguracionSistema.objects.filter(clave="backupHoraSemanal").update(valor="03:00")
+        ConfiguracionSistema.objects.filter(clave="backupQuincenalActivo").update(valor="false")
+        ConfiguracionSistema.objects.filter(clave="backupMensualActivo").update(valor="false")
+        invalidar_cache_configuracion([
+            "backupAutomatico", "backupModalidad", "backupDiarioActivo", "backupHoraEjecucion",
+            "backupSemanalActivo", "backupDiaSemana", "backupHoraSemanal",
+            "backupQuincenalActivo", "backupMensualActivo"
+        ])
+
+        res1 = evaluar_y_ejecutar_backups_programados(
+            fecha_evaluacion=hoy,
+            hora_evaluacion=time(3, 0),
+            tolerancia_minutos=10
+        )
+
+        if res1.get("archivo"):
+            self.archivos_creados.append(res1["archivo"])
+
+        self.assertTrue(res1.get("ejecutado"))
+        self.assertEqual(res1.get("nivel"), "SEMANAL")
+        self.assertIn("DIARIO", res1.get("suprimidos", []))
+
+        # Escenario 2: Mensual activo hoy a las 03:00.
+        # Suprime Quincenal, Semanal y Diario.
+        ConfiguracionSistema.objects.filter(clave="backupMensualActivo").update(valor="true")
+        ConfiguracionSistema.objects.filter(clave="backupHoraMensual").update(valor="03:00")
+        ConfiguracionSistema.objects.filter(clave="backupQuincenalActivo").update(valor="true")
+        ConfiguracionSistema.objects.filter(clave="backupHoraQuincenal").update(valor="03:00")
+
+        # Usar día 1 del mes para asegurar que el mensual evalúa positivo
+        dia_1 = date(2026, 11, 1)
+        dia_1_str = dia_semana_map[dia_1.weekday()]
+        ConfiguracionSistema.objects.filter(clave="backupDiaSemana").update(valor=dia_1_str)
+        invalidar_cache_configuracion([
+            "backupMensualActivo", "backupHoraMensual", "backupQuincenalActivo",
+            "backupHoraQuincenal", "backupDiaSemana"
+        ])
+
+        res2 = evaluar_y_ejecutar_backups_programados(
+            fecha_evaluacion=dia_1,
+            hora_evaluacion=time(3, 0),
+            tolerancia_minutos=10
+        )
+
+        if res2.get("archivo"):
+            self.archivos_creados.append(res2["archivo"])
+
+        self.assertTrue(res2.get("ejecutado"))
+        self.assertEqual(res2.get("nivel"), "MENSUAL")
+        self.assertIn("QUINCENAL", res2.get("suprimidos", []))
+        self.assertIn("SEMANAL", res2.get("suprimidos", []))
+        self.assertIn("DIARIO", res2.get("suprimidos", []))
+
+    def test_depurar_archivos_backup_huerfanos(self):
+        """Verifica que depurar_archivos_backup_huerfanos elimine del disco solo los .sql sin registro en BD."""
+        import os
+        from core_app.services import (
+            obtener_directorio_backup_por_tipo,
+            depurar_archivos_backup_huerfanos,
+            generar_copia_seguridad_manual
+        )
+        from core_app.models import CopiaSeguridad
+
+        # Crear una copia legítima con registro en BD
+        copia_legitima = generar_copia_seguridad_manual(usuario_admin=self.admin)
+        self.archivos_creados.append(copia_legitima.ubicacion_archivo)
+        self.assertTrue(os.path.exists(copia_legitima.ubicacion_archivo))
+
+        # Crear un archivo huérfano simulado en backups/manuales/
+        dir_manuales = obtener_directorio_backup_por_tipo("MANUAL")
+        ruta_huerfano = os.path.join(dir_manuales, "backup_huerfano_prueba.sql")
+        with open(ruta_huerfano, "w", encoding="utf-8") as f:
+            f.write("-- Archivo huérfano sin fila en BD\n")
+
+        self.assertTrue(os.path.exists(ruta_huerfano))
+
+        # Ejecutar depuración
+        resultado = depurar_archivos_backup_huerfanos()
+
+        self.assertGreaterEqual(resultado["eliminados"], 1)
+        self.assertIn("backup_huerfano_prueba.sql", resultado["archivos"])
+        self.assertFalse(os.path.exists(ruta_huerfano))
+
+        # La copia legítima no debió ser tocada
+        self.assertTrue(os.path.exists(copia_legitima.ubicacion_archivo))
+        self.assertTrue(CopiaSeguridad.objects.filter(id_backup=copia_legitima.id_backup).exists())
+
+    def test_api_depurar_huerfanos_y_ejecutar_ciclo(self):
+        """Prueba los endpoints HTTP para depurar huérfanos y forzar ciclo de respaldos programados."""
+        from users_app.services import generar_tokens_jwt
+
+        tokens_admin = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_admin['access']}")
+
+        # 1. POST /api/core/backups/depurar-huerfanos/
+        res_depurar = self.client.post('/api/core/backups/depurar-huerfanos/')
+        self.assertEqual(res_depurar.status_code, status.HTTP_200_OK)
+        data_depurar = res_depurar.json()
+        self.assertIn('mensaje', data_depurar)
+        self.assertIn('detalle', data_depurar)
+        self.assertIn('eliminados', data_depurar['detalle'])
+
+        # 2. POST /api/core/backups/ejecutar-ciclo/
+        res_ciclo = self.client.post('/api/core/backups/ejecutar-ciclo/')
+        self.assertEqual(res_ciclo.status_code, status.HTTP_200_OK)
+        self.assertIn('resultados', res_ciclo.json())
+
+        # 3. Acceso denegado para rol CLIENTE
+        tokens_cliente = generar_tokens_jwt(self.cliente)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_cliente['access']}")
+
+        res_forbidden1 = self.client.post('/api/core/backups/depurar-huerfanos/')
+        self.assertEqual(res_forbidden1.status_code, status.HTTP_403_FORBIDDEN)
+
+        res_forbidden2 = self.client.post('/api/core/backups/ejecutar-ciclo/')
+        self.assertEqual(res_forbidden2.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_interruptor_maestro_backup_automatico_bloquea_ejecucion(self):
+        """Verifica que si backupAutomatico es False, ninguna rutina automática se ejecute."""
+        from core_app.models import ConfiguracionSistema, CopiaSeguridad
+        from core_app.services import evaluar_y_ejecutar_backups_programados, invalidar_cache_configuracion
+        from core_app.selectors import obtener_configuracion_bool
+        from users_app.services import generar_tokens_jwt
+
+        # 1. Asegurar interruptor maestro apagado en BD
+        ConfiguracionSistema.objects.filter(clave="backupAutomatico").update(valor="False")
+        invalidar_cache_configuracion(["backupAutomatico"])
+        self.assertFalse(obtener_configuracion_bool("backupAutomatico"))
+
+        copias_iniciales = CopiaSeguridad.objects.filter(automatico=True).count()
+
+        # Intentar ejecutar con evaluación normal
+        res_normal = evaluar_y_ejecutar_backups_programados()
+        self.assertFalse(res_normal["ejecutado"])
+        self.assertIn("desactivados", res_normal["motivo"].lower())
+
+        # Intentar forzar nivel con switch apagado
+        res_forzado = evaluar_y_ejecutar_backups_programados(forzar_nivel="DIARIO")
+        self.assertFalse(res_forzado["ejecutado"])
+        self.assertIn("desactivados", res_forzado["motivo"].lower())
+
+        # Ninguna copia automática debió crearse
+        self.assertEqual(CopiaSeguridad.objects.filter(automatico=True).count(), copias_iniciales)
+
+        # 2. Encender mediante API PUT /api/core/configuraciones/
+        tokens_admin = generar_tokens_jwt(self.admin)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_admin['access']}")
+
+        res_put = self.client.put(
+            '/api/core/configuraciones/',
+            {'backupAutomatico': 'True'},
+            format='json'
+        )
+        self.assertEqual(res_put.status_code, status.HTTP_200_OK)
+        self.assertTrue(obtener_configuracion_bool("backupAutomatico"))
+
+        # 3. Ahora con switch encendido, el forzado se ejecuta satisfactoriamente
+        res_ok = evaluar_y_ejecutar_backups_programados(forzar_nivel="DIARIO")
+        self.assertTrue(res_ok["ejecutado"])
+        self.assertEqual(res_ok["nivel"], "DIARIO")
+        if res_ok.get("archivo"):
+            self.archivos_creados.append(res_ok["archivo"])
+
+
+
 

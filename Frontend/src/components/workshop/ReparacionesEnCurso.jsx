@@ -9,8 +9,7 @@ import { formatearFecha } from '../../utils/fechas';
 import CargarDiagnosticoModal from './CargarDiagnosticoModal';
 import CambiarEstadoModal from './CambiarEstadoModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 /**
  * Pantalla / Módulo de Reparaciones en Curso para el personal del taller técnico.
  * Lista las reparaciones activas, permite filtrado dinámico y habilita el botón
@@ -89,13 +88,29 @@ export default function ReparacionesEnCurso({ onAlerta }) {
     setModalEstadoAbierto(true);
   };
 
-  // Callback de éxito tras actualizar el estado
-  const handleCambioEstadoExitoso = (mensaje) => {
+  // Callback de éxito tras actualizar el estado (con Disparador Dinámico CU-08)
+  const handleCambioEstadoExitoso = (mensaje, idReparacion, nuevoEstado) => {
     if (typeof onAlerta === 'function') {
       onAlerta('success', mensaje);
     }
     // Recargar la grilla para que refleje el nuevo estado en tiempo real
     cargarReparaciones();
+
+    // Transacción Dinámica (Máquina de Estados + Disparador):
+    // Si el nuevo estado es "Nuevo Diagnóstico" (ESPERANDO_DIAGNOSTICO),
+    // abrir automáticamente en pantalla el Modal del CU-08 para completar el presupuesto
+    const estadoNorm = String(nuevoEstado || '').toUpperCase();
+    if (estadoNorm === 'ESPERANDO_DIAGNOSTICO' || estadoNorm.includes('DIAGNOSTICO')) {
+      const repAfectada = reparaciones.find((r) => r.id_reparacion === idReparacion) || reparacionParaEstado;
+      if (repAfectada) {
+        setTimeout(() => {
+          handleAbrirDiagnostico({
+            ...repAfectada,
+            etapa: 'ESPERANDO_DIAGNOSTICO'
+          });
+        }, 250);
+      }
+    }
   };
 
   // Filtrado reactivo por pestañas y búsqueda
@@ -182,7 +197,7 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         <div className="flex flex-wrap items-center gap-2">
           {[
             { id: 'TODOS', label: 'Todos' },
-            { id: 'ESPERANDO_DIAGNOSTICO', label: 'Esperando Diagnóstico' },
+            { id: 'ESPERANDO_DIAGNOSTICO', label: 'Nuevo Diagnóstico' },
             { id: 'ESPERANDO_CONFIRMACION', label: 'Esperando Confirmación' },
             { id: 'EN_REPARACION', label: 'En Reparación' },
             { id: 'ESPERANDO_INSUMOS', label: 'Esperando Insumo' }
@@ -365,43 +380,18 @@ export default function ReparacionesEnCurso({ onAlerta }) {
 
                   {/* 4. Botones de Acción de la Reparación */}
                   <div className="pt-3 border-t border-slate-700/60 space-y-2">
-                    <div className="flex flex-col sm:flex-row items-center gap-2">
-                      {esDiagnosticoPendiente ? (
-                        <button
-                          type="button"
-                          onClick={() => handleAbrirDiagnostico(rep)}
-                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-1.5"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span>Cargar Diagnóstico</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleAbrirDiagnostico(rep)}
-                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-semibold text-xs transition-all flex items-center justify-center gap-1.5"
-                          title="Realizar una nueva evaluación técnica del equipo"
-                        >
-                          <span>🔬</span>
-                          <span>Nuevo Diagnóstico</span>
-                        </button>
-                      )}
-
-                      {/* Botón secundario: Actualizar Estado */}
-                      {puedeActualizarEstado && (
-                        <button
-                          type="button"
-                          onClick={() => handleAbrirCambiarEstado(rep)}
-                          className="w-full sm:flex-1 py-2 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-[#8B5CF6] hover:text-purple-300 border border-[#8B5CF6]/40 hover:border-[#8B5CF6]/80 font-bold text-xs transition-all shadow-sm hover:shadow-[0_0_15px_rgba(139,92,246,0.25)] flex items-center justify-center gap-1.5"
-                          title="Actualizar estado operativo del equipo"
-                        >
-                          <span className="text-sm leading-none">⚙️</span>
-                          <span>Estado</span>
-                        </button>
-                      )}
-                    </div>
+                    {/* Boton unico de Transicion Operativa: Actualizar Estado */}
+                    {puedeActualizarEstado && (
+                      <button
+                        type="button"
+                        onClick={() => handleAbrirCambiarEstado(rep)}
+                        className="w-full py-2.5 px-3 rounded-xl bg-slate-800/95 hover:bg-slate-700 text-[#8B5CF6] hover:text-purple-300 border border-[#8B5CF6]/50 hover:border-[#8B5CF6] font-bold text-xs transition-all shadow-sm hover:shadow-[0_0_15px_rgba(139,92,246,0.3)] flex items-center justify-center gap-2"
+                        title="Actualizar estado operativo o pasar a Nuevo Diagnostico"
+                      >
+                        <span className="text-sm leading-none">⚙️</span>
+                        <span>Estado</span>
+                      </button>
+                    )}
 
                     {/* Botón para ver bitácora y radiografía técnica */}
                     <button

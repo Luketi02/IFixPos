@@ -6,26 +6,8 @@ import AdminSidebar from '../../../components/navigation/AdminSidebar';
 import AdminHeader from '../../../components/navigation/AdminHeader';
 import { FunnelChart, DonutChart, HorizontalBarChart } from '../../../components/charts/ReportCharts';
 import { exportarInformePDF } from '../../../utils/reportPrinter';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-// ==============================================================================
-// UTILIDADES DE FORMATEO MONETARIO Y FECHAS
-// ==============================================================================
-const formatearMoneda = (monto) => {
-  const num = Number(monto) || 0;
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(num);
-};
-
-const formatearPorcentaje = (valor) => {
-  const num = Number(valor) || 0;
-  return `${num.toFixed(2)}%`;
-};
+import { API_BASE_URL } from '../../../config/api';
+import { formatearMoneda, formatearPorcentaje } from '../../../utils/productImages';
 
 // Generador de fechas auxiliares en formato YYYY-MM-DD
 const obtenerFechaFormato = (d) => {
@@ -36,7 +18,7 @@ const obtenerFechaFormato = (d) => {
 };
 
 export default function AdminConversionReportScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   // ============================================================================
   // ESTADOS DE PARÁMETROS TEMPORALES Y SEGMENTACIÓN (PASOS 2 Y 3)
@@ -358,6 +340,11 @@ export default function AdminConversionReportScreen() {
       `--------------------------------------------------------\n` +
       `Comportamiento por Rubro Técnico:\n${desgloseTexto}`;
 
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Usuario Autenticado';
+
     exportarInformePDF({
       titulo: 'Reporte de Conversión de Presupuestos (Embudo de Taller)',
       subtitulo: 'Evaluación de efectividad comercial, embudo de ventas y cuantificación de lucro cesante',
@@ -365,7 +352,7 @@ export default function AdminConversionReportScreen() {
       kpis,
       tablas,
       resumenTexto,
-      usuario: { nombre: 'Administrador General', email: 'admin@ifixpos.com' }
+      usuario: { nombre: nombreEjecutor, email: user?.email || '' }
     });
   };
 

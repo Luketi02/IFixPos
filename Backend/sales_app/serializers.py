@@ -166,6 +166,7 @@ class VentaOutputSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaOutputSerializer(source='detalleventa_set', many=True, read_only=True)
     direccion_envio = DireccionOutputSerializer(source='id_direccion_envio', read_only=True)
     total = serializers.SerializerMethodField()
+    expira_en = serializers.SerializerMethodField()
 
     class Meta:
         model = Venta
@@ -179,6 +180,7 @@ class VentaOutputSerializer(serializers.ModelSerializer):
             'monto_subtotal',
             'costo_envio',
             'total',
+            'expira_en',
             'id_direccion_envio',
             'direccion_envio',
             'detalles'
@@ -188,6 +190,21 @@ class VentaOutputSerializer(serializers.ModelSerializer):
         subtotal = float(obj.monto_subtotal or 0)
         envio = float(obj.costo_envio or 0)
         return round(subtotal + envio, 2)
+
+    def get_expira_en(self, obj) -> int:
+        if str(getattr(obj, 'estado_venta', '') or '').upper() != 'PENDIENTE':
+            return 0
+        from django.utils import timezone
+        from core_app.selectors import obtener_minutos_reserva_venta_pendiente
+        total_seg = obtener_minutos_reserva_venta_pendiente() * 60
+        dt_creacion = getattr(obj, 'fecha_hora_creacion', None)
+        if not dt_creacion:
+            return total_seg
+        ahora = timezone.now()
+        if timezone.is_naive(dt_creacion):
+            dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+        restante = int(total_seg - (ahora - dt_creacion).total_seconds())
+        return max(0, restante)
 
 
 # ==============================================================================
@@ -427,6 +444,7 @@ class TransaccionCobroPagoOutputSerializer(serializers.Serializer):
     numero_operacion = serializers.CharField(allow_null=True, allow_blank=True)
     detalle = serializers.CharField(allow_null=True, allow_blank=True)
     cliente = ClienteTransaccionOutputSerializer()
+    desglose_cobro = serializers.DictField(read_only=True, required=False)
 
 
 # ==============================================================================
@@ -527,6 +545,7 @@ class RegistrarMedioPagoInputSerializer(serializers.Serializer):
 class MedioPagoOutputSerializer(serializers.Serializer):
     """Formato de salida estructurado para medios de pago."""
     id_mediopago = serializers.IntegerField(read_only=True)
+    codigo = serializers.CharField(read_only=True, allow_null=True)
     nombre = serializers.CharField(source='nombre_medio_pago', read_only=True)
     nombre_medio_pago = serializers.CharField(read_only=True)
     recargo = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
@@ -616,6 +635,7 @@ class BeneficioListOutputSerializer(serializers.Serializer):
     producto_nombre = serializers.SerializerMethodField()
     por_desc = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, allow_null=True)
     fecha = serializers.DateField(read_only=True)
+    expira_en = serializers.SerializerMethodField()
     estado_vigencia = serializers.SerializerMethodField()
 
     def get_cliente_email(self, obj) -> str:
@@ -630,16 +650,16 @@ class BeneficioListOutputSerializer(serializers.Serializer):
     def get_producto_nombre(self, obj) -> str:
         return obj.id_producto.nombre if obj.id_producto else ""
 
+    def get_expira_en(self, obj) -> Optional[str]:
+        exp_dt = getattr(obj, 'fecha_hora_expiracion', None)
+        return exp_dt.isoformat() if exp_dt else None
+
     def get_estado_vigencia(self, obj) -> str:
-        if not obj.fecha or obj.tiempo_disp is None:
+        if not obj.fecha and not getattr(obj, 'fecha_hora_creacion', None):
             return "VIGENTE"
-        import datetime
-        from django.utils import timezone
-        import math
-        horas = float(obj.tiempo_disp)
-        dias = math.ceil(horas / 24.0)
-        fecha_expiracion = obj.fecha + datetime.timedelta(days=dias)
-        return "VIGENTE" if timezone.now().date() <= fecha_expiracion else "CADUCADO"
+        if obj.tiempo_disp is None:
+            return "VIGENTE"
+        return "VIGENTE" if obj.estado == 'ACTIVO' else "CADUCADO"
 
 
 class BeneficioDetailOutputSerializer(BeneficioListOutputSerializer):
@@ -655,14 +675,10 @@ class BeneficioDetailOutputSerializer(BeneficioListOutputSerializer):
     canal_emision = serializers.SerializerMethodField()
 
     def get_fecha_caducidad_estimada(self, obj) -> Optional[str]:
-        if not obj.fecha or obj.tiempo_disp is None:
+        exp_dt = getattr(obj, 'fecha_hora_expiracion', None)
+        if not exp_dt:
             return None
-        import datetime
-        import math
-        horas = float(obj.tiempo_disp)
-        dias = math.ceil(horas / 24.0)
-        fecha_expiracion = obj.fecha + datetime.timedelta(days=dias)
-        return str(fecha_expiracion)
+        return exp_dt.isoformat()
 
     def get_canal_emision(self, obj) -> str:
         canales = []
@@ -848,6 +864,7 @@ class VentaPendienteDetalleOutputSerializer(serializers.Serializer):
     costo_envio = serializers.DecimalField(max_digits=10, decimal_places=2)
     total = serializers.DecimalField(max_digits=10, decimal_places=2)
     segundos_restantes = serializers.IntegerField()
+    expira_en = serializers.IntegerField(required=False, default=0)
     preference_id = serializers.CharField(allow_null=True, required=False)
     init_point = serializers.CharField(allow_null=True, required=False)
     detalles = ItemCompraPendienteOutputSerializer(many=True)
@@ -857,6 +874,7 @@ class CompraPendienteActivaOutputSerializer(serializers.Serializer):
     tiene_pendiente = serializers.BooleanField()
     venta = VentaPendienteDetalleOutputSerializer(allow_null=True, required=False)
     segundos_restantes = serializers.IntegerField(required=False, default=0)
+    expira_en = serializers.IntegerField(required=False, default=0)
 
 
 
@@ -1044,6 +1062,8 @@ class BeneficioClienteOutputSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.SerializerMethodField()
     producto_precio = serializers.SerializerMethodField()
     estado = serializers.CharField(read_only=True)
+    expira_en = serializers.SerializerMethodField()
+    segundos_restantes = serializers.SerializerMethodField()
     es_acumulable = serializers.BooleanField(default=True, read_only=True)
 
     class Meta:
@@ -1055,6 +1075,8 @@ class BeneficioClienteOutputSerializer(serializers.ModelSerializer):
             'por_desc',
             'tiempo_disp',
             'estado',
+            'expira_en',
+            'segundos_restantes',
             'enviado_momento_compra',
             'enviado_durante_carrito',
             'id_producto',
@@ -1062,6 +1084,18 @@ class BeneficioClienteOutputSerializer(serializers.ModelSerializer):
             'producto_precio',
             'es_acumulable'
         ]
+
+    def get_expira_en(self, obj) -> Optional[str]:
+        exp_dt = getattr(obj, 'fecha_hora_expiracion', None)
+        return exp_dt.isoformat() if exp_dt else None
+
+    def get_segundos_restantes(self, obj) -> int:
+        from django.utils import timezone
+        exp_dt = getattr(obj, 'fecha_hora_expiracion', None)
+        if not exp_dt or getattr(obj, 'estado', '') != 'ACTIVO':
+            return 0
+        restante = int((exp_dt - timezone.now()).total_seconds())
+        return max(0, restante)
 
     def get_producto_nombre(self, obj):
         if obj.id_producto:

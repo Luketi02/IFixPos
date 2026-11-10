@@ -9,10 +9,13 @@ const DICCIONARIO_ESTADOS = {
   esperando_dispositivo: 'Esperando Dispositivo',
   'esperando dispositivo': 'Esperando Dispositivo',
 
-  // Esperando diagnóstico
-  esperando_diagnostico: 'Esperando Diagnóstico',
-  'esperando diagnostico': 'Esperando Diagnóstico',
-  esperando_diagnóstico: 'Esperando Diagnóstico',
+  // Nuevo diagnóstico (antes Esperando Diagnóstico)
+  esperando_diagnostico: 'Nuevo Diagnóstico',
+  'esperando diagnostico': 'Nuevo Diagnóstico',
+  esperando_diagnóstico: 'Nuevo Diagnóstico',
+  nuevo_diagnostico: 'Nuevo Diagnóstico',
+  'nuevo diagnostico': 'Nuevo Diagnóstico',
+  nuevo_diagnóstico: 'Nuevo Diagnóstico',
 
   // En diagnóstico
   en_diagnostico: 'En Diagnóstico',
@@ -61,7 +64,7 @@ const DICCIONARIO_ESTADOS = {
 
 const DICCIONARIO_NUMERICO_ESTADOS = {
   1: 'Esperando Dispositivo',
-  2: 'Esperando Diagnóstico',
+  2: 'Nuevo Diagnóstico',
   3: 'En Diagnóstico',
   4: 'Esperando Confirmación',
   5: 'En Reparación',

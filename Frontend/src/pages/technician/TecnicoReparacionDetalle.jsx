@@ -14,8 +14,7 @@ import CargarDiagnosticoModal from '../../components/workshop/CargarDiagnosticoM
 import CambiarEstadoModal from '../../components/workshop/CambiarEstadoModal';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function TecnicoReparacionDetalle() {
   const { id_reparacion } = useParams();
   const navigate = useNavigate();
@@ -480,7 +479,7 @@ export default function TecnicoReparacionDetalle() {
             ) : (
               <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-700">
                 {bitacora.map((item, idx) => {
-                  const estadoNombre = item.estado_alcanzado_nombre || `Estado ${item.estado_alcanzado}`;
+                  const estadoNombre = item.estado_nombre || item.estado_alcanzado_nombre || 'Evento registrado';
                   return (
                     <div key={item.id_bitacora || idx} className="relative group">
                       {/* Nodo del Timeline */}
@@ -497,7 +496,7 @@ export default function TecnicoReparacionDetalle() {
                           </span>
 
                           <span className="text-[11px] font-mono text-slate-400">
-                            {item.fecha_hora || 'Hora no registrada'}
+                            {item.fecha_hora_display || item.fecha_hora || 'Fecha no registrada'}
                           </span>
                         </div>
 

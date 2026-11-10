@@ -9,13 +9,39 @@ import axios from 'axios';
 
 export const EVENTO_SESION_EXPIRADA = 'ifixpos:sesion-expirada';
 export const EVENTO_CUENTA_CAMBIADA = 'ifixpos:cuenta-cambiada';
+export const CLAVE_ACCESS_TOKEN = 'access_token';
+export const CLAVE_REFRESH_TOKEN = 'refresh_token';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+/**
+ * Obtiene el token de acceso unificado desde localStorage ('access_token'),
+ * migrando transparentemente la clave heredada 'token' si existiera (Fase 1 - F3).
+ */
+export const obtenerAccessToken = () => {
+  let access = localStorage.getItem(CLAVE_ACCESS_TOKEN);
+  if (!access) {
+    const heredado = localStorage.getItem('token');
+    if (heredado) {
+      access = heredado;
+      localStorage.setItem(CLAVE_ACCESS_TOKEN, heredado);
+      localStorage.removeItem('token');
+    }
+  }
+  return access || null;
+};
+
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '')
+).replace(/\/+$/, '');
 
 // Mensajes del backend que indican que el token/sesión ya no es válido
 const PATRON_TOKEN_INVALIDO =
   /token.*(expir|inv[aá]lid|not valid|no es v[aá]lido)|usuario no encontrado o cuenta inactiva|credenciales de autenticaci/i;
 
+// Rutas de autenticación donde no debe inyectarse ni reintentarse automáticamente el JWT previo
+const PATRON_RUTA_AUTH_PUBLICA =
+  /\/api\/auth\/(login|registro|register|token\/refresh|recuperar|verificar-otp|google)/i;
+
+const instanciasRegistradas = new WeakSet();
 let interceptorInstalado = false;
 let yaNotificada = false;
 let procesoRefrescoEnCurso = null;
@@ -57,9 +83,6 @@ const extraerDetalle = (data) => {
  */
 export const renovarTokenSesion = async () => {
   const refreshToken = localStorage.getItem('refresh_token');
-  if (!refreshToken) {
-    throw new Error('No hay token de refresco disponible');
-  }
 
   if (procesoRefrescoEnCurso) {
     return procesoRefrescoEnCurso;
@@ -67,14 +90,17 @@ export const renovarTokenSesion = async () => {
 
   procesoRefrescoEnCurso = (async () => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/auth/token/refresh/`, {
-        refresh: refreshToken
-      });
+      const payload = refreshToken ? { refresh: refreshToken } : {};
+      const response = await axios.post(
+        `${API_BASE_URL}/api/auth/token/refresh/`,
+        payload,
+        { withCredentials: true }
+      );
 
       const nuevosTokens = response.data?.tokens;
       if (nuevosTokens?.access) {
         localStorage.setItem('access_token', nuevosTokens.access);
-        localStorage.setItem('token', nuevosTokens.access);
+        localStorage.removeItem('token');
         if (nuevosTokens.refresh) {
           localStorage.setItem('refresh_token', nuevosTokens.refresh);
         }
@@ -89,12 +115,48 @@ export const renovarTokenSesion = async () => {
   return procesoRefrescoEnCurso;
 };
 
-/** Registra el interceptor global (idempotente). */
-export const instalarInterceptorSesion = () => {
-  if (interceptorInstalado) return;
-  interceptorInstalado = true;
+/**
+ * Registra los interceptores de solicitud (inyección automática de Bearer token)
+ * y de respuesta (renovación transparente con refresh_token ante 401/403) en una instancia de Axios.
+ */
+export const registrarInstanciaAxiosConInterceptores = (instanciaAxios = axios) => {
+  if (!instanciaAxios || instanciasRegistradas.has(instanciaAxios)) return;
+  instanciasRegistradas.add(instanciaAxios);
 
-  axios.interceptors.response.use(
+  // Interceptor de solicitud: inyecta Authorization: Bearer <access_token> si no fue provisto
+  instanciaAxios.interceptors.request.use(
+    (config) => {
+      const url = String(config?.url || '');
+      const esPeticionBackend =
+        url.startsWith('/api/') ||
+        (API_BASE_URL && url.startsWith(API_BASE_URL)) ||
+        (! /^https?:\/\//i.test(url) && Boolean(config?.baseURL || API_BASE_URL));
+
+      if (esPeticionBackend && !PATRON_RUTA_AUTH_PUBLICA.test(url)) {
+        const yaTieneAuth = Boolean(
+          config.headers?.get?.('Authorization') ?? config.headers?.Authorization
+        );
+        if (!yaTieneAuth) {
+          const token = obtenerAccessToken();
+          if (token) {
+            if (config.headers?.set) {
+              config.headers.set('Authorization', `Bearer ${token}`);
+            } else {
+              config.headers = {
+                ...(config.headers || {}),
+                Authorization: `Bearer ${token}`
+              };
+            }
+          }
+        }
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  // Interceptor de respuesta: detecta token vencido e intenta renovarlo con refresh_token
+  instanciaAxios.interceptors.response.use(
     (response) => response,
     async (error) => {
       const originalRequest = error.config;
@@ -120,7 +182,7 @@ export const instalarInterceptorSesion = () => {
               } else {
                 originalRequest.headers['Authorization'] = `Bearer ${nuevoAccess}`;
               }
-              return axios(originalRequest);
+              return instanciaAxios(originalRequest);
             }
           } catch (refreshErr) {
             notificarSesionExpirada();
@@ -136,4 +198,11 @@ export const instalarInterceptorSesion = () => {
       return Promise.reject(error);
     }
   );
+};
+
+/** Registra el interceptor global (idempotente). */
+export const instalarInterceptorSesion = () => {
+  if (interceptorInstalado) return;
+  interceptorInstalado = true;
+  registrarInstanciaAxiosConInterceptores(axios);
 };

@@ -35,6 +35,53 @@ logger = logging.getLogger(__name__)
 TIPOS_INGRESO = ['ingreso', 'compra', 'devolucion', 'alta', 'entrada']
 TIPOS_EGRESO = ['egreso', 'venta', 'taller', 'baja', 'salida', 'consumo']
 EMAIL_CONSUMIDOR_FINAL = 'consumidorfinal@ifixpos.com'
+SIN_DATO_COMERCIO = 'No informado'
+
+
+def _resolver_direccion_comercio(configs: Dict[str, Any]) -> str:
+    """
+    Devuelve la ubicación legible (Ciudad, Provincia, País) de la sede del comercio.
+    Prioriza el ID de dirección en 'direccionLocal' y recurre a la sede registrada.
+    Si no existe ninguna, retorna SIN_DATO_COMERCIO (nunca un domicilio inventado).
+    """
+    id_dir_raw = str(configs.get('direccionLocal') or '').strip()
+    dir_sede = None
+    if id_dir_raw.isdigit():
+        dir_sede = Direccion.objects.select_related(
+            'id_ciudad__id_provincia__id_pais'
+        ).filter(id_direccion=int(id_dir_raw)).first()
+
+    if not dir_sede:
+        from geo_app.selectors import obtener_direccion_sede
+        dir_sede = obtener_direccion_sede()
+
+    if dir_sede and getattr(dir_sede, 'id_ciudad', None):
+        provincia = dir_sede.id_ciudad.id_provincia
+        partes = [
+            dir_sede.id_ciudad.nombre_ciudad or '',
+            getattr(provincia, 'nombre_provincia', ''),
+            getattr(getattr(provincia, 'id_pais', None), 'nombre_pais', ''),
+        ]
+        texto = ", ".join(p for p in partes if p)
+        if texto:
+            return texto
+    return SIN_DATO_COMERCIO
+
+
+from sales_app.services_mercadopago import (
+    simulacion_mercadopago_habilitada,
+    validar_firma_webhook_mercadopago,
+    invalidar_preferencia_mercadopago,
+    crear_preferencia_mercadopago,
+    crear_preferencia_mercadopago_invitado,
+    procesar_webhook_mercadopago,
+    _obtener_o_crear_medio_pago_mp,
+)
+from sales_app.services_carrito import (
+    agregar_producto_a_carrito,
+    quitar_producto_de_carrito,
+    actualizar_cantidad_producto_carrito,
+)
 
 
 
@@ -53,8 +100,9 @@ def procesar_compra_virtual(
     4. Congela los ítems en DetalleVenta con precio unitario inmutable y descuenta el stock en MovimientoStock.
     5. Vacía el carrito, lo marca finalizado y registra la auditoría en LogSistema.
     """
-    # Liberar preventivamente cualquier reserva temporal vencida
-    limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+    # Liberar preventivamente cualquier reserva temporal vencida según parámetro de sistema
+    from core_app.selectors import obtener_minutos_reserva_venta_pendiente, obtener_longitud_codigo_seguridad
+    limpiar_ventas_pendientes_expiradas(minutos_limite=obtener_minutos_reserva_venta_pendiente())
 
     # -------------------------------------------------------------------------
     # Paso 1: Recuperar Carrito y Validar que no esté vacío
@@ -137,7 +185,8 @@ def procesar_compra_virtual(
         calculo_envio = calcular_costo_envio_sistema(id_dir)
         costo_envio = calculo_envio['costo']
 
-    codigo_seguridad = uuid.uuid4().hex[:10].upper()
+    longitud_cod = obtener_longitud_codigo_seguridad()
+    codigo_seguridad = uuid.uuid4().hex[:longitud_cod].upper()
 
     venta = Venta.objects.create(
         id_usuario=usuario_cliente,
@@ -218,249 +267,6 @@ def procesar_compra_virtual(
     return venta
 
 
-@transaction.atomic
-def agregar_producto_a_carrito(
-    *,
-    usuario: Usuario,
-    id_producto: int,
-    cantidad: int = 1
-) -> Dict[str, Any]:
-    """
-    Agrega un producto al carrito activo del usuario cliente validando stock en tiempo real.
-    """
-    from catalog_app.models import Producto
-
-    try:
-        producto = Producto.objects.get(id_producto=id_producto)
-    except Producto.DoesNotExist:
-        raise ValidationError("El producto seleccionado no existe.")
-
-    if not producto.estado or not producto.apto_venta:
-        raise ValidationError(f"El producto '{producto.nombre}' no se encuentra disponible para venta.")
-
-    if cantidad <= 0:
-        raise ValidationError("La cantidad a agregar debe ser mayor a cero.")
-
-    # Mutex sobre la fila Stock
-    stock = Stock.objects.select_for_update().filter(id_producto=producto).first()
-    if not stock:
-        raise ValidationError(f"El producto '{producto.nombre}' no posee stock configurado.")
-
-    ingresos = MovimientoStock.objects.filter(
-        id_stock=stock,
-        tipo_movimiento__in=TIPOS_INGRESO
-    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-    egresos = MovimientoStock.objects.filter(
-        id_stock=stock,
-        tipo_movimiento__in=TIPOS_EGRESO
-    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-    stock_disponible = int(ingresos - egresos)
-
-    if stock_disponible <= 0:
-        raise ValidationError(f"El producto '{producto.nombre}' se encuentra agotado.")
-
-    carrito, _ = CarritoCompra.objects.get_or_create(
-        id_usuario=usuario,
-        estado='activo',
-        defaults={'fecha_creacion': timezone.now().date()}
-    )
-
-    item = CarritoProducto.objects.select_for_update().filter(
-        id_carrito=carrito,
-        id_producto=producto
-    ).first()
-
-    cantidad_previa = int(item.cantidad or 0) if item else 0
-    nueva_cantidad = cantidad_previa + int(cantidad)
-
-    if nueva_cantidad > stock_disponible:
-        raise ValidationError(
-            f"Sin stock suficiente para '{producto.nombre}'. "
-            f"Disponible: {stock_disponible}, en tu carrito: {cantidad_previa}, solicitas: {cantidad}."
-        )
-
-    if item:
-        item.cantidad = nueva_cantidad
-        item.save(update_fields=['cantidad'])
-    else:
-        item = CarritoProducto.objects.create(
-            id_carrito=carrito,
-            id_producto=producto,
-            cantidad=nueva_cantidad
-        )
-
-    total_articulos = CarritoProducto.objects.filter(
-        id_carrito=carrito
-    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-    return {
-        'id_carrito': carrito.id_carrito,
-        'id_carrito_producto': item.id_carrito_producto,
-        'id_producto': producto.id_producto,
-        'producto_nombre': producto.nombre,
-        'cantidad_agregada': cantidad,
-        'cantidad_total_item': item.cantidad,
-        'total_articulos_carrito': total_articulos,
-        'stock_disponible': stock_disponible
-    }
-
-
-@transaction.atomic
-def quitar_producto_de_carrito(
-    *,
-    usuario,
-    id_producto: int,
-    cantidad: Optional[int] = None
-) -> dict:
-    """
-    Elimina o decrementa un producto del carrito activo del usuario.
-    Si 'cantidad' es None o mayor/igual a la cantidad actual, se elimina el registro por completo.
-    """
-    from sales_app.models import CarritoCompra, CarritoProducto
-    from catalog_app.models import Producto
-
-    try:
-        producto = Producto.objects.get(id_producto=id_producto)
-    except Producto.DoesNotExist:
-        raise ValidationError("El producto especificado no existe.")
-
-    carrito = CarritoCompra.objects.filter(
-        id_usuario=usuario,
-        estado='activo'
-    ).order_by('-id_carrito').first()
-
-    if not carrito:
-        raise ValidationError("El usuario no posee un carrito de compras activo.")
-
-    item = CarritoProducto.objects.select_for_update().filter(
-        id_carrito=carrito,
-        id_producto=producto
-    ).first()
-
-    if not item:
-        raise ValidationError(f"El producto '{producto.nombre}' no se encuentra en el carrito.")
-
-    cant_actual = int(item.cantidad or 0)
-    eliminado_completo = False
-    cant_restante = 0
-
-    if cantidad is None or cantidad >= cant_actual:
-        item.delete()
-        eliminado_completo = True
-    else:
-        cant_restante = cant_actual - int(cantidad)
-        item.cantidad = cant_restante
-        item.save(update_fields=['cantidad'])
-
-    total_articulos = CarritoProducto.objects.filter(
-        id_carrito=carrito
-    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-    return {
-        'id_carrito': carrito.id_carrito,
-        'id_producto': producto.id_producto,
-        'producto_nombre': producto.nombre,
-        'eliminado_completo': eliminado_completo,
-        'cantidad_restante_item': cant_restante,
-        'total_articulos_carrito': total_articulos
-    }
-
-
-@transaction.atomic
-def actualizar_cantidad_producto_carrito(
-    *,
-    usuario: Usuario,
-    id_producto: int,
-    cantidad: int
-) -> Dict[str, Any]:
-    """
-    Fija de forma absoluta la cantidad de un producto en el carrito activo del usuario.
-    Si cantidad <= 0, elimina el producto del carrito.
-    Si cantidad > 0, valida stock disponible con select_for_update y actualiza la cantidad fija.
-    Garantiza sincronización total con la base de datos sin importar el orden de llegada en la red.
-    """
-    from sales_app.models import CarritoCompra, CarritoProducto
-    from catalog_app.models import Producto
-
-    try:
-        producto = Producto.objects.get(id_producto=id_producto)
-    except Producto.DoesNotExist:
-        raise ValidationError("El producto especificado no existe.")
-
-    carrito, _ = CarritoCompra.objects.get_or_create(
-        id_usuario=usuario,
-        estado='activo',
-        defaults={'fecha_creacion': timezone.now().date()}
-    )
-
-    item = CarritoProducto.objects.select_for_update().filter(
-        id_carrito=carrito,
-        id_producto=producto
-    ).first()
-
-    eliminado = False
-    cant_final = 0
-
-    if cantidad <= 0:
-        if item:
-            item.delete()
-        eliminado = True
-        cant_final = 0
-    else:
-        if not producto.estado or not producto.apto_venta:
-            raise ValidationError(f"El producto '{producto.nombre}' no se encuentra disponible para venta.")
-
-        # Verificar stock disponible en tiempo real
-        stock = Stock.objects.select_for_update().filter(id_producto=producto).first()
-        if not stock:
-            raise ValidationError(f"El producto '{producto.nombre}' no posee stock configurado.")
-
-        ingresos = MovimientoStock.objects.filter(
-            id_stock=stock,
-            tipo_movimiento__in=TIPOS_INGRESO
-        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-        egresos = MovimientoStock.objects.filter(
-            id_stock=stock,
-            tipo_movimiento__in=TIPOS_EGRESO
-        ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-        stock_disponible = int(ingresos - egresos)
-
-        if cantidad > stock_disponible:
-            raise ValidationError(
-                f"Sin stock suficiente para '{producto.nombre}'. "
-                f"Disponible: {stock_disponible}, solicitas: {cantidad}."
-            )
-
-        if item:
-            item.cantidad = int(cantidad)
-            item.save(update_fields=['cantidad'])
-        else:
-            item = CarritoProducto.objects.create(
-                id_carrito=carrito,
-                id_producto=producto,
-                cantidad=int(cantidad)
-            )
-        eliminado = False
-        cant_final = item.cantidad
-
-    total_articulos = CarritoProducto.objects.filter(
-        id_carrito=carrito
-    ).aggregate(total=Coalesce(Sum('cantidad'), Value(0)))['total']
-
-    return {
-        'id_carrito': carrito.id_carrito,
-        'id_producto': producto.id_producto,
-        'producto_nombre': producto.nombre,
-        'eliminado': eliminado,
-        'cantidad': cant_final,
-        'total_articulos_carrito': total_articulos
-    }
-
-
 def _calcular_total_operacion(operacion) -> Decimal:
     """Calcula el total adeudado de una Venta o Reparación (incluyendo mano de obra e insumos)."""
     if isinstance(operacion, Venta):
@@ -468,9 +274,10 @@ def _calcular_total_operacion(operacion) -> Decimal:
         envio = Decimal(str(operacion.costo_envio or '0.00'))
         return subtotal + envio
     elif isinstance(operacion, Reparacion):
-        # 1. Costo de mano de obra técnica del diagnóstico
+        # 1. Costo de mano de obra técnica del diagnóstico (usando caché de prefetch si existe)
         costo_diag = Decimal('0.00')
-        diag = operacion.diagnostico_set.order_by('-id_diagnostico').first()
+        diagnosticos = list(operacion.diagnostico_set.all())
+        diag = max(diagnosticos, key=lambda d: d.id_diagnostico) if diagnosticos else None
         if diag and diag.costo_diagnostico:
             costo_diag = Decimal(str(diag.costo_diagnostico))
 
@@ -487,10 +294,17 @@ def _calcular_total_operacion(operacion) -> Decimal:
         if operacion.id_venta:
             if operacion.id_venta.costo_envio:
                 envio = Decimal(str(operacion.id_venta.costo_envio))
-            # Sincronizar monto_subtotal de la cabecera de Venta si no contemplaba la mano de obra
-            if operacion.id_venta.monto_subtotal != total_reparacion:
-                operacion.id_venta.monto_subtotal = total_reparacion
-                operacion.id_venta.save(update_fields=['monto_subtotal'])
+            estado_v = str(operacion.id_venta.estado_venta or '').upper()
+            ya_pagada = estado_v in ('PAGADO', 'PAGADA') or operacion.id_venta.pago_set.exists()
+            if not ya_pagada:
+                if total_reparacion > Decimal('0.00'):
+                    # Sincronizar monto_subtotal de la cabecera de Venta si sigue pendiente
+                    if operacion.id_venta.monto_subtotal != total_reparacion:
+                        operacion.id_venta.monto_subtotal = total_reparacion
+                        operacion.id_venta.save(update_fields=['monto_subtotal'])
+                else:
+                    # Si aún no hay diagnóstico cargado, respetar el importe base de la venta (ej. diagnóstico inicial)
+                    total_reparacion = Decimal(str(operacion.id_venta.monto_subtotal or '0.00'))
 
         return total_reparacion + envio
     else:
@@ -517,30 +331,18 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
         )
     }
     nombre_local = configs.get('nombreLocal') or 'IFixPos'
-    cuil_local = configs.get('cuilLocal') or '30-11223344-5'
-    telefono_local = configs.get('telefonoLocal') or '3794-000000'
-    email_local = configs.get('emailLocal') or 'contacto@ifixpos.com'
+    # Datos fiscales/contacto del emisor: jamás se inventan valores; si faltan se informa "No informado"
+    cuil_local = configs.get('cuilLocal') or SIN_DATO_COMERCIO
+    if cuil_local == SIN_DATO_COMERCIO:
+        logger.warning(
+            "[Comprobante Fiscal] 'cuilLocal' no está configurado en ConfiguracionSistema: "
+            "el comprobante se emite sin CUIT del emisor."
+        )
+    telefono_local = configs.get('telefonoLocal') or ''
+    email_local = configs.get('emailLocal') or ''
 
     # Obtener ubicación real (Ciudad, Provincia, País) referenciada por direccionLocal
-    direccion_local = "Posadas, Misiones, Argentina"
-    id_dir_raw = (configs.get('direccionLocal') or '').strip()
-    dir_sede = None
-    if id_dir_raw.isdigit():
-        dir_sede = Direccion.objects.select_related(
-            'id_ciudad__id_provincia__id_pais'
-        ).filter(id_direccion=int(id_dir_raw)).first()
-
-    if not dir_sede:
-        from geo_app.selectors import obtener_direccion_sede
-        dir_sede = obtener_direccion_sede()
-
-    if dir_sede and getattr(dir_sede, 'id_ciudad', None):
-        c_nom = dir_sede.id_ciudad.nombre_ciudad or ''
-        p_nom = getattr(dir_sede.id_ciudad.id_provincia, 'nombre_provincia', '')
-        pa_nom = getattr(getattr(dir_sede.id_ciudad.id_provincia, 'id_pais', None), 'nombre_pais', '')
-        partes_dir = [p for p in [c_nom, p_nom, pa_nom] if p]
-        if partes_dir:
-            direccion_local = ", ".join(partes_dir)
+    direccion_local = _resolver_direccion_comercio(configs)
 
     # 2. Extraer datos del receptor (Cliente)
     cliente = getattr(operacion, 'id_usuario', None)
@@ -664,11 +466,16 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
         elements = []
 
         # Encabezado: Emisor a la izquierda, Comprobante a la derecha
+        partes_contacto = []
+        if telefono_local:
+            partes_contacto.append(f"<b>Tel:</b> {telefono_local}")
+        if email_local:
+            partes_contacto.append(f"<b>Email:</b> {email_local}")
         datos_emisor = [
             Paragraph(f"<b>{nombre_local}</b>", estilo_titulo),
             Paragraph(f"<b>CUIT:</b> {cuil_local}", estilo_subtitulo),
             Paragraph(f"<b>Dirección:</b> {direccion_local}", estilo_subtitulo),
-            Paragraph(f"<b>Tel:</b> {telefono_local} | <b>Email:</b> {email_local}", estilo_subtitulo),
+            Paragraph(" | ".join(partes_contacto) or "<b>Contacto:</b> No informado", estilo_subtitulo),
         ]
         fecha_str = pago.fecha_pago.strftime('%d/%m/%Y') if pago.fecha_pago else timezone.now().strftime('%d/%m/%Y')
         datos_comprobante = [
@@ -935,29 +742,41 @@ def registrar_cobro_operacion(
     if monto_abonado != total_adeudado:
         raise ValidationError("El monto abonado no coincide con el total adeudado.")
 
-    # Resolver o crear MedioPago
+    # Resolver o crear MedioPago priorizando código interno inmutable
+    from core_app.constantes import deducir_codigo_medio_pago
+    from sales_app.selectors import _construir_desglose_cobro
     medio_pago_input = str(datos_validados.get('medio_pago') or 'EFECTIVO').strip()
     medio_pago_obj = None
     if medio_pago_input.isdigit():
         medio_pago_obj = MedioPago.objects.filter(id_mediopago=int(medio_pago_input)).first()
+    if not medio_pago_obj:
+        medio_pago_obj = MedioPago.objects.filter(codigo__iexact=medio_pago_input).first()
     if not medio_pago_obj:
         medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=medio_pago_input).first()
     if not medio_pago_obj:
         medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__icontains=medio_pago_input).first()
     if not medio_pago_obj:
         medio_pago_obj = MedioPago.objects.create(
+            codigo=deducir_codigo_medio_pago(medio_pago_input),
             nombre_medio_pago=medio_pago_input.upper(),
             estado=True,
             recargo=Decimal('0.00')
         )
+    elif not medio_pago_obj.codigo:
+        medio_pago_obj.codigo = deducir_codigo_medio_pago(medio_pago_obj.nombre_medio_pago)
+        medio_pago_obj.save(update_fields=['codigo'])
 
     # Si es Reparación y no tiene Venta vinculada, aseguramos una venta para consistencia
     venta_asociada = None
     if isinstance(operacion, Venta):
         venta_asociada = operacion
     elif isinstance(operacion, Reparacion):
-        if operacion.id_venta:
-            venta_asociada = operacion.id_venta
+        # La venta del diagnóstico inicial (cobro único) puede estar saldada:
+        # no se reutiliza para evitar un segundo Pago sobre la misma cabecera.
+        _previa = operacion.id_venta
+        _saldada = bool(_previa and str(_previa.estado_venta).strip().upper() in ('PAGADO', 'PAGADA'))
+        if _previa and not _saldada:
+            venta_asociada = _previa
         else:
             # Crear cabecera de Venta para documentar la transacción
             codigo_sec = operacion.codigo_sec or uuid.uuid4().hex[:10].upper()
@@ -1010,7 +829,7 @@ def registrar_cobro_operacion(
         try:
             enviar_correo_confirmacion_compra(venta=operacion, pago=pago, ruta_pdf=ruta_factura)
         except Exception as e:
-            print(f"[Cobro Venta] Advertencia al despachar correo de confirmación: {e}")
+            logger.warning("[Cobro Venta] Advertencia al despachar correo de confirmación: %s", e)
 
     # Auditoría en LogSistema
     tipo_op = "Venta" if isinstance(operacion, Venta) else "Reparación"
@@ -1030,13 +849,28 @@ def registrar_cobro_operacion(
         id_usuario=usuario_ejecutor
     )
 
-    # Notificación al cliente (Paso 6: CU-21)
+    # Notificación al cliente (Paso 6: CU-21) — Regla 10: jamás exponer IDs internos al cliente
     cliente_destinatario = getattr(operacion, 'id_usuario', None)
     if cliente_destinatario:
         disp_vinculado = getattr(operacion, 'id_dispositivo', None) if isinstance(operacion, Reparacion) else None
+        cod_visible = getattr(operacion, 'codigo_sec', None) or (getattr(venta_asociada, 'codigo_sec', None) if venta_asociada else '')
+        if isinstance(operacion, Reparacion):
+            mod_obj = getattr(disp_vinculado, 'id_modelo', None) if disp_vinculado else None
+            marca_nom = getattr(getattr(mod_obj, 'id_marca', None), 'nombre', '') if mod_obj else ''
+            mod_nom = getattr(mod_obj, 'nombre', '') if mod_obj else ''
+            equipo_str = f"{marca_nom} {mod_nom}".strip()
+            if equipo_str:
+                desc_op_cliente = f"la reparación de tu {equipo_str}"
+            elif cod_visible:
+                desc_op_cliente = f"tu reparación (código {cod_visible})"
+            else:
+                desc_op_cliente = "tu reparación"
+        else:
+            desc_op_cliente = f"tu compra (código {cod_visible})" if cod_visible else "tu compra"
+
         Notificacion.objects.create(
             mensaje=(
-                f"Tu pago de ${monto_abonado} correspondiente a {tipo_op} #{id_op} fue registrado con éxito. "
+                f"Tu pago de ${monto_abonado} correspondiente a {desc_op_cliente} fue registrado con éxito. "
                 f"Comprobante fiscal emitido."
             )[:1000],
             tipo="PAGO_REGISTRADO",
@@ -1046,6 +880,12 @@ def registrar_cobro_operacion(
             id_dispositivo=disp_vinculado
         )
 
+    pago.desglose_cobro = _construir_desglose_cobro(
+        venta=venta_asociada,
+        reparacion=operacion if isinstance(operacion, Reparacion) else None,
+        monto_operacion=monto_abonado,
+        estado_pago='PAGADO'
+    )
     return pago
 
 
@@ -1116,9 +956,14 @@ def registrar_o_reactivar_medio_pago(
             })
 
         # Reactivación y actualización de parámetros
+        from core_app.constantes import deducir_codigo_medio_pago
         medio_existente.estado = True
         medio_existente.recargo = recargo
-        medio_existente.save(update_fields=['estado', 'recargo'])
+        if not medio_existente.codigo:
+            medio_existente.codigo = deducir_codigo_medio_pago(medio_existente.nombre_medio_pago)
+            medio_existente.save(update_fields=['estado', 'recargo', 'codigo'])
+        else:
+            medio_existente.save(update_fields=['estado', 'recargo'])
 
         LogSistema.objects.create(
             fecha_hora=timezone.now(),
@@ -1136,7 +981,9 @@ def registrar_o_reactivar_medio_pago(
         return medio_existente
 
     # Creación de nuevo registro
+    from core_app.constantes import deducir_codigo_medio_pago
     nuevo_medio = MedioPago.objects.create(
+        codigo=deducir_codigo_medio_pago(nombre),
         nombre_medio_pago=nombre,
         recargo=recargo,
         estado=True
@@ -1343,12 +1190,17 @@ def crear_venta_presencial(
         except Exception as e_post:
             logger.warning(f"[Motor Beneficios] Error post-compra en venta presencial: {e_post}")
 
+        from core_app.constantes import deducir_codigo_medio_pago
         nombre_medio = str(datos_validados['medio_pago']).strip()
-        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_medio).first()
+        medio_pago_obj = MedioPago.objects.filter(codigo__iexact=nombre_medio).first() or MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_medio).first()
         if not medio_pago_obj:
             medio_pago_obj, _ = MedioPago.objects.get_or_create(
                 nombre_medio_pago=nombre_medio,
-                defaults={'estado': True, 'recargo': Decimal('0.00')}
+                defaults={
+                    'codigo': deducir_codigo_medio_pago(nombre_medio),
+                    'estado': True,
+                    'recargo': Decimal('0.00')
+                }
             )
 
         pago = Pago.objects.create(
@@ -1365,7 +1217,7 @@ def crear_venta_presencial(
             if usuario_cliente and usuario_cliente.email and 'consumidorfinal' not in usuario_cliente.email.lower():
                 enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
         except Exception as e:
-            print(f"[Venta Presencial POS] Factura generada con advertencia: {e}")
+            logger.warning("[Venta Presencial POS] Factura generada con advertencia: %s", e)
 
         LogSistema.objects.create(
             fecha_hora=timezone.now(),
@@ -1532,450 +1384,6 @@ def generar_auditoria_logistica(
     return resultado
 
 
-# ==============================================================================
-# INTEGRACIÓN AUTOMATIZADA MERCADO PAGO (SERVICIOS TRANSACCIONALES)
-# ==============================================================================
-
-def invalidar_preferencia_mercadopago(preference_id: str) -> bool:
-    """
-    Invalida de inmediato un link o preferencia de Mercado Pago
-    estableciendo su expiración a tiempo presente/pasado mediante la API oficial.
-    """
-    if not preference_id or str(preference_id).startswith('SIMULADO'):
-        return True
-
-    from core_app.selectors import obtener_mercadopago_access_token
-    access_token = obtener_mercadopago_access_token()
-    if not access_token or 'TU_ACCESS_TOKEN' in access_token:
-        return True
-
-    try:
-        import mercadopago
-        sdk = mercadopago.SDK(access_token)
-        ahora_utc = timezone.now().astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        sdk.preference().update(preference_id, {
-            "expires": True,
-            "expiration_date_to": ahora_utc
-        })
-        return True
-    except Exception:
-        return False
-
-
-def crear_preferencia_mercadopago(
-    *,
-    venta: Venta,
-    usuario: Usuario
-) -> Dict[str, Any]:
-    """
-    Genera una Preferencia de Pago oficial en Mercado Pago (Checkout Pro / Transferencia).
-    Devuelve los endpoints init_point y sandbox_init_point para que el cliente abone.
-    Fija expiración estricta en UTC para invalidar automáticamente el link a los 30 minutos.
-    Lee prioritariamente las credenciales configuradas en la BD (ConfiguracionSistema).
-    """
-    import mercadopago
-    from core_app.selectors import (
-        obtener_mercadopago_access_token,
-        obtener_mercadopago_public_key
-    )
-
-    access_token = obtener_mercadopago_access_token()
-    public_key = obtener_mercadopago_public_key()
-
-    # Si aún no se configuró un token real en la BD ni en el .env, retornar simulación estructurada
-    if not access_token or access_token.strip() == '' or 'TU_ACCESS_TOKEN' in access_token:
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        return {
-            "preference_id": f"SIMULADO-VENTA-{venta.id_venta}",
-            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "public_key": public_key or "TEST-SIMULADA",
-            "modo_simulacion": True,
-            "mensaje": "Credenciales de prueba de Mercado Pago pendientes en la BD o en Backend/.env. Modo simulación activado."
-        }
-
-    ahora_dt = timezone.now()
-
-    # Calcular vencimiento exacto de los 30 minutos de reserva según la hora de creación de la venta
-    log_creacion = LogSistema.objects.filter(
-        modulo_origen='sales_app',
-        tabla_afectada='venta',
-        id_registro_afectado=str(venta.id_venta),
-        accion="Realizar Compra Virtual (CU-18)"
-    ).first()
-
-    if log_creacion and log_creacion.fecha_hora:
-        hora_log = log_creacion.fecha_hora
-        if isinstance(hora_log, datetime.datetime):
-            dt_creacion = hora_log
-        elif isinstance(hora_log, datetime.time):
-            dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
-        else:
-            dt_creacion = ahora_dt
-        if timezone.is_naive(dt_creacion):
-            dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
-        exp_dt = dt_creacion + datetime.timedelta(minutes=30)
-    else:
-        exp_dt = ahora_dt + datetime.timedelta(minutes=30)
-
-    if ahora_dt >= exp_dt:
-        raise ValidationError("El tiempo de reserva de 30 minutos para esta compra ha finalizado y el link de pago ha expirado.")
-
-    # Si ya se había generado una preferencia para esta venta y sigue vigente, reutilizarla
-    log_pref = LogSistema.objects.filter(
-        modulo_origen='sales_app',
-        tabla_afectada='venta',
-        id_registro_afectado=str(venta.id_venta),
-        accion="Preferencia Mercado Pago Creada"
-    ).first()
-
-    if log_pref and log_pref.detalle:
-        partes = log_pref.detalle.split('|')
-        if len(partes) >= 2:
-            pref_id_existente = partes[0]
-            init_point_existente = partes[1]
-            sandbox_init_point_existente = partes[2] if len(partes) > 2 else init_point_existente
-            return {
-                "preference_id": pref_id_existente,
-                "init_point": init_point_existente,
-                "sandbox_init_point": sandbox_init_point_existente,
-                "public_key": public_key,
-                "modo_simulacion": False
-            }
-
-    sdk = mercadopago.SDK(access_token)
-
-    # 1. Armar renglones de compra (respetando proporcionalmente descuentos y beneficios canjeados)
-    detalles = list(venta.detalleventa_set.select_related('id_producto').all())
-    subtotal_detalles = sum(Decimal(str(det.subtotal)) for det in detalles)
-    monto_subtotal_venta = Decimal(str(venta.monto_subtotal or 0))
-
-    if subtotal_detalles > Decimal('0.00') and monto_subtotal_venta < subtotal_detalles:
-        ratio = float(monto_subtotal_venta / subtotal_detalles)
-    else:
-        ratio = 1.0
-
-    items = []
-    acumulado_items = 0.0
-    for det in detalles:
-        prod = det.id_producto
-        cant = int(det.cantidad)
-        if ratio < 1.0:
-            unit_price = round(float(det.precio_unitario) * ratio, 2)
-        else:
-            unit_price = float(det.precio_unitario)
-
-        items.append({
-            "id": str(prod.id_producto),
-            "title": str(prod.nombre)[:250],
-            "quantity": cant,
-            "unit_price": unit_price,
-            "currency_id": "ARS",
-            "description": f"Repuesto/Accesorio IFixPos - {prod.nombre}"[:250]
-        })
-        acumulado_items += unit_price * cant
-
-    # Ajuste por centavos de redondeo sobre el último ítem para que coincida exactamente con monto_subtotal_venta
-    if ratio < 1.0 and items and monto_subtotal_venta > Decimal('0.00'):
-        diferencia = round(float(monto_subtotal_venta) - acumulado_items, 2)
-        if abs(diferencia) > 0.001 and abs(diferencia) < 5.0:
-            cant_ultimo = items[-1]["quantity"]
-            items[-1]["unit_price"] = round(items[-1]["unit_price"] + (diferencia / cant_ultimo), 2)
-
-    # Si hay costo de envío
-    if venta.costo_envio and venta.costo_envio > Decimal('0.00'):
-        items.append({
-            "id": "ENVIO-LOGISTICO",
-            "title": "Costo de Envío Logístico a Domicilio",
-            "quantity": 1,
-            "unit_price": float(venta.costo_envio),
-            "currency_id": "ARS"
-        })
-
-    # 2. Información del Payer
-    perfil = getattr(usuario, 'perfilusuario', None)
-    if not perfil:
-        from users_app.models import PerfilUsuario
-        perfil = PerfilUsuario.objects.filter(id_usuario=usuario).first()
-
-    nombre_payer = getattr(usuario, 'nombre', '') or (getattr(perfil, 'nombre', '') if perfil else '')
-    apellido_payer = getattr(usuario, 'apellido', '') or (getattr(perfil, 'apellido', '') if perfil else '')
-    payer = {
-        "name": nombre_payer or "Cliente",
-        "surname": apellido_payer or "IFixPos",
-        "email": usuario.email,
-    }
-    telefono_payer = getattr(usuario, 'telefono', None) or (getattr(perfil, 'telefono', None) if perfil else None)
-    if telefono_payer:
-        tel_limpio = str(telefono_payer).replace('+', '').replace(' ', '')
-        if tel_limpio:
-            payer["phone"] = {"number": tel_limpio[-10:]}
-    dni_payer = getattr(usuario, 'dni', None) or (getattr(perfil, 'dni', None) if perfil else None)
-    if dni_payer:
-        dni_limpio = str(dni_payer).replace('.', '').replace('-', '').strip()
-        if dni_limpio:
-            payer["identification"] = {"type": "DNI", "number": dni_limpio}
-
-    # 3. URLs de Retorno y Webhook
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-    backend_url = getattr(settings, 'BACKEND_URL', 'http://localhost:8000').rstrip('/')
-
-    back_urls = {
-        "success": f"{frontend_url}/tienda?mp_status=approved&venta_id={venta.id_venta}",
-        "pending": f"{frontend_url}/tienda?mp_status=pending&venta_id={venta.id_venta}",
-        "failure": f"{frontend_url}/tienda?mp_status=failure&venta_id={venta.id_venta}"
-    }
-
-    notification_url = f"{backend_url}/api/sales/mercadopago/webhook/"
-
-    ahora_utc_str = ahora_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    exp_utc_str = exp_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    preference_data = {
-        "items": items,
-        "payer": payer,
-        "back_urls": back_urls,
-        "notification_url": notification_url,
-        "external_reference": str(venta.id_venta),
-        "statement_descriptor": "IFIXPOS",
-        "binary_mode": False,
-        "expires": True,
-        "expiration_date_from": ahora_utc_str,
-        "expiration_date_to": exp_utc_str
-    }
-
-    preference_response = {}
-    try:
-        preference_response = sdk.preference().create(preference_data)
-        response_data = preference_response.get("response", {})
-        pref_id = response_data.get("id")
-        init_point = response_data.get("init_point")
-        sandbox_init_point = response_data.get("sandbox_init_point", init_point)
-    except Exception as e:
-        logger.warning(f"[MercadoPago] Excepción al invocar SDK de Mercado Pago: {e}")
-        pref_id = None
-        response_data = {"error": str(e)}
-
-    if not pref_id:
-        error_msg = str(preference_response.get("message") or response_data)
-        logger.warning(f"[MercadoPago] Error al generar preferencia oficial: {error_msg}. Activando modo contingencia simulada.")
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        return {
-            "preference_id": f"SIMULADO-VENTA-{venta.id_venta}",
-            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "public_key": public_key or "TEST-SIMULADA",
-            "modo_simulacion": True,
-            "mensaje": f"Mercado Pago reportó: {error_msg}. Modo simulación activado."
-        }
-
-    # Guardar en LogSistema para auditoría y reutilización durante los 30 minutos de reserva
-    LogSistema.objects.create(
-        fecha_hora=timezone.now(),
-        accion="Preferencia Mercado Pago Creada",
-        detalle=f"{pref_id}|{init_point}|{sandbox_init_point}",
-        tipo="MERCADOPAGO",
-        modulo_origen="sales_app",
-        tabla_afectada="venta",
-        id_registro_afectado=str(venta.id_venta),
-        id_usuario=usuario
-    )
-
-    return {
-        "preference_id": pref_id,
-        "init_point": init_point,
-        "sandbox_init_point": sandbox_init_point,
-        "public_key": public_key,
-        "modo_simulacion": False
-    }
-
-
-@transaction.atomic
-def procesar_webhook_mercadopago(
-    *,
-    data: Dict[str, Any],
-    query_params: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Procesa notificaciones Webhook (IPN) de Mercado Pago de forma atómica:
-    1. Extrae el id del pago (payment_id).
-    2. Consulta la API de Mercado Pago para verificar el estado real y autenticidad.
-    3. Si el estado es 'approved', acredita la venta, crea el Pago y asienta la auditoría.
-    """
-    import mercadopago
-
-    payment_id = None
-    if data.get("data") and isinstance(data["data"], dict):
-        payment_id = data["data"].get("id")
-
-    if not payment_id:
-        payment_id = query_params.get("data.id") or query_params.get("id")
-
-    if not payment_id:
-        return {"status": "ignored", "motivo": "Sin payment_id en la notificación"}
-
-    if str(payment_id).startswith('SIMULADO-'):
-        try:
-            id_venta = int(str(payment_id).replace('SIMULADO-', ''))
-            venta = Venta.objects.select_for_update().get(id_venta=id_venta)
-        except (ValueError, Venta.DoesNotExist):
-            return {"status": "error", "motivo": f"Venta simulada {payment_id} no encontrada"}
-
-        if str(venta.estado_venta or '').upper() == "CANCELADA":
-            return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
-
-        medio_pago_mp, _ = MedioPago.objects.get_or_create(
-            nombre_medio_pago='Mercado Pago',
-            defaults={'estado': True, 'recargo': Decimal('0.00')}
-        )
-        monto_pagado = Decimal(str(venta.monto_total or (venta.monto_subtotal + venta.costo_envio)))
-        pago_existente = Pago.objects.filter(cod_operacion=str(payment_id)).first()
-        pago = pago_existente
-        if not pago:
-            pago = Pago.objects.create(
-                id_venta=venta,
-                medio_pago=medio_pago_mp,
-                monto_pagado=monto_pagado,
-                fecha_pago=timezone.now().date(),
-                cod_operacion=str(payment_id),
-                detalle="Acreditación de prueba/mostrador Mercado Pago QR"
-            )
-
-        if venta.estado_venta != "PAGADA":
-            venta.estado_venta = "PAGADA"
-            venta.save(update_fields=["estado_venta"])
-
-            # Hook Transaccional: Evaluar beneficios de fidelización post-compra
-            try:
-                evaluar_beneficio_post_compra(venta=venta)
-            except Exception as e_post:
-                logger.warning(f"[Motor Beneficios] Error post-compra MP manual: {e_post}")
-
-            LogSistema.objects.create(
-                fecha_hora=timezone.now(),
-                accion="Acreditación Mercado Pago Webhook",
-                detalle=f"Venta #{venta.id_venta} pagada con éxito vía Mercado Pago (Mostrador/QR). Operación #{payment_id}, Monto: ${monto_pagado}.",
-                tipo="AUDITORIA_VENTA",
-                modulo_origen="sales_app",
-                tabla_afectada="venta",
-                id_registro_afectado=str(venta.id_venta),
-                id_usuario=venta.id_usuario
-            )
-
-            try:
-                ruta_pdf = generar_comprobante_fiscal(pago, venta)
-                if venta.id_usuario and getattr(venta.id_usuario, 'email', None):
-                    enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
-            except Exception as e:
-                print(f"[Webhook MP Simulado] Advertencia al generar comprobante: {e}")
-
-        return {"status": "approved", "venta_id": venta.id_venta, "payment_id": payment_id}
-
-    from core_app.selectors import obtener_mercadopago_access_token
-    access_token = obtener_mercadopago_access_token()
-    if not access_token or 'TU_ACCESS_TOKEN' in access_token:
-        return {"status": "ignored", "motivo": "Access token de Mercado Pago no configurado en la BD ni en el entorno"}
-
-    sdk = mercadopago.SDK(access_token)
-    try:
-        payment_info = sdk.payment().get(str(payment_id))
-        payment = payment_info.get("response", {})
-    except Exception as e:
-        return {"status": "error", "motivo": f"Fallo al consultar API de MP: {str(e)}"}
-
-    status_pago = payment.get("status")
-    external_ref = payment.get("external_reference")
-
-    if not external_ref:
-        return {"status": "ignored", "motivo": f"El pago {payment_id} no posee external_reference"}
-
-    try:
-        id_venta = int(external_ref)
-        venta = Venta.objects.select_for_update().get(id_venta=id_venta)
-    except (ValueError, Venta.DoesNotExist):
-        return {"status": "error", "motivo": f"Venta {external_ref} no encontrada"}
-
-    # Si la venta ya fue cancelada (por expiración de reserva o por el usuario), no acreditar
-    if str(venta.estado_venta or '').upper() == "CANCELADA":
-        LogSistema.objects.create(
-            fecha_hora=timezone.now(),
-            accion="Alerta: Pago recibido en Venta Cancelada/Expirada",
-            detalle=f"Se recibió notificación de pago #{payment_id} para la Venta #{venta.id_venta}, pero la orden ya fue cancelada y su reserva expiró.",
-            tipo="ALERTA_VENTA",
-            modulo_origen="sales_app",
-            tabla_afectada="venta",
-            id_registro_afectado=str(venta.id_venta),
-            id_usuario=venta.id_usuario
-        )
-        return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
-
-    medio_pago_mp, _ = MedioPago.objects.get_or_create(
-        nombre_medio_pago='Mercado Pago',
-        defaults={'estado': True, 'recargo': Decimal('0.00')}
-    )
-
-    if status_pago == "approved":
-        monto_pagado = Decimal(str(payment.get("transaction_amount") or (venta.monto_subtotal + venta.costo_envio)))
-        tipo_operacion = payment.get("payment_type_id") or "mercadopago"
-        medio_detalle = payment.get("payment_method_id") or "transferencia"
-
-        pago_existente = Pago.objects.filter(cod_operacion=str(payment_id)).first()
-        if not pago_existente:
-            Pago.objects.create(
-                id_venta=venta,
-                medio_pago=medio_pago_mp,
-                monto_pagado=monto_pagado,
-                fecha_pago=timezone.now().date(),
-                cod_operacion=str(payment_id),
-                detalle=f"Acreditación automática Mercado Pago - Operación #{payment_id} ({medio_detalle} - {tipo_operacion})"
-            )
-
-        if venta.estado_venta != "PAGADA":
-            venta.estado_venta = "PAGADA"
-            venta.save(update_fields=["estado_venta"])
-
-            # Hook Transaccional: Evaluar beneficios de fidelización post-compra
-            try:
-                evaluar_beneficio_post_compra(venta=venta)
-            except Exception as e_post:
-                logger.warning(f"[Motor Beneficios] Error post-compra MP manual: {e_post}")
-
-            LogSistema.objects.create(
-                fecha_hora=timezone.now(),
-                accion="Acreditación Mercado Pago Webhook",
-                detalle=f"Venta #{venta.id_venta} pagada con éxito vía Mercado Pago. Operación #{payment_id}, Monto: ${monto_pagado}.",
-                tipo="AUDITORIA_VENTA",
-                modulo_origen="sales_app",
-                tabla_afectada="venta",
-                id_registro_afectado=str(venta.id_venta),
-                id_usuario=venta.id_usuario
-            )
-
-            # Generar factura oficial en PDF y despachar correo electrónico con el PDF adjunto
-            try:
-                ruta_pdf = generar_comprobante_fiscal(pago, venta)
-                enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
-            except Exception as e:
-                print(f"[Webhook MP] Advertencia al generar comprobante o enviar correo: {e}")
-
-        return {"status": "approved", "venta_id": venta.id_venta, "payment_id": payment_id}
-
-    elif status_pago in ["rejected", "cancelled"]:
-        LogSistema.objects.create(
-            fecha_hora=timezone.now(),
-            accion="Pago Rechazado Mercado Pago",
-            detalle=f"Pago #{payment_id} para Venta #{venta.id_venta} en estado: {status_pago}.",
-            tipo="AUDITORIA_VENTA",
-            modulo_origen="sales_app",
-            tabla_afectada="venta",
-            id_registro_afectado=str(venta.id_venta),
-            id_usuario=venta.id_usuario
-        )
-        return {"status": status_pago, "venta_id": venta.id_venta}
-
-    return {"status": status_pago or "pending", "venta_id": venta.id_venta}
-
-
 @transaction.atomic
 def cancelar_venta_y_restituir_stock(
     *,
@@ -2076,56 +1484,77 @@ def cancelar_venta_y_restituir_stock(
     return venta
 
 
-def limpiar_ventas_pendientes_expiradas(minutos_limite: int = 30) -> int:
+def limpiar_ventas_pendientes_expiradas(minutos_limite: Optional[int] = None) -> int:
     """
     Verifica ventas en estado PENDIENTE creadas hace más de `minutos_limite`.
+    Si `minutos_limite` es None, consulta `minutosReservaVentaPendiente` en ConfiguracionSistema.
+    Filtra en una sola consulta SQL mediante `fecha_hora_creacion` (con respaldo por lotes
+    en LogSistema solo para registros antiguos sin marca temporal).
     Cancela y restituye automáticamente el stock apartado.
-    Retorna el número de ventas canceladas y restituidas.
     """
     import datetime
+    if minutos_limite is None:
+        from core_app.selectors import obtener_minutos_reserva_venta_pendiente
+        minutos_limite = obtener_minutos_reserva_venta_pendiente()
     ahora = timezone.now()
     fecha_hoy = ahora.date()
+    umbral = ahora - datetime.timedelta(minutes=minutos_limite)
 
-    ventas_pendientes = Venta.objects.filter(estado_venta__iexact='PENDIENTE')
+    # 1. Consulta única por fecha anterior o marca temporal vencida
+    ids_vencidas = set(
+        Venta.objects.filter(
+            estado_venta__iexact='PENDIENTE'
+        ).filter(
+            Q(fecha_venta__lt=fecha_hoy) |
+            Q(fecha_hora_creacion__isnull=False, fecha_hora_creacion__lte=umbral)
+        ).values_list('id_venta', flat=True)
+    )
+
+    # 2. Respaldo en lote solo para ventas de hoy sin fecha_hora_creacion
+    ventas_sin_ts = list(
+        Venta.objects.filter(
+            estado_venta__iexact='PENDIENTE',
+            fecha_venta__gte=fecha_hoy,
+            fecha_hora_creacion__isnull=True
+        ).values_list('id_venta', 'fecha_venta')
+    )
+    if ventas_sin_ts:
+        mapa_fechas = {str(id_v): f_v for id_v, f_v in ventas_sin_ts}
+        logs = LogSistema.objects.filter(
+            modulo_origen='sales_app',
+            tabla_afectada='venta',
+            id_registro_afectado__in=list(mapa_fechas.keys()),
+            accion="Realizar Compra Virtual (CU-18)"
+        )
+        for lg in logs:
+            hora_log = lg.fecha_hora
+            if not hora_log:
+                continue
+            f_v = mapa_fechas.get(str(lg.id_registro_afectado), fecha_hoy)
+            if isinstance(hora_log, datetime.datetime):
+                dt_creacion = hora_log
+            elif isinstance(hora_log, datetime.time):
+                dt_creacion = datetime.datetime.combine(f_v, hora_log)
+            else:
+                dt_creacion = ahora
+            if timezone.is_naive(dt_creacion):
+                dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+            if dt_creacion <= umbral:
+                ids_vencidas.add(int(lg.id_registro_afectado))
+
     canceladas = 0
-
-    for venta in ventas_pendientes:
-        debe_cancelar = False
-
-        if venta.fecha_venta < fecha_hoy:
-            debe_cancelar = True
-        else:
-            log_creacion = LogSistema.objects.filter(
-                modulo_origen='sales_app',
-                tabla_afectada='venta',
-                id_registro_afectado=str(venta.id_venta),
-                accion="Realizar Compra Virtual (CU-18)"
-            ).first()
-
-            if log_creacion and log_creacion.fecha_hora:
-                hora_log = log_creacion.fecha_hora
-                if isinstance(hora_log, datetime.datetime):
-                    dt_creacion = hora_log
-                elif isinstance(hora_log, datetime.time):
-                    dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
-                else:
-                    dt_creacion = ahora
-                if timezone.is_naive(dt_creacion):
-                    dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
-
-                delta = ahora - dt_creacion
-                if delta.total_seconds() > (minutos_limite * 60):
-                    debe_cancelar = True
-
-        if debe_cancelar:
-            try:
-                cancelar_venta_y_restituir_stock(
-                    id_venta=venta.id_venta,
-                    motivo=f"Expiración automática por superar {minutos_limite} minutos sin concretar pago"
-                )
-                canceladas += 1
-            except Exception:
-                pass
+    for id_venta in sorted(ids_vencidas):
+        try:
+            cancelar_venta_y_restituir_stock(
+                id_venta=id_venta,
+                motivo=f"Expiración automática por superar {minutos_limite} minutos sin concretar pago"
+            )
+            canceladas += 1
+        except Exception as exc:
+            logger.warning(
+                "[Limpieza Ventas] Error al cancelar y restituir stock de Venta #%s: %s",
+                id_venta, exc
+            )
 
     return canceladas
 
@@ -2159,8 +1588,8 @@ def enviar_correo_confirmacion_compra(
                 posible_email = partes[1].split('|')[0].strip()
                 if '@' in posible_email:
                     email_destino = posible_email
-            except Exception:
-                pass
+            except Exception as exc_parse:
+                logger.debug("[Confirmación Compra] No se pudo extraer email desde detalle de pago: %s", exc_parse)
 
     if not email_destino or '@' not in email_destino:
         return
@@ -2173,8 +1602,9 @@ def enviar_correo_confirmacion_compra(
         )
     }
     nombre_local = configs.get('nombreLocal') or 'IFixPos'
-    direccion_local = configs.get('direccionLocal') or 'Sede Central IFixPos'
-    telefono_local = configs.get('telefonoLocal') or '3794-000000'
+    # 'direccionLocal' guarda el ID de la dirección: se resuelve a texto legible (el cliente no debe ver IDs)
+    direccion_local = _resolver_direccion_comercio(configs)
+    telefono_local = configs.get('telefonoLocal') or ''
 
     # Nombre del cliente
     perfil = getattr(usuario, 'perfilusuario', None)
@@ -2292,7 +1722,7 @@ def enviar_correo_confirmacion_compra(
           </div>
 
           <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #1e293b; text-align: center; font-size: 11px; color: #64748b;">
-            <p style="margin: 0;">{nombre_local} • Tel: {telefono_local}</p>
+            <p style="margin: 0;">{nombre_local}{(' • Tel: ' + telefono_local) if telefono_local else ''}</p>
             <p style="margin: 4px 0 0 0;">Mensaje generado automáticamente por el sistema IFixPos.</p>
           </div>
         </div>
@@ -2333,12 +1763,13 @@ def enviar_correo_confirmacion_compra(
             try:
                 email_msg.attach_file(pdf_path_abs, 'application/pdf')
             except Exception as e_att:
-                print(f"[Confirmación Compra] Advertencia al adjuntar archivo PDF: {e_att}")
+                logger.warning("[Confirmación Compra] Advertencia al adjuntar archivo PDF: %s", e_att)
 
-    try:
-        email_msg.send(fail_silently=False)
-    except Exception as e:
-        print(f"[Confirmación Compra] Advertencia al despachar correo a {usuario.email}: {e}")
+    from core_app.correos import despachar_correo_en_commit
+    despachar_correo_en_commit(
+        lambda: email_msg.send(fail_silently=False),
+        contexto=f"Confirmación Compra a {usuario.email}"
+    )
 
     # 2. Persistir registro en Notificacion
     try:
@@ -2359,8 +1790,8 @@ def enviar_correo_confirmacion_compra(
             fecha_envio=timezone.now().date(),
             leida=False
         )
-    except Exception:
-        pass
+    except Exception as exc_notif:
+        logger.warning("[Confirmación Compra] Error creando notificación interna para Venta #%s: %s", venta.id_venta, exc_notif)
 
     # 3. Auditoría en LogSistema
     LogSistema.objects.create(
@@ -2424,107 +1855,6 @@ def obtener_o_crear_usuario_cliente_sin_cuenta() -> Usuario:
         )
 
     return usuario_sin_cuenta
-
-
-def crear_preferencia_mercadopago_invitado(
-    *,
-    venta: Venta,
-    nombre_contacto: str,
-    email_contacto: str,
-    telefono_contacto: str
-) -> Dict[str, Any]:
-    """
-    Genera una Preferencia de Pago en Mercado Pago para una compra realizada por un invitado.
-    Devuelve los endpoints init_point y sandbox_init_point y fija expiración estricta a 30 min.
-    """
-    import mercadopago
-    from core_app.selectors import (
-        obtener_mercadopago_access_token,
-        obtener_mercadopago_public_key
-    )
-
-    access_token = obtener_mercadopago_access_token()
-    public_key = obtener_mercadopago_public_key()
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-
-    if not access_token or access_token.strip() == '' or 'TU_ACCESS_TOKEN' in access_token:
-        return {
-            "preference_id": f"SIMULADO-INVITADO-{venta.id_venta}",
-            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "public_key": public_key or "TEST-SIMULADA",
-            "modo_simulacion": True,
-            "mensaje": "Credenciales de Mercado Pago simuladas para compra de invitado."
-        }
-
-    sdk = mercadopago.SDK(access_token)
-    detalles = venta.detalleventa_set.select_related('id_producto').all()
-
-    items_mp = []
-    for d in detalles:
-        items_mp.append({
-            "id": str(d.id_producto.id_producto),
-            "title": str(d.id_producto.nombre)[:255],
-            "description": f"Repuesto/Insumo #{d.id_producto.id_producto}",
-            "quantity": int(d.cantidad),
-            "currency_id": "ARS",
-            "unit_price": float(d.precio_unitario)
-        })
-
-    if venta.costo_envio and venta.costo_envio > Decimal('0.00'):
-        items_mp.append({
-            "id": "ENVIO-FLETE",
-            "title": "Costo de Envío a Domicilio",
-            "description": f"Flete logístico orden #{venta.id_venta}",
-            "quantity": 1,
-            "currency_id": "ARS",
-            "unit_price": float(venta.costo_envio)
-        })
-
-    ahora_dt = timezone.now()
-    exp_dt = ahora_dt + datetime.timedelta(minutes=30)
-    exp_str = exp_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    preference_data = {
-        "items": items_mp,
-        "payer": {
-            "name": nombre_contacto[:100],
-            "email": email_contacto[:100],
-            "phone": {"number": telefono_contacto[:50]}
-        },
-        "back_urls": {
-            "success": f"{frontend_url}/tienda?pago=aprobado&venta_id={venta.id_venta}",
-            "failure": f"{frontend_url}/tienda?pago=rechazado&venta_id={venta.id_venta}",
-            "pending": f"{frontend_url}/tienda?pago=pendiente&venta_id={venta.id_venta}"
-        },
-        "auto_return": "approved",
-        "external_reference": str(venta.id_venta),
-        "statement_descriptor": "IFIXPOS",
-        "expires": True,
-        "expiration_date_from": ahora_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-        "expiration_date_to": exp_str
-    }
-
-    try:
-        pref_response = sdk.preference().create(preference_data)
-        res_json = pref_response.get("response", {})
-        return {
-            "preference_id": res_json.get("id"),
-            "init_point": res_json.get("init_point"),
-            "sandbox_init_point": res_json.get("sandbox_init_point"),
-            "public_key": public_key,
-            "modo_simulacion": False
-        }
-    except Exception as e:
-        print(f"[MercadoPago Invitado] Advertencia al contactar API MP: {e}")
-        return {
-            "preference_id": f"SIMULADO-INVITADO-{venta.id_venta}",
-            "init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "sandbox_init_point": f"{frontend_url}/tienda?simulacion_mp=true&venta_id={venta.id_venta}",
-            "public_key": public_key or "TEST-SIMULADA",
-            "modo_simulacion": True,
-            "error_mp": str(e)
-        }
 
 
 @transaction.atomic
@@ -2683,10 +2013,12 @@ def procesar_compra_invitado(
         detalle=detalle_pago
     )
 
-    # 8. Generar Preferencia de Pago si corresponde
+    # 8. Generar Preferencia de Pago si corresponde (priorizando código interno inmutable)
+    from core_app.constantes import CodigoMedioPago
     pref_info = {"preference_id": None, "init_point": None, "modo_simulacion": False}
+    codigo_mp = (getattr(medio_pago, 'codigo', '') or '').strip().upper()
     nombre_mp = str(medio_pago.nombre_medio_pago).strip().upper()
-    if any(k in nombre_mp for k in ['MERCADO', 'MP', 'DIGITAL', 'QR', 'ONLINE']):
+    if codigo_mp == CodigoMedioPago.MERCADO_PAGO or any(k in nombre_mp for k in ['MERCADO', 'MP', 'DIGITAL', 'QR', 'ONLINE']):
         pref_info = crear_preferencia_mercadopago_invitado(
             venta=venta,
             nombre_contacto=nombre_contacto,
@@ -3072,8 +2404,8 @@ def evaluar_beneficio_post_taller(*, reparacion: Any) -> Optional[Beneficio]:
     if hasattr(reparacion, 'categorias'):
         try:
             nombres_cats = [c.nombre.upper() for c in reparacion.categorias.all()]
-        except Exception:
-            pass
+        except Exception as exc_cat:
+            logger.debug("[Motor Beneficios] No fue posible leer categorías de reparación: %s", exc_cat)
     elif hasattr(reparacion, 'id_categoria') and reparacion.id_categoria:
         nombres_cats = [str(getattr(reparacion.id_categoria, 'nombre', '')).upper()]
         
@@ -3482,11 +2814,12 @@ def revertir_beneficios_de_venta_cancelada(*, venta: Venta) -> int:
         return 0
 
     tag = f"[CANJEADO - Venta #{venta.id_venta}"
+    filtro_ben = {'motivo__contains': tag}
+    if venta.id_usuario:
+        filtro_ben['id_usuario'] = venta.id_usuario
+
     beneficios_canjeados = list(
-        Beneficio.objects.filter(
-            id_usuario=venta.id_usuario,
-            motivo__contains=tag
-        )
+        Beneficio.objects.filter(**filtro_ben)
     )
 
     revertidos = 0
@@ -3497,13 +2830,14 @@ def revertir_beneficios_de_venta_cancelada(*, venta: Venta) -> int:
         if match:
             try:
                 horas_restauradas = Decimal(match.group(1))
-            except Exception:
-                pass
+            except Exception as exc_dec:
+                logger.debug("[Motor Beneficios] Valor de horas remanentes inválido en motivo: %s", exc_dec)
 
         # Quitar el prefijo de canje
         nuevo_motivo = re.sub(r'\[CANJEADO - Venta #\d+[^\]]*\]\s*', '', b.motivo or '')
         b.motivo = nuevo_motivo[:500]
         b.tiempo_disp = max(Decimal('1.00'), horas_restauradas)
+        b.fecha = timezone.now().date()
         b.save()
         revertidos += 1
 

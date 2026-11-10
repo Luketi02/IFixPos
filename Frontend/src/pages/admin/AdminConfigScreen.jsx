@@ -10,16 +10,15 @@ import CyberNumberInput from '../../components/common/CyberNumberInput';
 import CyberTooltip from '../../components/common/CyberTooltip';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 // Catálogo de categorías para pestañas de navegación rápida
 const CATEGORIAS_CONFIG = [
-  { id: 'all', label: 'Todas las Categorías', badge: '58' },
-  { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '14' },
-  { id: 'taller', label: 'Taller & Servicio Técnico', badge: '8' },
-  { id: 'fidelizacion', label: 'Fidelización, Descuentos & Tarifas', badge: '11' },
-  { id: 'institucional', label: 'Institucional (Master Data)', badge: '12' },
-  { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '8' },
+  { id: 'all', label: 'Todas las Categorías', badge: '83' },
+  { id: 'algoritmo', label: 'Algoritmo & Compras', badge: '15' },
+  { id: 'taller', label: 'Taller & Servicio Técnico', badge: '11' },
+  { id: 'fidelizacion', label: 'Fidelización, Descuentos & Tarifas', badge: '14' },
+  { id: 'institucional', label: 'Institucional (Master Data)', badge: '16' },
+  { id: 'seguridad', label: 'Seguridad & Respaldos', badge: '22' },
   { id: 'auditoria', label: 'Auditoría & Logs', badge: '5' }
 ];
 
@@ -29,26 +28,43 @@ export default function AdminConfigScreen() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
 
-  // Estado con los 46 parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
+  // Estado con los parámetros dinámicos del sistema (Configuraciones del sistema en la BD.md)
   const [formData, setFormData] = useState({
     // 🛡️ Seguridad
     tiempoSesionInactiva: '168',
     maxIntentosLogin: '10',
+    minutosVidaAccessToken: '60',
+    minutosVidaOtpRecuperacion: '15',
+    minutosVidaOtpAdmin: '5',
 
     // 💻 Sistema
     tamanoMaxArchivoMB: '10',
     emailAlertasSistema: 'S/N',
+    extensionesPermitidasArchivos: '.jpg,.jpeg,.png,.webp,.pdf',
+    limiteResultadosBusquedaGeo: '100',
 
     // 💾 Respaldos (Backups)
     backupAutomatico: 'False',
-    backupFrecuenciaHoras: '168',
+    backupModalidad: 'MULTINIVEL',
+    backupDiarioActivo: 'True',
+    backupFrecuenciaHoras: '24',
     backupHoraEjecucion: '03:00',
+    backupSemanalActivo: 'True',
+    backupDiaSemana: 'SABADO',
+    backupHoraSemanal: '02:00',
+    backupQuincenalActivo: 'True',
+    backupHoraQuincenal: '04:00',
+    backupMensualActivo: 'True',
+    backupHoraMensual: '05:00',
     backupRetencionCopias: '5',
 
     // 🚚 Ventas y Logística
     envioLocal: '0',
     envioRegional: '0',
     envioNacional: '0',
+    minutosReservaVentaPendiente: '30',
+    longitudCodigoSeguridad: '10',
+    minutosExpiracionPreferenciaMP: '30',
 
     // 💳 Pasarela de Pagos Digitales (Mercado Pago)
     mpPublicKey: 'S/N',
@@ -68,11 +84,16 @@ export default function AdminConfigScreen() {
     emailPrensa: 'S/N',
     emailLegal: 'S/N',
     emailSoporte: 'S/N',
+    bancoLocal: 'Banco de la Nación Argentina',
+    titularCuentaLocal: 'IFix Servicio Técnico S.R.L.',
+    cbuLocal: '0110599540000012345678',
+    aliasLocal: 'IFIX.TALLER.POS',
 
     // 📦 Abastecimiento y Compras (Algoritmo)
     autoAbastecimientoActivo: 'True',
     frecuenciaGeneracionOC_dias: '5',
     diasEsperaCotizacion: '5',
+    diasValidezCotizacion: '15',
     pesoEvaluacion_Confiabilidad: '20',
     pesoEvaluacion_Tiempo: '20',
     pesoEvaluacion_Nivel: '20',
@@ -100,6 +121,7 @@ export default function AdminConfigScreen() {
     vigenciaBeneficioDefecto: '72.0',
 
     // 🔧 Taller y Servicio Técnico
+    costo_diagnostico_base: '5000.0',
     costoManoDeObra: '30000.0',
     permitirCostoManoDeObraPropio: 'False',
     autoAsignacionTecnicosActiva: 'True',
@@ -107,7 +129,9 @@ export default function AdminConfigScreen() {
     pesoAsignacion_Calificacion: '25',
     pesoAsignacion_Rapidez: '20',
     pesoAsignacion_Especialidad: '15',
-    pesoAsignacion_Efectividad: '10'
+    pesoAsignacion_Efectividad: '10',
+    diasGarantiaReparacion: '90',
+    diasLimiteRetiroEquipo: '60'
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -147,7 +171,7 @@ export default function AdminConfigScreen() {
       setIsLoading(true);
       setServerError('');
       try {
-        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+        const activeToken = token || localStorage.getItem('access_token');
         const response = await axios.get(`${API_BASE_URL}/api/core/configuraciones/`, {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         });
@@ -185,7 +209,7 @@ export default function AdminConfigScreen() {
 
     if (idDir && idDir !== 'S/N' && !isNaN(Number(idDir)) && Number(idDir) > 0) {
       setIsLoadingDireccion(true);
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       axios
         .get(`${API_BASE_URL}/api/geo/direccion-sede/`, {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
@@ -241,7 +265,7 @@ export default function AdminConfigScreen() {
     setIsUploadingLogo(true);
     setServerError('');
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const response = await axios.post(`${API_BASE_URL}/api/core/configuraciones/logo/`, uploadData, {
         headers: {
           ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
@@ -349,7 +373,7 @@ export default function AdminConfigScreen() {
   const handleEjecutarDepuracionMotor = async () => {
     setEjecutandoMotorPredictivo(true);
     try {
-      const token = localStorage.getItem("token") || localStorage.getItem("access_token");
+      const token = localStorage.getItem("access_token");
       const res = await axios.post(`${API_BASE_URL}/api/sales/beneficios/depurar-predictivo/`, {}, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
@@ -470,7 +494,7 @@ export default function AdminConfigScreen() {
     setSuccessMsg('');
 
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const response = await axios.put(`${API_BASE_URL}/api/core/configuraciones/`, formData, {
         headers: {
           ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
@@ -684,12 +708,9 @@ export default function AdminConfigScreen() {
                 <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden transition-all duration-200 hover:border-cyan-500/30">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-700/60 gap-4 mb-6">
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-                        <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                          Algoritmo de Evaluación de Proveedores (Ponderación 100%)
-                        </h2>
-                      </div>
+                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                        Algoritmo de Evaluación de Proveedores (Ponderación 100%)
+                      </h2>
                       <p className="text-xs text-slate-400 mt-1">
                         Ponderación para adjudicar automáticamente cotizaciones a proveedores. {envioEsObligatorio ? 'Al requerir Envío como condición obligatoria, el 100% se distribuye entre los 4 factores restantes.' : 'La suma de los 5 factores debe ser exactamente 100%.'}
                       </p>
@@ -1054,6 +1075,25 @@ export default function AdminConfigScreen() {
                       <p className="text-[10px] text-slate-400">Plazo hábil a proveedores para cargar presupuestos.</p>
                     </div>
 
+                    {/* diasValidezCotizacion */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Vigencia de Cotizaciones (Días)
+                        </label>
+                        <CyberTooltip
+                          title="Validez Temporal de Presupuestos de Proveedores"
+                          text="Cantidad de días corridos durante los cuales las ofertas de proveedores se consideran válidas para adjudicación y emisión de órdenes de compra."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="1"
+                        value={formData.diasValidezCotizacion}
+                        onChange={(e) => handleInputChange('diasValidezCotizacion', e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-400">Días que las ofertas de proveedores siguen vigentes para compra.</p>
+                    </div>
+
                     {/* toleranciaHorasIncumplimientoUrgente */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
@@ -1104,12 +1144,9 @@ export default function AdminConfigScreen() {
               <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-700/60 gap-4">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                        Taller & Servicio Técnico
-                      </h2>
-                    </div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                      Taller & Servicio Técnico
+                    </h2>
                     <p className="text-xs text-slate-400 mt-1">
                       Parámetros operativos para emisión de presupuestos, fijación de tarifas de mano de obra y permisos del técnico.
                     </p>
@@ -1117,6 +1154,32 @@ export default function AdminConfigScreen() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* costo_diagnostico_base */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-white">
+                        Costo de Diagnóstico Base ($ ARS)
+                      </label>
+                      <CyberTooltip
+                        title="Tarifa Base de Diagnóstico Técnico"
+                        text="Importe monetario cobrado por única vez al cliente al iniciar una orden de servicio técnico para cubrir la evaluación inicial."
+                      />
+                    </div>
+                    <CyberNumberInput
+                      id="costo_diagnostico_base"
+                      name="costo_diagnostico_base"
+                      min="0"
+                      step="100.0"
+                      prefix="$"
+                      value={formData.costo_diagnostico_base}
+                      onChange={(e) => handleInputChange('costo_diagnostico_base', e.target.value)}
+                      placeholder="5000.0"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Monto base inicial cobrado obligatoriamente por adelantado o registrado como deuda pendiente en mostrador.
+                    </p>
+                  </div>
+
                   {/* costoManoDeObra */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -1175,6 +1238,56 @@ export default function AdminConfigScreen() {
                       />
                     </button>
                   </div>
+
+                  {/* diasGarantiaReparacion */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Garantía de Servicio (Días)
+                      </label>
+                      <CyberTooltip
+                        title="Plazo Legal de Garantía Técnica"
+                        text="Días de cobertura técnica oficial otorgados al cliente tras la entrega conforme del dispositivo. Figura en el remito/factura y términos de servicio."
+                      />
+                    </div>
+                    <CyberNumberInput
+                      id="diasGarantiaReparacion"
+                      name="diasGarantiaReparacion"
+                      min="1"
+                      step="1"
+                      value={formData.diasGarantiaReparacion}
+                      onChange={(e) => handleInputChange('diasGarantiaReparacion', e.target.value)}
+                      placeholder="90"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Plazo legal de garantía emitido en constancias y términos tras entregar el equipo.
+                    </p>
+                  </div>
+
+                  {/* diasLimiteRetiroEquipo */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-200">
+                        Plazo Límite de Retiro (Días)
+                      </label>
+                      <CyberTooltip
+                        title="Custodia y Rezago Legal"
+                        text="Días corridos de guarda que tiene el cliente para retirar su equipo reparado antes de aplicar costos por depósito o declarar rezago legal."
+                      />
+                    </div>
+                    <CyberNumberInput
+                      id="diasLimiteRetiroEquipo"
+                      name="diasLimiteRetiroEquipo"
+                      min="1"
+                      step="1"
+                      value={formData.diasLimiteRetiroEquipo}
+                      onChange={(e) => handleInputChange('diasLimiteRetiroEquipo', e.target.value)}
+                      placeholder="60"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Días de guarda tras finalización antes de aplicar cargos de depósito o rezago.
+                    </p>
+                  </div>
                 </div>
 
                 {/* Subtarjeta: Algoritmo Inteligente de Asignación a Técnicos */}
@@ -1182,7 +1295,6 @@ export default function AdminConfigScreen() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#8B5CF6] shadow-[0_0_10px_rgba(139,92,246,0.6)]" />
                         <h3 className="text-base font-bold text-white tracking-tight">
                           Algoritmo de Asignación Inteligente a Técnicos
                         </h3>
@@ -1532,11 +1644,11 @@ export default function AdminConfigScreen() {
                 <div className="pt-4 border-t border-slate-700/60">
                   <div className="p-4 rounded-xl bg-slate-900/60 border border-violet-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div>
-                      <h4 className="text-xs font-bold text-violet-300 flex items-center gap-1.5 font-mono uppercase tracking-wider">
+                      <h4 className="text-xs font-bold text-slate-300 flex items-center gap-1.5 font-mono uppercase tracking-wider">
                         <span>🧪</span>
                         <span>Diagnóstico y Depuración del Motor Predictivo</span>
                       </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-400 mt-1">
                         Permite forzar el ciclo de análisis predictivo bajo demanda para pruebas internas de desarrollo.
                       </p>
                     </div>
@@ -1807,6 +1919,82 @@ export default function AdminConfigScreen() {
                   </div>
                 </div>
 
+                {/* Tiempos de Reserva y Seguridad de Ventas (CU-42) */}
+                <div className="pt-6 border-t border-slate-700/60">
+                  <div className="mb-4">
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
+                      <span>⏱️</span>
+                      <span>Tiempos de Reserva y Códigos de Operación</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Reglas temporales para la expiración de órdenes pendientes, caducidad de preferencias de pago y longitud de códigos seguros.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                    {/* minutosReservaVentaPendiente */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Reserva de Stock (Minutos)
+                        </label>
+                        <CyberTooltip
+                          title="Tiempo de Reserva de Mercadería"
+                          text="Tiempo límite que tiene el cliente para abonar su compra antes de que el sistema la cancele automáticamente y reintegre el stock al inventario."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="1"
+                        value={formData.minutosReservaVentaPendiente}
+                        onChange={(e) => handleInputChange('minutosReservaVentaPendiente', e.target.value)}
+                        placeholder="30"
+                      />
+                      <p className="text-[10px] text-slate-400">Minutos antes de cancelar y liberar stock.</p>
+                    </div>
+
+                    {/* minutosExpiracionPreferenciaMP */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Expiración Mercado Pago (Minutos)
+                        </label>
+                        <CyberTooltip
+                          title="Validez de la Preferencia y QR"
+                          text="Ventana temporal durante la cual el código QR y el link de pago permanecen activos para cobrar la orden."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="5"
+                        value={formData.minutosExpiracionPreferenciaMP}
+                        onChange={(e) => handleInputChange('minutosExpiracionPreferenciaMP', e.target.value)}
+                        placeholder="30"
+                      />
+                      <p className="text-[10px] text-slate-400">Duración del QR antes de caducar la preferencia.</p>
+                    </div>
+
+                    {/* longitudCodigoSeguridad */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Longitud Código Seguridad
+                        </label>
+                        <CyberTooltip
+                          title="Largo de Token Alfanumérico"
+                          text="Cantidad de caracteres generados para los códigos de retiro y confirmación en mostrador (ej. 10 para SEC-XXXXXX)."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="6"
+                        max="32"
+                        value={formData.longitudCodigoSeguridad}
+                        onChange={(e) => handleInputChange('longitudCodigoSeguridad', e.target.value)}
+                        placeholder="10"
+                      />
+                      <p className="text-[10px] text-slate-400">Caracteres del código de retiro o entrega.</p>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             )}
 
@@ -1996,12 +2184,12 @@ export default function AdminConfigScreen() {
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono">
+                            <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">
                               Dirección Física de la Sede
                             </h3>
                             <CyberTooltip title="Sede Central" text="Ubicación física principal registrada en el módulo geo_app para cálculo de distancias y radicación oficial." />
                           </div>
-                          <p className="text-[11px] text-slate-400">
+                          <p className="text-xs text-slate-400 mt-1">
                             Ubicación legal y logística de la empresa para cálculo de distancias y comprobantes oficiales.
                           </p>
                         </div>
@@ -2037,8 +2225,8 @@ export default function AdminConfigScreen() {
                               {direccionSede.alias || 'Sede Central'}
                             </span>
                           </div>
-                          {/* Ubicación General en color Cian */}
-                          <p className="text-xs font-semibold text-cyan-300">
+                          {/* Ubicación General */}
+                          <p className="text-xs font-medium text-slate-300">
                             {direccionSede.ciudad}, {direccionSede.provincia}, {direccionSede.pais}.
                           </p>
                           {/* Barrio y Calle en color Gris */}
@@ -2202,6 +2390,79 @@ export default function AdminConfigScreen() {
                   </div>
                 </div>
 
+                {/* Subsección: Datos Bancarios Oficiales para Transferencias */}
+                <div className="pt-6 border-t border-slate-700/60">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
+                        <span>🏦</span>
+                        <span>Cuenta Bancaria Oficial del Comercio</span>
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Datos bancarios informados dinámicamente al cliente en el modal de pago por transferencia (CBU/CVU y Alias).
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Entidad Bancaria / Billetera</label>
+                        <CyberTooltip title="Banco Receptor" text="Nombre de la entidad bancaria o billetera virtual receptora de las transferencias." />
+                      </div>
+                      <input
+                        type="text"
+                        value={formData.bancoLocal}
+                        onChange={(e) => handleInputChange('bancoLocal', e.target.value)}
+                        placeholder="Ej. Banco de la Nación Argentina"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/40 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Titular de la Cuenta</label>
+                        <CyberTooltip title="Titular de la Cuenta" text="Razón social o nombre completo del titular para verificar la transferencia." />
+                      </div>
+                      <input
+                        type="text"
+                        value={formData.titularCuentaLocal}
+                        onChange={(e) => handleInputChange('titularCuentaLocal', e.target.value)}
+                        placeholder="Ej. IFix Servicio Técnico S.R.L."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/40 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">CBU / CVU (22 dígitos)</label>
+                        <CyberTooltip title="Clave Bancaria Uniforme" text="Número de CBU o CVU de 22 dígitos numéricos sin espacios ni guiones." />
+                      </div>
+                      <input
+                        type="text"
+                        maxLength={22}
+                        value={formData.cbuLocal}
+                        onChange={(e) => handleInputChange('cbuLocal', e.target.value)}
+                        placeholder="0110599540000012345678"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/40 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">Alias Bancario</label>
+                        <CyberTooltip title="Alias de Transferencia" text="Identificador alfanumérico para transferencias inmediatas de clientes." />
+                      </div>
+                      <input
+                        type="text"
+                        value={formData.aliasLocal}
+                        onChange={(e) => handleInputChange('aliasLocal', e.target.value.toUpperCase())}
+                        placeholder="IFIX.TALLER.POS"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono uppercase text-sm focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/40 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2299,77 +2560,380 @@ export default function AdminConfigScreen() {
                   </div>
                 </div>
 
-                {/* Subsección Backups */}
+                {/* Subsección: Ciclo de Vida de Tokens, Seguridad y Archivos */}
                 <div className="pt-6 border-t border-slate-700/60">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">
-                      Copias de Seguridad del Sistema
+                  <div className="mb-4">
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-2">
+                      <span>🔑</span>
+                      <span>Ciclo de Vida de Tokens, OTP y Reglas de Archivos</span>
                     </h3>
-                    {/* backupAutomatico */}
-                    <div className="flex items-center gap-3 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-semibold text-slate-200">Backup Automático:</span>
-                        <CyberTooltip
-                          title="Respaldo Automático"
-                          text="Activa o desactiva la generación programada de volcados de seguridad de la base de datos PostgreSQL."
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleBoolean('backupAutomatico')}
-                        className={`w-12 h-6 rounded-full transition-colors relative p-0.5 border ${
-                          isBooleanActive('backupAutomatico')
-                            ? 'bg-[#06B6D4] border-cyan-400'
-                            : 'bg-slate-800 border-slate-700'
-                        }`}
-                      >
-                        <div
-                          className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                            isBooleanActive('backupAutomatico') ? 'translate-x-6' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Vigencia temporal de credenciales de acceso, caducidad de códigos de un solo uso y políticas de carga de adjuntos.
+                    </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
+                    {/* minutosVidaAccessToken */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">Frecuencia (Horas)</label>
-                        <CyberTooltip title="Frecuencia de Backup" text="Intervalo en horas entre cada volcado programado de la base de datos." />
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Vida Access Token (Min)
+                        </label>
+                        <CyberTooltip
+                          title="Vigencia JWT Access"
+                          text="Minutos de duración del token JWT de acceso antes de requerir su renovación silenciosa mediante el token de refresco."
+                        />
                       </div>
                       <CyberNumberInput
-                        min="24"
-                        value={formData.backupFrecuenciaHoras}
-                        onChange={(e) => handleInputChange('backupFrecuenciaHoras', e.target.value)}
+                        min="5"
+                        value={formData.minutosVidaAccessToken}
+                        onChange={(e) => handleInputChange('minutosVidaAccessToken', e.target.value)}
+                        placeholder="60"
                       />
+                      <p className="text-[10px] text-slate-400">Minutos antes de renovación JWT.</p>
                     </div>
 
+                    {/* minutosVidaOtpRecuperacion */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">Hora de Ejecución (24h)</label>
-                        <CyberTooltip title="Hora de Ejecución" text="Horario del día preferido (formato 24h) para disparar el respaldo con menor impacto operativo." />
-                      </div>
-                      <input
-                        type="text"
-                        value={formData.backupHoraEjecucion}
-                        onChange={(e) => handleInputChange('backupHoraEjecucion', e.target.value)}
-                        placeholder="03:00"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold text-slate-300">Retención de Copias</label>
-                        <CyberTooltip title="Retención de Copias" text="Cantidad de archivos de copia de seguridad preservados en el servidor antes de rotar y descartar los más antiguos." />
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Vida OTP Recuperación (Min)
+                        </label>
+                        <CyberTooltip
+                          title="Caducidad OTP Recuperación"
+                          text="Tiempo límite en minutos para utilizar el código numérico de 6 dígitos enviado por email para restablecer contraseña."
+                        />
                       </div>
                       <CyberNumberInput
                         min="1"
-                        max="30"
-                        value={formData.backupRetencionCopias}
-                        onChange={(e) => handleInputChange('backupRetencionCopias', e.target.value)}
+                        value={formData.minutosVidaOtpRecuperacion}
+                        onChange={(e) => handleInputChange('minutosVidaOtpRecuperacion', e.target.value)}
+                        placeholder="15"
                       />
+                      <p className="text-[10px] text-slate-400">Minutos para validar código OTP.</p>
+                    </div>
+
+                    {/* minutosVidaOtpAdmin */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Vida OTP Admin (Min)
+                        </label>
+                        <CyberTooltip
+                          title="Caducidad OTP Administrativo"
+                          text="Minutos de gracia para autorizaciones críticas y tokens de un solo uso para tareas administrativas."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="1"
+                        value={formData.minutosVidaOtpAdmin}
+                        onChange={(e) => handleInputChange('minutosVidaOtpAdmin', e.target.value)}
+                        placeholder="5"
+                      />
+                      <p className="text-[10px] text-slate-400">Minutos para autorizaciones críticas.</p>
+                    </div>
+
+                    {/* limiteResultadosBusquedaGeo */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Límite Resultados Geo
+                        </label>
+                        <CyberTooltip
+                          title="Límite en Búsquedas Geográficas"
+                          text="Tope máximo de ciudades y localidades devueltas en autocompletados para no saturar memoria ni red."
+                        />
+                      </div>
+                      <CyberNumberInput
+                        min="10"
+                        max="500"
+                        value={formData.limiteResultadosBusquedaGeo}
+                        onChange={(e) => handleInputChange('limiteResultadosBusquedaGeo', e.target.value)}
+                        placeholder="100"
+                      />
+                      <p className="text-[10px] text-slate-400">Registros máx. en listas geográficas.</p>
+                    </div>
+
+                    {/* extensionesPermitidasArchivos */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300">
+                          Extensiones Permitidas
+                        </label>
+                        <CyberTooltip
+                          title="Lista Blanca de Formatos"
+                          text="Formatos de archivo admitidos separados por comas (ej. .jpg,.png,.pdf) para fotos de ingreso, comprobantes y productos."
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={formData.extensionesPermitidasArchivos}
+                        onChange={(e) => handleInputChange('extensionesPermitidasArchivos', e.target.value)}
+                        placeholder=".jpg,.jpeg,.png,.webp,.pdf"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/50 focus:outline-none"
+                      />
+                      <p className="text-[10px] text-slate-400">Formatos permitidos para subidas.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Subsección Backups */}
+                <div className="pt-6 border-t border-slate-700/60 space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                        Gestión Multigranular de Copias de Seguridad
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Volcados automatizados con rotación estricta FIFO y almacenamiento en subcarpetas independientes.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {/* backupAutomatico */}
+                      <div className="flex items-center gap-2.5 bg-slate-900/90 px-3.5 py-1.5 rounded-xl border border-slate-700/70">
+                        <span className="text-xs font-semibold text-slate-200">Respaldo Automático:</span>
+                        <CyberTooltip
+                          title="Respaldo Automático"
+                          text="Interruptor maestro que activa o desactiva la evaluación programada de todos los niveles de volcado."
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('backupAutomatico')}
+                          className={`w-11 h-6 rounded-full transition-colors relative p-0.5 border ${
+                            isBooleanActive('backupAutomatico')
+                              ? 'bg-[#06B6D4] border-cyan-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                              isBooleanActive('backupAutomatico') ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* backupRetencionCopias */}
+                      <div className="flex items-center gap-2 bg-slate-900/90 px-3 py-1.5 rounded-xl border border-slate-700/70">
+                        <span className="text-xs font-semibold text-slate-200">Copias Max:</span>
+                        <CyberTooltip
+                          title="Límite FIFO por Carpeta"
+                          text="Cantidad máxima de copias conservadas por categoría. Al alcanzar este límite, el archivo más antiguo se elimina antes de generar el nuevo."
+                        />
+                        <div className="w-16">
+                          <CyberNumberInput
+                            min="1"
+                            max="30"
+                            value={formData.backupRetencionCopias}
+                            onChange={(e) => handleInputChange('backupRetencionCopias', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Banner de Precedencia Jerárquica */}
+                  <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200 flex items-start gap-2.5">
+                    <span className="text-base leading-none">🛡️</span>
+                    <div>
+                      <strong className="text-cyan-300 font-semibold">Regla de Precedencia y Supresión Jerárquica:</strong>
+                      <p className="text-slate-300 mt-0.5 leading-relaxed">
+                        Para optimizar el servidor y evitar volcados redundantes en un mismo día:
+                        <span className="text-amber-300 font-medium ml-1">Mensual</span> suprime Quincenal, Semanal y Diario;
+                        <span className="text-purple-300 font-medium ml-1">Quincenal</span> suprime Semanal y Diario;
+                        <span className="text-cyan-300 font-medium ml-1">Semanal</span> suprime el Diario en esa fecha.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Cuadrícula de 4 Niveles de Respaldo */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Tarjeta 1: DIARIO */}
+                    <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                          <span className="text-xs font-bold text-white uppercase font-mono">1. Respaldos Diarios</span>
+                          <span className="text-[10px] text-slate-400 font-mono">/backups/diarios/</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('backupDiarioActivo')}
+                          className={`w-9 h-5 rounded-full transition-colors relative p-0.5 border ${
+                            isBooleanActive('backupDiarioActivo')
+                              ? 'bg-emerald-500 border-emerald-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                              isBooleanActive('backupDiarioActivo') ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Frecuencia (Horas)</label>
+                          <CyberNumberInput
+                            min="1"
+                            max="72"
+                            value={formData.backupFrecuenciaHoras}
+                            onChange={(e) => handleInputChange('backupFrecuenciaHoras', e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Hora Ejecución (HH:MM)</label>
+                          <input
+                            type="text"
+                            value={formData.backupHoraEjecucion}
+                            onChange={(e) => handleInputChange('backupHoraEjecucion', e.target.value)}
+                            placeholder="03:00"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-[#8B5CF6] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tarjeta 2: SEMANAL */}
+                    <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+                          <span className="text-xs font-bold text-white uppercase font-mono">2. Respaldos Semanales</span>
+                          <span className="text-[10px] text-slate-400 font-mono">/backups/semanales/</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('backupSemanalActivo')}
+                          className={`w-9 h-5 rounded-full transition-colors relative p-0.5 border ${
+                            isBooleanActive('backupSemanalActivo')
+                              ? 'bg-cyan-500 border-cyan-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                              isBooleanActive('backupSemanalActivo') ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Día de la Semana</label>
+                          <select
+                            value={formData.backupDiaSemana}
+                            onChange={(e) => handleInputChange('backupDiaSemana', e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-[#06B6D4] focus:outline-none"
+                          >
+                            <option value="LUNES">Lunes</option>
+                            <option value="MARTES">Martes</option>
+                            <option value="MIERCOLES">Miércoles</option>
+                            <option value="JUEVES">Jueves</option>
+                            <option value="VIERNES">Viernes</option>
+                            <option value="SABADO">Sábado</option>
+                            <option value="DOMINGO">Domingo</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Hora Ejecución (HH:MM)</label>
+                          <input
+                            type="text"
+                            value={formData.backupHoraSemanal}
+                            onChange={(e) => handleInputChange('backupHoraSemanal', e.target.value)}
+                            placeholder="02:00"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-[#06B6D4] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tarjeta 3: QUINCENAL */}
+                    <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                          <span className="text-xs font-bold text-white uppercase font-mono">3. Respaldos Quincenales</span>
+                          <span className="text-[10px] text-slate-400 font-mono">/backups/quincenales/</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('backupQuincenalActivo')}
+                          className={`w-9 h-5 rounded-full transition-colors relative p-0.5 border ${
+                            isBooleanActive('backupQuincenalActivo')
+                              ? 'bg-purple-500 border-purple-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                              isBooleanActive('backupQuincenalActivo') ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs items-center">
+                        <div className="text-[11px] text-slate-400">
+                          Se ejecuta automáticamente los <strong className="text-purple-300">días 1 y 15</strong> de cada mes.
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Hora Ejecución (HH:MM)</label>
+                          <input
+                            type="text"
+                            value={formData.backupHoraQuincenal}
+                            onChange={(e) => handleInputChange('backupHoraQuincenal', e.target.value)}
+                            placeholder="04:00"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-[#8B5CF6] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tarjeta 4: MENSUAL */}
+                    <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                          <span className="text-xs font-bold text-white uppercase font-mono">4. Respaldos Mensuales</span>
+                          <span className="text-[10px] text-slate-400 font-mono">/backups/mensuales/</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBoolean('backupMensualActivo')}
+                          className={`w-9 h-5 rounded-full transition-colors relative p-0.5 border ${
+                            isBooleanActive('backupMensualActivo')
+                              ? 'bg-amber-500 border-amber-400'
+                              : 'bg-slate-800 border-slate-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                              isBooleanActive('backupMensualActivo') ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs items-center">
+                        <div className="text-[11px] text-slate-400">
+                          Se ejecuta el <strong className="text-amber-300">día 1</strong> de cada mes (ciclo de 30 días).
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-300">Hora Ejecución (HH:MM)</label>
+                          <input
+                            type="text"
+                            value={formData.backupHoraMensual}
+                            onChange={(e) => handleInputChange('backupHoraMensual', e.target.value)}
+                            placeholder="05:00"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-amber-400 focus:outline-none"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

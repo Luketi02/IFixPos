@@ -282,10 +282,10 @@ class SolicitudCotizacionOutputSerializer(serializers.Serializer):
         return getattr(obj, 'estado_nombre', 'Borrador')
 
     def get_total_proveedores(self, obj):
-        return obj.invitacioncotizar_set.count()
+        return len(obj.invitacioncotizar_set.all())
 
     def get_total_productos(self, obj):
-        return obj.solicitudcotizacionproducto_set.count()
+        return len(obj.solicitudcotizacionproducto_set.all())
 
     def get_productos(self, obj):
         items = obj.solicitudcotizacionproducto_set.all()
@@ -753,10 +753,10 @@ class SolicitudCotizacionListOutputSerializer(serializers.Serializer):
         return getattr(obj, 'estado_nombre', 'Borrador')
 
     def get_total_proveedores(self, obj):
-        return obj.invitacioncotizar_set.count()
+        return len(obj.invitacioncotizar_set.all())
 
     def get_total_productos(self, obj):
-        return obj.solicitudcotizacionproducto_set.count()
+        return len(obj.solicitudcotizacionproducto_set.all())
 
     def get_productos(self, obj):
         items = obj.solicitudcotizacionproducto_set.all()

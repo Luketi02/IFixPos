@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '../../config/api';
+import { useIntervaloVisible } from '../../utils/polling';
 
 // Tipos de notificaciones que nunca deben renderizarse en la campanita
 // (códigos OTP o verificaciones que se envían exclusivamente por correo)
@@ -208,16 +208,11 @@ export default function NotificationBell() {
     }
   }, [token]);
 
-  // 1. Carga inicial al montar y polling periódico cada 315 segundos
-  useEffect(() => {
-    cargarNotificaciones();
-
-    const interval = setInterval(() => {
-      cargarNotificaciones();
-    }, 35000);
-
-    return () => clearInterval(interval);
-  }, [cargarNotificaciones]);
+  // 1. Carga inicial al montar y polling periódico cada 35 segundos (pausado cuando la pestaña está oculta)
+  useIntervaloVisible(cargarNotificaciones, token ? 35000 : null, {
+    ejecutarAlMontar: true,
+    sincronizarAlVolver: true
+  });
 
   // 2. Refrescar al abrir el panel desplegable
   useEffect(() => {

@@ -36,6 +36,54 @@ class SupportEmailApi(APIView):
         return Response({"email": obtener_email_soporte()})
 
 
+class ConfiguracionPublicaComercioApi(APIView):
+    """
+    Endpoint público que expone datos comerciales, bancarios e institucionales no sensibles
+    de la empresa para clientes, carritos y modales de pago (CU-42).
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from decimal import Decimal
+        from core_app.selectors import (
+            obtener_configuracion_texto,
+            obtener_configuracion_decimal,
+            obtener_datos_bancarios_comercio,
+            obtener_dias_garantia_reparacion,
+            obtener_dias_limite_retiro_equipo,
+            obtener_minutos_reserva_venta_pendiente,
+            obtener_minutos_expiracion_mp,
+            obtener_email_soporte,
+        )
+        data = {
+            "nombreLocal": obtener_configuracion_texto('nombreLocal', 'IFix Servicio Técnico & Store'),
+            "telefonoLocal": obtener_configuracion_texto('telefonoLocal', ''),
+            "emailLocal": obtener_configuracion_texto('emailLocal', 'contacto@empresa.com'),
+            "emailSoporte": obtener_email_soporte(),
+            "direccionLocal": obtener_configuracion_texto('direccionLocal', ''),
+            "cuilLocal": obtener_configuracion_texto('cuilLocal', ''),
+            "imagenLocal": obtener_configuracion_texto('imagenLocal', '/itemLogoVentana.svg'),
+            "datosBancarios": obtener_datos_bancarios_comercio(),
+            "garantia": {
+                "diasGarantiaReparacion": obtener_dias_garantia_reparacion(),
+                "diasLimiteRetiroEquipo": obtener_dias_limite_retiro_equipo(),
+            },
+            "tiempos": {
+                "minutosReserva": obtener_minutos_reserva_venta_pendiente(),
+                "minutosExpiracionMP": obtener_minutos_expiracion_mp(),
+            },
+            "logistica": {
+                "envioLocal": float(obtener_configuracion_decimal('envioLocal', Decimal('0.00'))),
+                "envioRegional": float(obtener_configuracion_decimal('envioRegional', Decimal('0.00'))),
+                "envioNacional": float(obtener_configuracion_decimal('envioNacional', Decimal('0.00'))),
+            }
+        }
+        resp = Response(data, status=status.HTTP_200_OK)
+        resp["Cache-Control"] = "public, max-age=60"
+        return resp
+
+
+
 class ConfiguracionGlobalApi(APIView):
     """
     API endpoint para consultar y actualizar la configuración global del sistema (CU-42).
@@ -379,5 +427,34 @@ class RestaurarSistemaApi(BaseBackupAdminApiView):
         )
 
         return Response(resultado, status=status.HTTP_200_OK)
+
+
+class DepurarBackupsHuerfanosApi(BaseBackupAdminApiView):
+    """
+    CU-22: Depura archivos .sql huérfanos del disco del servidor que no estén registrados en la BD.
+    """
+    def post(self, request):
+        self._verificar_admin(request.user)
+        from core_app.services import depurar_archivos_backup_huerfanos
+        res = depurar_archivos_backup_huerfanos()
+        return Response({
+            "mensaje": f"Depuración completada: {res['eliminados']} archivos huérfanos eliminados ({res['mb_liberados']} MB liberados).",
+            "detalle": res
+        }, status=status.HTTP_200_OK)
+
+
+class EjecutarCicloBackupsApi(BaseBackupAdminApiView):
+    """
+    CU-22: Evalúa o fuerza la ejecución del ciclo de respaldos programados con precedencia jerárquica.
+    """
+    def post(self, request):
+        self._verificar_admin(request.user)
+        from core_app.services import evaluar_y_ejecutar_backups_programados
+        forzar_nivel = request.data.get('forzar_nivel')
+        resultado = evaluar_y_ejecutar_backups_programados(forzar_nivel=forzar_nivel)
+        return Response({
+            "mensaje": "Ciclo de respaldos evaluado exitosamente.",
+            "resultados": resultado
+        }, status=status.HTTP_200_OK)
 
 

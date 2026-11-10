@@ -175,7 +175,8 @@ def filtrar_solicitudes_cotizacion(
     qs = SolicitudCotizacion.objects.prefetch_related(
         'solicitudcotizacionproducto_set__id_producto',
         'solicitudcotizacionproducto_set__id_producto__id_categoria',
-        'invitacioncotizar_set__cuit_prov'
+        'invitacioncotizar_set__cuit_prov',
+        'invitacioncotizar_set__cotizacion_set'
     ).order_by('-fecha_emision', '-id_solicitud')
 
     id_solicitud = filtros.get('id_solicitud')

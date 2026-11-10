@@ -4,8 +4,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function EntregarDispositivo({ onAlerta }) {
   const { user, token } = useAuth();
 
@@ -264,6 +263,128 @@ export default function EntregarDispositivo({ onAlerta }) {
     }
   };
 
+  // Generación e Impresión de Documento de Términos y Condiciones de Entrega
+  const handleImprimirTerminosEntrega = (target = null) => {
+    const rep = target || reparacion || ticketCierre;
+    if (!rep) return;
+
+    const nombre = rep.cliente?.nombre || rep.cliente?.nombre_completo || rep.cliente || 'Cliente';
+    const dni = rep.cliente?.dni || rep.dni || 'Sin registrar';
+    const disp = typeof rep.dispositivo === 'string'
+      ? rep.dispositivo
+      : `${rep.dispositivo?.marca || ''} ${rep.dispositivo?.modelo || 'Dispositivo'}`.trim();
+    const serie = rep.dispositivo?.numero_serie || rep.numero_serie || 'S/N';
+    const idRep = rep.id_reparacion || rep.idReparacion || '';
+    const fecha = new Date().toLocaleDateString('es-AR');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <title>Acta de Entrega y Términos - IFixPos</title>
+        <style>
+          @page { size: A4; margin: 25mm 20mm; }
+          body { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 25px; line-height: 1.6; }
+          .header { border-bottom: 3px solid #06b6d4; padding-bottom: 12px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end; }
+          .logo-text { font-size: 24px; font-weight: 900; color: #0f172a; letter-spacing: -0.5px; }
+          .logo-sub { font-size: 11px; color: #06b6d4; font-weight: 700; text-transform: uppercase; font-family: monospace; }
+          .order-badge { text-align: right; font-family: monospace; font-size: 12px; color: #64748b; }
+          .title { font-size: 16px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #1e293b; margin: 20px 0 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; }
+          .statement-box { background: #f8fafc; border: 1.5px solid #cbd5e1; border-left: 5px solid #06b6d4; padding: 18px 20px; border-radius: 8px; font-size: 14px; margin: 20px 0; text-align: justify; }
+          .table-info { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 12px; }
+          .table-info th, .table-info td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; }
+          .table-info th { background: #f1f5f9; font-weight: 700; color: #334155; }
+          .clausulas { font-size: 11.5px; color: #334155; margin: 20px 0; }
+          .clausulas ol { padding-left: 20px; }
+          .clausulas li { margin-bottom: 6px; }
+          .signatures { margin-top: 60px; display: flex; justify-content: space-between; gap: 40px; }
+          .sig-box { flex: 1; border-top: 1.5px solid #64748b; padding-top: 10px; text-align: center; font-size: 11.5px; color: #1e293b; }
+          .footer-note { margin-top: 40px; font-size: 10px; color: #94a3b8; text-align: center; font-family: monospace; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <div class="logo-text">IFixPos</div>
+            <div class="logo-sub">Servicio Técnico y Reparación de Hardware</div>
+          </div>
+          <div class="order-badge">
+            Orden de Servicio: <strong>#${idRep}</strong><br>
+            Fecha de Emisión: <strong>${fecha}</strong>
+          </div>
+        </div>
+
+        <div class="title">Acta de Conformidad de Entrega y Términos de Garantía</div>
+
+        <div class="statement-box">
+          El cliente <strong>${nombre}</strong> con DNI <strong>${dni}</strong> acepta que recibe a su entera conformidad y satisfacción el dispositivo <strong>${disp}</strong> (N° Serie / IMEI: <strong>${serie}</strong>), habiendo verificado el encendido, funcionamiento de las intervenciones contratadas e integridad física del equipo frente al técnico, declarando conocer y aceptar los términos y condiciones de la garantía técnica legal de IFixPos.
+        </div>
+
+        <table class="table-info">
+          <tr>
+            <th style="width: 25%;">Titular Receptor:</th>
+            <td>${nombre}</td>
+            <th style="width: 20%;">Documento:</th>
+            <td>DNI ${dni}</td>
+          </tr>
+          <tr>
+            <th>Equipo Restituido:</th>
+            <td>${disp}</td>
+            <th>N° Serie / IMEI:</th>
+            <td>${serie}</td>
+          </tr>
+          <tr>
+            <th>Fecha de Restitución:</th>
+            <td>${fecha}</td>
+            <th>Saldo Pendiente:</th>
+            <td>$0.00 (Saldado / Sin Deuda)</td>
+          </tr>
+        </table>
+
+        <div class="clausulas">
+          <strong>Condiciones de la Garantía Técnica (Ley 24.240):</strong>
+          <ol>
+            <li><strong>Plazo de Garantía:</strong> La presente intervención técnica cuenta con una cobertura de 90 (noventa) días corridos a partir de la fecha de entrega sobre los insumos y mano de obra individualizados en la orden.</li>
+            <li><strong>Exclusiones de Cobertura:</strong> La garantía caducará automáticamente ante roturas por caídas o impactos, display quebrado, derrame de líquidos o humedad (sulfatación), manipulación de software no homologado o apertura de sellos de seguridad por terceros ajenos a IFixPos.</li>
+            <li><strong>Conformidad Definitiva:</strong> La suscripción de la presente acta convalida la restitución definitiva del hardware y cancela toda obligación de custodia física por parte del establecimiento técnico.</li>
+          </ol>
+        </div>
+
+        <div class="signatures">
+          <div class="sig-box">
+            <strong>Firma del Cliente Titular</strong><br>
+            Aclaración: ${nombre}<br>
+            DNI: ${dni}
+          </div>
+          <div class="sig-box">
+            <strong>Firma y Sello del Técnico / Taller</strong><br>
+            IFixPos Laboratorio Técnico Especializado<br>
+            Sucursal Central
+          </div>
+        </div>
+
+        <div class="footer-note">
+          Documento emitido formalmente por el sistema IFixPos ERP • Registro inmutable en bitácora técnica
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    const printWin = window.open('', '_blank', 'width=850,height=900');
+    if (printWin) {
+      printWin.document.open();
+      printWin.document.write(htmlContent);
+      printWin.document.close();
+    }
+  };
+
   // Reiniciar flujo para entregar otro equipo
   const handleReiniciar = () => {
     setTokenInput('');
@@ -398,11 +519,20 @@ export default function EntregarDispositivo({ onAlerta }) {
               </div>
             </div>
 
-            <div className="mt-8 flex justify-center">
+            <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleImprimirTerminosEntrega(ticketCierre)}
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 text-sm font-bold flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md"
+              >
+                <span>🖨️</span>
+                <span>Imprimir Términos y Condiciones</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleReiniciar}
-                className="px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
               >
                 Entregar otro dispositivo
               </button>
@@ -599,10 +729,21 @@ export default function EntregarDispositivo({ onAlerta }) {
                       />
                     </div>
 
-                    {/* Botón Crítico: Deshabilitado si hay saldo pendiente */}
-                    <button
-                      type="submit"
-                      disabled={confirmandoEntrega || tieneSaldoPendiente}
+                    {/* Botón Imprimir T&C previo y Botón Confirmar */}
+                    <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleImprimirTerminosEntrega(reparacion)}
+                        className="w-full sm:w-auto px-5 py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                        title="Generar comprobante para firma del cliente"
+                      >
+                        <span>🖨️</span>
+                        <span>Imprimir Términos y Condiciones</span>
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={confirmandoEntrega || tieneSaldoPendiente}
                       className={`w-full py-4 rounded-xl text-sm font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 mt-4 ${
                         tieneSaldoPendiente
                           ? 'bg-slate-800/80 border border-slate-700 text-slate-500 cursor-not-allowed'
@@ -626,6 +767,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                         </>
                       )}
                     </button>
+                    </div>
                   </form>
                 </motion.div>
               )}

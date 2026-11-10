@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 class Venta(models.Model):
@@ -15,6 +16,12 @@ class Venta(models.Model):
     )
     fecha_venta = models.DateField(
         help_text='Fecha en que se realizó la venta.'
+    )
+    fecha_hora_creacion = models.DateTimeField(
+        default=timezone.now,
+        null=True,
+        blank=True,
+        help_text='Marca temporal exacta de creación de la venta para control de reservas de stock.'
     )
     estado_venta = models.CharField(
         max_length=50,
@@ -53,6 +60,10 @@ class Venta(models.Model):
 
     class Meta:
         db_table = 'venta'
+        indexes = [
+            models.Index(fields=['estado_venta', 'fecha_venta'], name='idx_venta_estado_fecha'),
+            models.Index(fields=['codigo_sec'], name='idx_venta_codigo_sec'),
+        ]
 
 
 class DetalleVenta(models.Model):
@@ -100,6 +111,13 @@ class MedioPago(models.Model):
     id_mediopago = models.AutoField(
         primary_key=True,
         help_text='Identificador único del medio de pago.'
+    )
+    codigo = models.CharField(
+        max_length=30,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Código técnico inmutable del medio de pago (MP, EFECTIVO, TRANSFERENCIA, TARJETA, OTRO).'
     )
     estado = models.BooleanField(
         help_text='Estado del medio de pago (activo/inactivo).'
@@ -167,6 +185,9 @@ class Pago(models.Model):
 
     class Meta:
         db_table = 'pago'
+        indexes = [
+            models.Index(fields=['cod_operacion'], name='idx_pago_cod_operacion'),
+        ]
 
 
 class CarritoCompra(models.Model):
@@ -244,6 +265,12 @@ class Beneficio(models.Model):
     fecha = models.DateField(
         help_text='Fecha en que se generó la sugerencia.'
     )
+    fecha_hora_creacion = models.DateTimeField(
+        default=timezone.now,
+        null=True,
+        blank=True,
+        help_text='Marca temporal exacta de emisión del beneficio para cálculo de vigencia en horas.'
+    )
     enviado_momento_compra = models.BooleanField(
         help_text='Indica si se envió en el momento de la compra.'
     )
@@ -280,19 +307,41 @@ class Beneficio(models.Model):
     )
 
     @property
+    def fecha_hora_expiracion(self):
+        """
+        Retorna el datetime exacto de expiración del beneficio sumando `tiempo_disp` (en horas)
+        a `fecha_hora_creacion` (o al inicio de `fecha` si la fecha explícita difiere de la fecha de creación).
+        """
+        if self.tiempo_disp is None or float(self.tiempo_disp) <= 0:
+            return None
+        import datetime
+        horas = float(self.tiempo_disp)
+        if self.fecha_hora_creacion:
+            base_dt = self.fecha_hora_creacion
+            if timezone.is_naive(base_dt):
+                base_dt = timezone.make_aware(base_dt, timezone.get_current_timezone())
+            if self.fecha and self.fecha != timezone.localtime(base_dt).date():
+                inicio_dia = datetime.datetime.combine(self.fecha, datetime.time.min)
+                base_dt = timezone.make_aware(inicio_dia, timezone.get_current_timezone())
+            return base_dt + datetime.timedelta(hours=horas)
+        if self.fecha:
+            inicio_dia = datetime.datetime.combine(self.fecha, datetime.time.min)
+            if timezone.is_naive(inicio_dia):
+                inicio_dia = timezone.make_aware(inicio_dia, timezone.get_current_timezone())
+            return inicio_dia + datetime.timedelta(hours=horas)
+        return None
+
+    @property
     def estado(self) -> str:
-        """Determina dinámicamente el estado del beneficio (ACTIVO, REVOCADO o CADUCADO)."""
+        """Determina dinámicamente el estado del beneficio (ACTIVO, REVOCADO o CADUCADO) con precisión de horas."""
         if self.motivo and '[REVOCADO]' in self.motivo:
             return 'REVOCADO'
         if self.tiempo_disp is not None and self.tiempo_disp <= 0:
             return 'REVOCADO'
-        if not self.fecha or self.tiempo_disp is None:
+        expira_dt = self.fecha_hora_expiracion
+        if not expira_dt:
             return 'CADUCADO'
-        import math
-        import datetime
-        from django.utils import timezone
-        dias = math.ceil(float(self.tiempo_disp) / 24.0)
-        if timezone.now().date() > self.fecha + datetime.timedelta(days=dias):
+        if timezone.now() > expira_dt:
             return 'CADUCADO'
         return 'ACTIVO'
 

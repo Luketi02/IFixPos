@@ -113,6 +113,8 @@ def obtener_beneficios_activos_usuario(id_usuario: int) -> dict:
     beneficios = Beneficio.objects.filter(id_usuario_id=id_usuario)
     resultado = {}
     for b in beneficios:
+        if b.estado != 'ACTIVO':
+            continue
         if b.por_desc is not None and b.por_desc > 0:
             porcentaje = float(b.por_desc)
             prod_id = b.id_producto_id
@@ -209,10 +211,14 @@ def _extraer_datos_cliente(usuario):
 
 
 def _calcular_monto_reparacion(reparacion) -> Decimal:
-    """Calcula el monto monetario total de una reparación (mano de obra + insumos + envío)."""
+    """
+    Calcula el monto monetario total de una reparación (mano de obra + insumos + envío).
+    Aprovecha el caché de `prefetch_related('diagnostico_set')` sin disparar consultas N+1.
+    """
     from decimal import Decimal
     costo_diag = Decimal('0.00')
-    diag = reparacion.diagnostico_set.order_by('-id_diagnostico').first()
+    diagnosticos = list(reparacion.diagnostico_set.all())
+    diag = max(diagnosticos, key=lambda d: d.id_diagnostico) if diagnosticos else None
     if diag and diag.costo_diagnostico:
         costo_diag = Decimal(str(diag.costo_diagnostico))
 
@@ -228,6 +234,56 @@ def _calcular_monto_reparacion(reparacion) -> Decimal:
         envio = Decimal(str(reparacion.id_venta.costo_envio))
 
     return total_rep + envio
+
+
+def _construir_desglose_cobro(
+    *,
+    venta=None,
+    reparacion=None,
+    monto_operacion: Decimal = Decimal('0.00'),
+    estado_pago: str = 'PENDIENTE'
+) -> dict:
+    """
+    Construye el desglose explícito de cobro (§4.6) para distinguir diagnóstico inicial,
+    reparación final y venta de productos, informando montos abonados y saldo pendiente.
+    """
+    monto_op = Decimal(str(monto_operacion or '0.00'))
+    if reparacion is not None:
+        diagnosticos = list(reparacion.diagnostico_set.all()) if hasattr(reparacion, 'diagnostico_set') else []
+        diag = max(diagnosticos, key=lambda d: d.id_diagnostico) if diagnosticos else None
+        monto_diag = Decimal(str(diag.costo_diagnostico)) if (diag and diag.costo_diagnostico) else Decimal('0.00')
+        monto_insumos = Decimal('0.00')
+        if hasattr(reparacion, 'detalleinsumoreparacion_set'):
+            for ins in reparacion.detalleinsumoreparacion_set.all():
+                monto_insumos += Decimal(str(ins.cantidad or 0)) * Decimal(str(ins.precio_unitario or 0))
+        monto_rep = monto_diag + monto_insumos
+        etapa_upper = str(getattr(reparacion, 'etapa', '') or '').upper()
+        if monto_rep == Decimal('0.00') and etapa_upper in ('NUEVO_DIAGNOSTICO', 'DIAGNOSTICADO', 'PENDIENTE'):
+            concepto = 'DIAGNOSTICO_INICIAL'
+            monto_diag = monto_op
+        else:
+            concepto = 'REPARACION_FINAL'
+            if monto_rep == Decimal('0.00'):
+                monto_rep = monto_op
+        ya_abonado = monto_op if estado_pago == 'PAGADO' else Decimal('0.00')
+        saldo = Decimal('0.00') if estado_pago in ('PAGADO', 'ANULADO') else monto_op
+        return {
+            'concepto': concepto,
+            'monto_diagnostico': str(monto_diag.quantize(Decimal('0.01'))),
+            'monto_reparacion': str(monto_rep.quantize(Decimal('0.01'))),
+            'monto_ya_abonado': str(ya_abonado.quantize(Decimal('0.01'))),
+            'saldo_pendiente': str(saldo.quantize(Decimal('0.01'))),
+        }
+
+    ya_abonado = monto_op if estado_pago == 'PAGADO' else Decimal('0.00')
+    saldo = Decimal('0.00') if estado_pago in ('PAGADO', 'ANULADO') else monto_op
+    return {
+        'concepto': 'VENTA_PRODUCTOS',
+        'monto_diagnostico': '0.00',
+        'monto_reparacion': '0.00',
+        'monto_ya_abonado': str(ya_abonado.quantize(Decimal('0.01'))),
+        'saldo_pendiente': str(saldo.quantize(Decimal('0.01'))),
+    }
 
 
 def filtrar_cobros_y_pagos(
@@ -316,6 +372,7 @@ def filtrar_cobros_y_pagos(
             cod_sec = (rep.codigo_sec if rep and rep.codigo_sec else (venta.codigo_sec if venta else '')) or ''
             usuario_cliente = venta.id_usuario if venta else (rep.id_usuario if rep else None)
 
+            monto_p = Decimal(str(p.monto_pagado or '0.00'))
             transacciones.append({
                 'id_pago': p.id_pago,
                 'id_operacion': id_op,
@@ -323,12 +380,18 @@ def filtrar_cobros_y_pagos(
                 'codigo_seguridad': cod_sec,
                 'fecha': p.fecha_pago,
                 'estado_pago': 'PAGADO',
-                'monto': Decimal(str(p.monto_pagado or '0.00')),
+                'monto': monto_p,
                 'medio_pago': p.medio_pago.nombre_medio_pago if p.medio_pago else 'Desconocido',
                 'numero_operacion': p.cod_operacion or '',
                 'detalle': p.detalle or '',
                 'ruta_comprobante': p.ruta_comprobante or '',
-                'cliente': _extraer_datos_cliente(usuario_cliente)
+                'cliente': _extraer_datos_cliente(usuario_cliente),
+                'desglose_cobro': _construir_desglose_cobro(
+                    venta=venta,
+                    reparacion=rep,
+                    monto_operacion=monto_p,
+                    estado_pago='PAGADO'
+                )
             })
 
     # =========================================================================
@@ -384,7 +447,13 @@ def filtrar_cobros_y_pagos(
                 'numero_operacion': None,
                 'detalle': 'Venta pendiente de cobro en mostrador / entrega',
                 'ruta_comprobante': None,
-                'cliente': _extraer_datos_cliente(v.id_usuario)
+                'cliente': _extraer_datos_cliente(v.id_usuario),
+                'desglose_cobro': _construir_desglose_cobro(
+                    venta=v,
+                    reparacion=rep,
+                    monto_operacion=monto_total,
+                    estado_pago='PENDIENTE'
+                )
             })
 
         # B.2. Reparaciones pendientes de cobro sin venta o no cobradas aún
@@ -398,13 +467,12 @@ def filtrar_cobros_y_pagos(
             'id_venta'
         ).prefetch_related(
             'detalleinsumoreparacion_set',
-            'diagnostico_set'
+            'diagnostico_set',
+            'id_venta__pago_set'
         ).filter(
             Q(etapa__in=etapas_pendientes) | Q(etapa__icontains='PAGO')
         ).exclude(
             etapa__in=['PAGADO', 'CANCELADO', 'ENTREGADO', 'ANULADO']
-        ).exclude(
-            id_venta__pago__isnull=False
         )
 
         if ventas_procesadas_ids:
@@ -430,6 +498,8 @@ def filtrar_cobros_y_pagos(
 
         for r in qs_reparaciones:
             monto_adeudado = _calcular_monto_reparacion(r)
+            if r.id_venta_id and r.id_venta.pago_set.exists() and monto_adeudado <= Decimal('0.00'):
+                continue
             usuario_cliente = r.id_usuario or (r.id_dispositivo.id_usuario if r.id_dispositivo else None)
             cod_sec = (r.codigo_sec or (r.id_venta.codigo_sec if r.id_venta else '')) or ''
 
@@ -445,7 +515,13 @@ def filtrar_cobros_y_pagos(
                 'numero_operacion': None,
                 'detalle': f'Reparación en etapa {r.etapa} pendiente de cobro',
                 'ruta_comprobante': None,
-                'cliente': _extraer_datos_cliente(usuario_cliente)
+                'cliente': _extraer_datos_cliente(usuario_cliente),
+                'desglose_cobro': _construir_desglose_cobro(
+                    venta=r.id_venta,
+                    reparacion=r,
+                    monto_operacion=monto_adeudado,
+                    estado_pago='PENDIENTE'
+                )
             })
 
     # =========================================================================
@@ -496,7 +572,13 @@ def filtrar_cobros_y_pagos(
                 'numero_operacion': None,
                 'detalle': 'Operación comercial anulada o cancelada',
                 'ruta_comprobante': None,
-                'cliente': _extraer_datos_cliente(va.id_usuario)
+                'cliente': _extraer_datos_cliente(va.id_usuario),
+                'desglose_cobro': _construir_desglose_cobro(
+                    venta=va,
+                    reparacion=rep,
+                    monto_operacion=monto_total,
+                    estado_pago='ANULADO'
+                )
             })
 
     # =========================================================================
@@ -606,6 +688,15 @@ def obtener_medio_pago_por_nombre(nombre: str) -> Optional[MedioPago]:
         return None
     nombre_limpio = nombre.strip()
     return MedioPago.objects.filter(nombre_medio_pago__iexact=nombre_limpio).first()
+
+
+def obtener_medio_pago_por_codigo(codigo: str) -> Optional[MedioPago]:
+    """
+    Busca un medio de pago por su código interno inmutable (ej. 'MP', 'EFECTIVO').
+    """
+    if not codigo:
+        return None
+    return MedioPago.objects.filter(codigo__iexact=codigo.strip()).first()
 
 
 def obtener_medio_pago_por_id(id_mediopago: int) -> Optional[MedioPago]:
@@ -757,24 +848,12 @@ def obtener_beneficio_para_revocacion(id_beneficio: int) -> Any:
 
 def beneficio_esta_activo(beneficio: Any) -> bool:
     """
-    Verifica si un beneficio se encuentra activo y dentro de su ventana temporal de validez.
+    Verifica si un beneficio se encuentra activo y dentro de su ventana temporal de validez
+    con precisión horaria exacta (`fecha_hora_expiracion`).
     """
     if not beneficio:
         return False
-    if beneficio.motivo and '[REVOCADO]' in beneficio.motivo:
-        return False
-    if beneficio.tiempo_disp is not None and beneficio.tiempo_disp <= Decimal('0.00'):
-        return False
-    if not beneficio.fecha or beneficio.tiempo_disp is None:
-        return False
-
-    import math
-    import datetime
-    from django.utils import timezone
-    horas = float(beneficio.tiempo_disp)
-    dias = math.ceil(horas / 24.0)
-    fecha_expiracion = beneficio.fecha + datetime.timedelta(days=dias)
-    return timezone.now().date() <= fecha_expiracion
+    return getattr(beneficio, 'estado', '') == 'ACTIVO'
 
 
 # ==============================================================================
@@ -909,17 +988,11 @@ def calcular_costo_envio_sistema(id_direccion: Optional[int] = None, id_ciudad: 
     from core_app.models import ConfiguracionSistema
     from geo_app.models import Direccion, Ciudad
 
-    def _obtener_decimal(clave: str, fallback: str = '0.00') -> Decimal:
-        cfg = ConfiguracionSistema.objects.filter(clave=clave).first()
-        val = cfg.valor if cfg and cfg.valor else fallback
-        try:
-            return Decimal(str(val).strip().replace(',', '.'))
-        except Exception:
-            return Decimal(fallback)
+    from core_app.selectors import obtener_configuracion_decimal
 
-    tarifa_local = _obtener_decimal('envioLocal', '0.00')
-    tarifa_regional = _obtener_decimal('envioRegional', '0.00')
-    tarifa_nacional = _obtener_decimal('envioNacional', '0.00')
+    tarifa_local = obtener_configuracion_decimal('envioLocal', fallback=Decimal('0.00'))
+    tarifa_regional = obtener_configuracion_decimal('envioRegional', fallback=Decimal('0.00'))
+    tarifa_nacional = obtener_configuracion_decimal('envioNacional', fallback=Decimal('0.00'))
 
     tarifas_dict = {
         'local': tarifa_local,
@@ -946,7 +1019,7 @@ def calcular_costo_envio_sistema(id_direccion: Optional[int] = None, id_ciudad: 
         }
 
     # Dirección de la sede central configurada
-    cfg_sede = ConfiguracionSistema.objects.filter(clave='direccionLocal').first()
+    cfg_sede = ConfiguracionSistema.objects.filter(clave='direccionLocal').order_by('-id_config').first()
     id_sede = int(cfg_sede.valor) if cfg_sede and cfg_sede.valor and cfg_sede.valor.isdigit() else None
     direccion_sede = Direccion.objects.select_related(
         'id_ciudad__id_provincia'
@@ -994,15 +1067,18 @@ def calcular_costo_envio_sistema(id_direccion: Optional[int] = None, id_ciudad: 
 
 def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
     """
-    Recupera si el usuario cliente posee una venta en estado PENDIENTE con reserva temporal
-    de stock vigente (menos de 30 minutos). Permite retomar la compra o cancelar voluntariamente.
+    Recupera (en modo de solo lectura) si el usuario cliente posee una venta en estado PENDIENTE
+    con reserva temporal de stock vigente (menos de 30 minutos).
+    Utiliza `venta.fecha_hora_creacion` directamente (con fallback a LogSistema solo para
+    registros antiguos sin marca temporal).
     """
     import datetime
+    import logging
     from django.utils import timezone
     from core_app.models import LogSistema
-    from sales_app.services import limpiar_ventas_pendientes_expiradas, crear_preferencia_mercadopago
+    from sales_app.services import crear_preferencia_mercadopago
 
-    limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+    logger = logging.getLogger(__name__)
 
     id_u = getattr(usuario, 'id_usuario', getattr(usuario, 'pk', None))
     venta = Venta.objects.filter(
@@ -1022,33 +1098,39 @@ def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
     if venta.fecha_venta < fecha_hoy:
         return None
 
-    log_creacion = LogSistema.objects.filter(
-        modulo_origen='sales_app',
-        tabla_afectada='venta',
-        id_registro_afectado=str(venta.id_venta),
-        accion="Realizar Compra Virtual (CU-18)"
-    ).first()
-
-    if not log_creacion or not log_creacion.fecha_hora:
-        segundos_transcurridos = 0
-    else:
-        hora_log = log_creacion.fecha_hora
-        if isinstance(hora_log, datetime.datetime):
-            dt_creacion = hora_log
-        elif isinstance(hora_log, datetime.time):
-            dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
-        else:
-            dt_creacion = ahora
+    if getattr(venta, 'fecha_hora_creacion', None):
+        dt_creacion = venta.fecha_hora_creacion
         if timezone.is_naive(dt_creacion):
             dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
         segundos_transcurridos = (ahora - dt_creacion).total_seconds()
+    else:
+        log_creacion = LogSistema.objects.filter(
+            modulo_origen='sales_app',
+            tabla_afectada='venta',
+            id_registro_afectado=str(venta.id_venta),
+            accion="Realizar Compra Virtual (CU-18)"
+        ).first()
 
-    minutos_limite = 30
+        if not log_creacion or not log_creacion.fecha_hora:
+            segundos_transcurridos = 0
+        else:
+            hora_log = log_creacion.fecha_hora
+            if isinstance(hora_log, datetime.datetime):
+                dt_creacion = hora_log
+            elif isinstance(hora_log, datetime.time):
+                dt_creacion = datetime.datetime.combine(venta.fecha_venta, hora_log)
+            else:
+                dt_creacion = ahora
+            if timezone.is_naive(dt_creacion):
+                dt_creacion = timezone.make_aware(dt_creacion, timezone.get_current_timezone())
+            segundos_transcurridos = (ahora - dt_creacion).total_seconds()
+
+    from core_app.selectors import obtener_minutos_reserva_venta_pendiente
+    minutos_limite = obtener_minutos_reserva_venta_pendiente()
     total_segundos = minutos_limite * 60
     segundos_restantes = max(0, int(total_segundos - segundos_transcurridos))
 
     if segundos_restantes <= 0:
-        limpiar_ventas_pendientes_expiradas(minutos_limite=30)
         return None
 
     # Obtener o recrear link de pago Mercado Pago si es necesario
@@ -1058,8 +1140,8 @@ def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
         pref = crear_preferencia_mercadopago(venta=venta, usuario=usuario)
         url_pago = pref.get('init_point') or pref.get('sandbox_init_point')
         pref_id = pref.get('preference_id')
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[Venta Pendiente Activa] No se pudo obtener preferencia MP para Venta #%s: %s", venta.id_venta, exc)
 
     detalles = []
     for d in venta.detalleventa_set.all():
@@ -1084,6 +1166,7 @@ def obtener_venta_pendiente_activa(usuario) -> Optional[dict]:
         'costo_envio': costo_envio,
         'total': total_final,
         'segundos_restantes': segundos_restantes,
+        'expira_en': segundos_restantes,
         'preference_id': pref_id,
         'init_point': url_pago,
         'detalles': detalles
@@ -1187,16 +1270,8 @@ def obtener_beneficios_activos_cliente(id_usuario: int) -> list:
     ).order_by('-fecha', '-id_beneficio')
 
     activos = []
-    hoy = timezone.now().date()
     for b in beneficios:
-        if b.motivo and '[REVOCADO]' in b.motivo:
-            continue
-        if b.tiempo_disp is not None and b.tiempo_disp <= Decimal('0.00'):
-            continue
-        if not b.fecha or b.tiempo_disp is None:
-            continue
-        dias = math.ceil(float(b.tiempo_disp) / 24.0)
-        if hoy <= b.fecha + datetime.timedelta(days=dias):
+        if b.estado == 'ACTIVO':
             activos.append(b)
     return activos
 
@@ -1299,3 +1374,15 @@ def obtener_metricas_motor_beneficios() -> dict:
         'total_caducados': caducados,
         'tasa_conversion_porcentaje': tasa_conversion
     }
+
+
+def obtener_items_carrito_activo_usuario(usuario) -> list:
+    """Recupera los renglones del carrito activo del usuario con su producto precargado."""
+    from sales_app.models import CarritoCompra, CarritoProducto
+    carrito = CarritoCompra.objects.filter(
+        id_usuario=usuario,
+        estado__iexact='activo'
+    ).first()
+    if not carrito:
+        return []
+    return list(CarritoProducto.objects.filter(id_carrito=carrito).select_related('id_producto'))

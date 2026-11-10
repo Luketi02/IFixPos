@@ -8,8 +8,7 @@ import AdminHeader from '../../components/navigation/AdminHeader';
 import AuditarBeneficioModal from '../../components/sales/AuditarBeneficioModal';
 import RevocarBeneficioModal from '../../components/sales/RevocarBeneficioModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminBenefitsScreen() {
   const { token } = useAuth();
   const navigate = useNavigate();

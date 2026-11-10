@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function RecepcionarDispositivo({ onAlerta }) {
   const { token } = useAuth();
 
@@ -20,6 +19,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
   const [reparacionSeleccionada, setReparacionSeleccionada] = useState(null);
   const [categoriasDisponibles, setCategoriasDisponibles] = useState([]);
   const [cargandoCategorias, setCategoriasCargando] = useState(false);
+  const [fotosRespaldo, setFotosRespaldo] = useState([]); // [{ id, base64, preview, descripcion }]
 
   const [formDatos, setFormDatos] = useState({
     descripcion_problema: '',
@@ -94,7 +94,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
     return categoriasDisponibles.filter((c) => (c.nombre || '').toLowerCase().includes(q));
   }, [categoriasDisponibles, busquedaCategoria]);
 
-  // 2. Búsqueda de Reparaciones en 'ESPERANDO_DISPOSITIVO'
+  // 2. Búsqueda de Reparaciones en 'ESPERANDO_DISPOSITIVO' (Optimizada con endpoint unificado 'q')
   const buscarReparaciones = useCallback(
     async (queryManual = null) => {
       setCargandoBusqueda(true);
@@ -104,53 +104,18 @@ export default function RecepcionarDispositivo({ onAlerta }) {
 
       try {
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
-
-        let lista = [];
-
-        if (!queryLimpia) {
-          // Búsqueda general de todas las órdenes en espera de entrega física
-          const res = await axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
-            params: { etapa: 'ESPERANDO_DISPOSITIVO' },
-            headers
-          });
-          lista = Array.isArray(res.data) ? res.data : [];
-        } else {
-          // Búsqueda combinada: Por cliente (DNI, Email, Nombre) y por Código de Seguridad
-          const [resCliente, resCodigo] = await Promise.allSettled([
-            axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
-              params: { etapa: 'ESPERANDO_DISPOSITIVO', cliente_query: queryLimpia },
-              headers
-            }),
-            axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
-              params: { etapa: 'ESPERANDO_DISPOSITIVO', codigo_seguridad: queryLimpia },
-              headers
-            })
-          ]);
-
-          const listaCliente = resCliente.status === 'fulfilled' && Array.isArray(resCliente.value.data)
-            ? resCliente.value.data
-            : [];
-          const listaCodigo = resCodigo.status === 'fulfilled' && Array.isArray(resCodigo.value.data)
-            ? resCodigo.value.data
-            : [];
-
-          // Unificar resultados eliminando duplicados por id_reparacion
-          const mapa = new Map();
-          [...listaCliente, ...listaCodigo].forEach((rep) => {
-            if (rep && rep.id_reparacion) {
-              mapa.set(rep.id_reparacion, rep);
-            }
-          });
-          lista = Array.from(mapa.values());
+        const params = { etapa: 'ESPERANDO_DISPOSITIVO' };
+        if (queryLimpia) {
+          params.q = queryLimpia;
         }
 
-        // Filtro estricto en UI: solo mostrar reparaciones en 'ESPERANDO_DISPOSITIVO'
-        const soloEsperando = lista.filter((rep) => {
-          const etapa = (rep.etapa || '').toUpperCase().trim();
-          return etapa === 'ESPERANDO_DISPOSITIVO';
+        const res = await axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
+          params,
+          headers
         });
 
-        setReparacionesPendientes(soloEsperando);
+        const lista = Array.isArray(res.data) ? res.data : [];
+        setReparacionesPendientes(lista);
       } catch (err) {
         console.error('Error al consultar reparaciones pendientes:', err);
         dispararMensaje('error', 'Ocurrió un error al consultar las órdenes pendientes de recepción.');
@@ -179,6 +144,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
       ? rep.categorias.map((c) => (typeof c === 'object' ? c.id_categoria : c))
       : [];
 
+    setFotosRespaldo([]);
     setFormDatos({
       descripcion_problema: desc,
       credencial_acceso: credencial,
@@ -195,6 +161,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
     setReparacionSeleccionada(null);
     setBusquedaCategoria('');
     setDropdownAbierto(false);
+    setFotosRespaldo([]);
     setFormDatos({
       descripcion_problema: '',
       credencial_acceso: '',
@@ -218,6 +185,41 @@ export default function RecepcionarDispositivo({ onAlerta }) {
         ids_categorias: [...prev.ids_categorias, idCat]
       };
     });
+  };
+
+  // Manejo de fotografías de respaldo físico (golpes / rayones)
+  const handleArchivosFotos = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    files.forEach((file) => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = event.target.result;
+        setFotosRespaldo((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            base64,
+            preview: base64,
+            descripcion: ''
+          }
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const handleEliminarFoto = (idFoto) => {
+    setFotosRespaldo((prev) => prev.filter((f) => f.id !== idFoto));
+  };
+
+  const handleDescripcionFoto = (idFoto, descripcion) => {
+    setFotosRespaldo((prev) =>
+      prev.map((f) => (f.id === idFoto ? { ...f, descripcion } : f))
+    );
   };
 
   // 6. Validación de Envío
@@ -256,7 +258,11 @@ export default function RecepcionarDispositivo({ onAlerta }) {
         descripcion_problema: formDatos.descripcion_problema.trim(),
         credencial_acceso: (formDatos.credencial_acceso || '').trim() || 'Ninguna',
         ids_categorias: formDatos.ids_categorias,
-        observaciones_fisicas: obsFisicas
+        observaciones_fisicas: obsFisicas,
+        imagenes: fotosRespaldo.map((f) => ({
+          imagen: f.base64,
+          descripcion: (f.descripcion || '').trim() || 'Constatación visual en mostrador'
+        }))
       };
 
       const res = await axios.post(
@@ -477,6 +483,23 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                   </p>
                 </div>
               </div>
+
+              {/* Impresión de Términos y Condiciones (plantilla simple) */}
+              <button
+                type="button"
+                onClick={() => {
+                  const cli = ticketExito.cliente?.nombre_completo || ticketExito.cliente?.email || 'Cliente';
+                  const dni = ticketExito.cliente?.dni || 'Sin registrar';
+                  const eq = `${ticketExito.dispositivo?.marca || ''} ${ticketExito.dispositivo?.modelo || ''}`.trim();
+                  const w = window.open('', '_blank', 'width=800,height=900');
+                  if (!w) return;
+                  w.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Términos y Condiciones - IFixPos</title><style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.6;color:#0f172a}h1{border-bottom:3px solid #06b6d4;padding-bottom:8px}.box{border:1px solid #cbd5e1;border-left:5px solid #06b6d4;padding:16px;background:#f8fafc;margin:20px 0}.firma{margin-top:80px;border-top:1px solid #64748b;width:260px;text-align:center;padding-top:6px;font-size:12px}</style></head><body><h1>IFixPos - Términos y Condiciones de Recepción</h1><div class="box">El cliente <strong>${cli}</strong> con DNI <strong>${dni}</strong> acepta que entrega el dispositivo <strong>${eq}</strong> para su diagnóstico y reparación, que el estado físico declarado y fotografiado en recepción es el vigente, y que conoce y acepta los términos y condiciones del servicio técnico de IFixPos.</div><p>Fecha de ingreso: ${ticketExito.fecha_recepcion || ''} ${ticketExito.hora_recepcion || ''}</p><div class="firma">Firma del cliente</div><script>window.onload=function(){window.print();}</script></body></html>`);
+                  w.document.close();
+                }}
+                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/40 font-semibold text-xs transition-all"
+              >
+                🖨️ Imprimir Términos y Condiciones
+              </button>
 
               {/* Botón para volver a la Fase 1 */}
               <div className="pt-2 w-full sm:w-auto">
@@ -997,6 +1020,74 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                     </span>
                     <span>{formDatos.observaciones_fisicas.trim().length} caracteres</span>
                   </div>
+                </div>
+
+                {/* 5. RESPALDO FOTOGRÁFICO DE GOLPES Y RAYONES */}
+                <div className="bg-slate-900/60 border border-slate-700/80 rounded-xl p-4 sm:p-5 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <label className="text-xs font-mono font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>📸</span>
+                      <span>Respaldo Fotográfico de Averías y Estado Físico (Múltiples Fotos)</span>
+                    </label>
+                    <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-500/30 px-2 py-0.5 rounded">
+                      {fotosRespaldo.length} foto(s) cargada(s)
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Sube fotografías de los detalles y averías preexistentes (pantalla trizada, esquinas marcadas, rayones) como respaldo legal e inmutable de la recepción.
+                  </p>
+
+                  <div className="flex items-center gap-3 pt-1">
+                    <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 text-xs font-bold border border-cyan-500/40 transition-all hover:scale-[1.02] active:scale-[0.98]">
+                      <span>📷</span>
+                      <span>Seleccionar Fotografías</span>
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={handleArchivosFotos}
+                        className="hidden"
+                      />
+                    </label>
+                    <span className="text-[11px] text-slate-500">Formatos: JPG, PNG, WEBP</span>
+                  </div>
+
+                  {/* Grilla de Miniaturas */}
+                  {fotosRespaldo.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-3 border-t border-slate-800">
+                      {fotosRespaldo.map((f, idx) => (
+                        <div
+                          key={f.id}
+                          className="relative bg-[#0F172A] border border-slate-700/80 rounded-xl overflow-hidden p-2.5 space-y-2 group"
+                        >
+                          <div className="relative h-32 w-full rounded-lg overflow-hidden bg-slate-950">
+                            <img
+                              src={f.preview}
+                              alt={`Respaldo ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleEliminarFoto(f.id)}
+                              className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-rose-600/90 hover:bg-rose-500 text-white flex items-center justify-center text-xs shadow-md transition-all cursor-pointer"
+                              title="Eliminar foto"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Descripción (ej. Rayón bisel izq.)..."
+                            value={f.descripcion}
+                            onChange={(e) => handleDescripcionFoto(f.id, e.target.value)}
+                            maxLength={120}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Botones de Acción */}

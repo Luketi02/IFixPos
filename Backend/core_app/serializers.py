@@ -32,6 +32,7 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'backupRetencionCopias',
             'frecuenciaGeneracionOC_dias',
             'diasEsperaCotizacion',
+            'diasValidezCotizacion',
             'pesoEvaluacion_Confiabilidad',
             'pesoEvaluacion_Tiempo',
             'pesoEvaluacion_Nivel',
@@ -47,6 +48,15 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'pesoAsignacion_Rapidez',
             'pesoAsignacion_Especialidad',
             'pesoAsignacion_Efectividad',
+            'diasGarantiaReparacion',
+            'diasLimiteRetiroEquipo',
+            'minutosReservaVentaPendiente',
+            'longitudCodigoSeguridad',
+            'minutosExpiracionPreferenciaMP',
+            'minutosVidaAccessToken',
+            'minutosVidaOtpRecuperacion',
+            'minutosVidaOtpAdmin',
+            'limiteResultadosBusquedaGeo',
         }
 
         # Campos que requieren casteo numérico decimal / float
@@ -59,11 +69,17 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             'porcentajeDescuentoMaximo',
             'vigenciaBeneficioDefecto',
             'costoManoDeObra',
+            'costo_diagnostico_base',
+            'costoDiagnosticoBase',
         }
 
         # Campos booleanos que se almacenan como 'True' / 'False' en la BD
         CAMPOS_BOOLEANOS = {
             'backupAutomatico',
+            'backupDiarioActivo',
+            'backupSemanalActivo',
+            'backupQuincenalActivo',
+            'backupMensualActivo',
             'autoAbastecimientoActivo',
             'log_seguridad_accesos',
             'log_caja_anulaciones',
@@ -144,14 +160,36 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                 })
             attrs['modoDisparadorAbastecimiento'] = val_modo
 
-        # 4. Suma 100% del Algoritmo de Abastecimiento y Compras (con soporte de criterio obligatorio de envío)
+        # 4. Suma 100% del Algoritmo de Abastecimiento y Compras (una sola consulta para valores previos)
+        claves_a_verificar = [
+            'pesoEvaluacion_Confiabilidad',
+            'pesoEvaluacion_Tiempo',
+            'pesoEvaluacion_Nivel',
+            'pesoEvaluacion_Economico',
+            'pesoEvaluacion_Envio',
+            'criterioObligatorio_Envio'
+        ]
+        pesos_tecnicos_claves = [
+            'pesoAsignacion_CargaLaboral',
+            'pesoAsignacion_Calificacion',
+            'pesoAsignacion_Rapidez',
+            'pesoAsignacion_Especialidad',
+            'pesoAsignacion_Efectividad',
+        ]
+        mapa_configs_bd = {
+            c.clave: c.valor
+            for c in ConfiguracionSistema.objects.filter(
+                clave__in=claves_a_verificar + pesos_tecnicos_claves
+            )
+        }
+
         envio_obligatorio = False
         if 'criterioObligatorio_Envio' in attrs:
             envio_obligatorio = str(attrs['criterioObligatorio_Envio']).strip().lower() in ('true', '1')
         else:
-            cfg_envio = ConfiguracionSistema.objects.filter(clave='criterioObligatorio_Envio').first()
-            if cfg_envio and cfg_envio.valor:
-                envio_obligatorio = str(cfg_envio.valor).strip().lower() in ('true', '1')
+            val_envio_bd = mapa_configs_bd.get('criterioObligatorio_Envio')
+            if val_envio_bd:
+                envio_obligatorio = str(val_envio_bd).strip().lower() in ('true', '1')
 
         pesos_claves = [
             'pesoEvaluacion_Confiabilidad',
@@ -163,15 +201,6 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
             pesos_claves.append('pesoEvaluacion_Envio')
         else:
             attrs['pesoEvaluacion_Envio'] = '0'
-
-        claves_a_verificar = [
-            'pesoEvaluacion_Confiabilidad',
-            'pesoEvaluacion_Tiempo',
-            'pesoEvaluacion_Nivel',
-            'pesoEvaluacion_Economico',
-            'pesoEvaluacion_Envio',
-            'criterioObligatorio_Envio'
-        ]
 
         tiene_pesos = any(k in attrs for k in claves_a_verificar)
         if tiene_pesos:
@@ -185,9 +214,9 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                             k: f"El peso '{k}' debe ser un número entero válido."
                         })
                 else:
-                    config_bd = ConfiguracionSistema.objects.filter(clave=k).first()
+                    raw_bd = mapa_configs_bd.get(k)
                     try:
-                        val_peso = int(str(config_bd.valor).strip()) if config_bd and config_bd.valor else 0
+                        val_peso = int(str(raw_bd).strip()) if raw_bd else 0
                     except (ValueError, TypeError):
                         val_peso = 0
 
@@ -206,13 +235,6 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                 )
 
         # 5. Suma 100% del Algoritmo de Asignación de Reparaciones a Técnicos
-        pesos_tecnicos_claves = [
-            'pesoAsignacion_CargaLaboral',
-            'pesoAsignacion_Calificacion',
-            'pesoAsignacion_Rapidez',
-            'pesoAsignacion_Especialidad',
-            'pesoAsignacion_Efectividad',
-        ]
         tiene_pesos_tecnicos = any(k in attrs for k in pesos_tecnicos_claves)
         if tiene_pesos_tecnicos:
             suma_pesos_tec = 0
@@ -225,9 +247,9 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                             k: f"El peso '{k}' debe ser un número entero válido."
                         })
                 else:
-                    config_bd = ConfiguracionSistema.objects.filter(clave=k).first()
+                    raw_bd = mapa_configs_bd.get(k)
                     try:
-                        val_peso = int(str(config_bd.valor).strip()) if config_bd and config_bd.valor else 0
+                        val_peso = int(str(raw_bd).strip()) if raw_bd else 0
                     except (ValueError, TypeError):
                         val_peso = 0
 
@@ -243,6 +265,47 @@ class ConfiguracionUpdateInputSerializer(serializers.Serializer):
                     f"La suma de los pesos del Algoritmo de Asignación a Técnicos ({', '.join(pesos_tecnicos_claves)}) "
                     f"DEBE ser exactamente 100%. Suma actual: {suma_pesos_tec}%."
                 )
+
+        # 6. Validaciones de Configuración de Respaldos (Backups)
+        from core_app.constantes import DIAS_SEMANA_VALIDOS, MODALIDADES_BACKUP_VALIDAS
+        import re
+
+        if 'backupModalidad' in attrs and attrs['backupModalidad']:
+            val_mod = str(attrs['backupModalidad']).strip().upper()
+            if val_mod not in MODALIDADES_BACKUP_VALIDAS:
+                raise serializers.ValidationError({
+                    'backupModalidad': f"Modalidad inválida. Opciones permitidas: {', '.join(MODALIDADES_BACKUP_VALIDAS)}."
+                })
+            attrs['backupModalidad'] = val_mod
+
+        if 'backupDiaSemana' in attrs and attrs['backupDiaSemana']:
+            val_dia = str(attrs['backupDiaSemana']).strip().upper()
+            if val_dia not in DIAS_SEMANA_VALIDOS:
+                raise serializers.ValidationError({
+                    'backupDiaSemana': f"Día inválido. Opciones permitidas: {', '.join(DIAS_SEMANA_VALIDOS)}."
+                })
+            attrs['backupDiaSemana'] = val_dia
+
+        regex_hora = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+        campos_horarios = ['backupHoraEjecucion', 'backupHoraSemanal', 'backupHoraQuincenal', 'backupHoraMensual']
+        for campo_hora in campos_horarios:
+            if campo_hora in attrs and attrs[campo_hora]:
+                val_h = str(attrs[campo_hora]).strip()
+                if not regex_hora.match(val_h):
+                    raise serializers.ValidationError({
+                        campo_hora: f"El horario '{campo_hora}' debe tener el formato HH:MM de 24 horas (ej. 03:00)."
+                    })
+                attrs[campo_hora] = val_h
+
+        if 'backupRetencionCopias' in attrs and attrs['backupRetencionCopias'] is not None:
+            try:
+                ret = int(str(attrs['backupRetencionCopias']).strip())
+                if ret < 1 or ret > 100:
+                    raise serializers.ValidationError({
+                        'backupRetencionCopias': "La cantidad máxima de copias a conservar debe estar entre 1 y 100."
+                    })
+            except (ValueError, TypeError):
+                pass
 
         return attrs
 
@@ -423,6 +486,8 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
     tamano_mb = serializers.SerializerMethodField()
     tamano_formateado = serializers.SerializerMethodField()
     archivo_existe = serializers.SerializerMethodField()
+    categoria_backup = serializers.SerializerMethodField()
+    carpeta_relativa = serializers.SerializerMethodField()
 
     def get_hora_creacion(self, obj):
         import os
@@ -483,6 +548,31 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
     def get_archivo_existe(self, obj):
         import os
         return bool(obj.ubicacion_archivo and os.path.exists(obj.ubicacion_archivo))
+
+    def get_categoria_backup(self, obj):
+        ruta = (obj.ubicacion_archivo or '').replace('\\', '/').lower()
+        if '/diarios/' in ruta or 'diario' in ruta:
+            return 'DIARIO'
+        if '/semanales/' in ruta or 'semanal' in ruta:
+            return 'SEMANAL'
+        if '/quincenales/' in ruta or 'quincenal' in ruta:
+            return 'QUINCENAL'
+        if '/mensuales/' in ruta or 'mensual' in ruta:
+            return 'MENSUAL'
+        if '/manuales/' in ruta or 'manual' in ruta:
+            return 'MANUAL'
+        return 'DIARIO' if obj.automatico else 'MANUAL'
+
+    def get_carpeta_relativa(self, obj):
+        import os
+        from django.conf import settings
+        if not obj.ubicacion_archivo:
+            return "N/D"
+        try:
+            rel = os.path.relpath(obj.ubicacion_archivo, settings.BASE_DIR)
+            return rel.replace('\\', '/')
+        except Exception:
+            return obj.ubicacion_archivo
 
 
 class RestaurarBackupInputSerializer(serializers.Serializer):

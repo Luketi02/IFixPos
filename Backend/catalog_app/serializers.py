@@ -858,11 +858,13 @@ class ProductoDetailOutputSerializer(serializers.Serializer):
 
     def get_categorias(self, obj):
         if hasattr(obj, 'categorias_detalle'):
-            detalles = obj.categorias_detalle.select_related('id_categoria').all()
-            if detalles.exists():
+            detalles = list(obj.categorias_detalle.all())
+            if detalles:
                 return [{'id_categoria': d.id_categoria_id, 'nombre': d.id_categoria.nombre} for d in detalles]
-        if hasattr(obj, 'categorias') and obj.categorias.exists():
-            return [{'id_categoria': c.id_categoria, 'nombre': c.nombre} for c in obj.categorias.all()]
+        if hasattr(obj, 'categorias'):
+            cats = list(obj.categorias.all())
+            if cats:
+                return [{'id_categoria': c.id_categoria, 'nombre': c.nombre} for c in cats]
         if getattr(obj, 'id_categoria', None):
             return [{'id_categoria': obj.id_categoria.id_categoria, 'nombre': obj.id_categoria.nombre}]
         return []
@@ -877,8 +879,12 @@ class ProductoDetailOutputSerializer(serializers.Serializer):
         return []
 
     def get_stock_minimo(self, obj):
-        if hasattr(obj, 'stock_minimo_calculado'):
+        if hasattr(obj, 'stock_minimo_calculado') and obj.stock_minimo_calculado is not None:
             return obj.stock_minimo_calculado
+        cache_pref = getattr(obj, '_prefetched_objects_cache', None) or {}
+        if 'stock_set' in cache_pref:
+            stocks = cache_pref['stock_set']
+            return stocks[0].stock_minimo if stocks else 0
         from inventory_app.models import Stock
         stock = Stock.objects.filter(id_producto=obj).first()
         return stock.stock_minimo if stock else 0

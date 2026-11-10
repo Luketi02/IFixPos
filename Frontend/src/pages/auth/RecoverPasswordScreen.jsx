@@ -3,9 +3,10 @@ import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReCAPTCHA from 'react-google-recaptcha';
+import { obtenerRecaptchaSiteKey } from '../../config/recaptcha';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
+import { API_BASE_URL } from '../../config/api';
+const RECAPTCHA_SITE_KEY = obtenerRecaptchaSiteKey();
 
 /**
  * Componente EyeIcon para alternar visibilidad de contraseña

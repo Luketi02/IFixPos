@@ -10,8 +10,7 @@ import ModificarProductoModal from '../../components/inventory/ModificarProducto
 import { formatearMoneda } from '../../utils/productImages';
 
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminInventoryScreen() {
   const { token } = useAuth();
 

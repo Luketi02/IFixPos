@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../../config/api';
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReCAPTCHA from 'react-google-recaptcha';
@@ -5,6 +6,7 @@ import { GoogleLogin } from '@react-oauth/google';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import OtpVerificationModal from './OtpVerificationModal';
+import { obtenerRecaptchaSiteKey } from '../../config/recaptcha';
 
 // Icono del ojito declarado fuera del render para evitar recreaciones
 const EyeIcon = ({ show, toggle, disabled }) => (
@@ -155,7 +157,6 @@ const RegisterScreen = () => {
         captcha_token: captchaToken
       };
 
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
       const response = await axios.post(`${API_BASE_URL}/api/auth/registro/publico/`, payload);
 
       console.log('Registro exitoso:', response.data);
@@ -186,7 +187,8 @@ const RegisterScreen = () => {
     }
   };
 
-  const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
+  // Clave de Google ReCAPTCHA v2 centralizada (Fase 1 - F2)
+  const recaptchaSiteKey = obtenerRecaptchaSiteKey();
 
   return (
     <motion.div 

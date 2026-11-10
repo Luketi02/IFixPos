@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCodeSVG } from '../../components/common/CodigoQRDiferido';
 import useAuth from '../../context/useAuth';
 import { normalizeRole } from '../../utils/roleRoutes';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import { obtenerImagenProducto } from '../../utils/productImages';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function VentaPresencialScreen() {
   const { user, token } = useAuth();
   const effectiveRole = normalizeRole(user?.rol);
@@ -830,6 +829,8 @@ export default function VentaPresencialScreen() {
   };
 
   const handleSimularPagoQR = async () => {
+    // Protección estricta: simulación solo permitida en desarrollo local (Fase 1 - F1)
+    if (!import.meta.env.DEV) return;
     if (!ventaConfirmada?.id_venta) return;
     setVerificandoAcreditacionQR(true);
     try {
@@ -1780,14 +1781,16 @@ export default function VentaPresencialScreen() {
                         >
                           <span>← Cambiar Medio de Pago</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={handleSimularPagoQR}
-                          disabled={verificandoAcreditacionQR}
-                          className="text-[11px] text-slate-500 hover:text-cyan-400 underline font-mono transition-colors"
-                        >
-                          [Modo Pruebas] Simular Pago QR
-                        </button>
+                        {import.meta.env.DEV && (
+                          <button
+                            type="button"
+                            onClick={handleSimularPagoQR}
+                            disabled={verificandoAcreditacionQR}
+                            className="text-[11px] text-slate-500 hover:text-cyan-400 underline font-mono transition-colors"
+                          >
+                            [Modo Pruebas] Simular Pago QR
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : (

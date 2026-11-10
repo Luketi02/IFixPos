@@ -1,17 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import EditUserModal from '../../components/users/EditUserModal';
+import Paginacion from '../../components/common/Paginacion';
+import { EsqueletoTabla } from '../../components/common/EsqueletoCarga';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminUsersScreen() {
   const { token } = useAuth();
   // Estados de Datos
   const [usuarios, setUsuarios] = useState([]);
+  const [paginaActual, setPaginaActual] = useState(1);
+  const TAMANO_PAGINA = 20;
   const [roles, setRoles] = useState([]);
   const [paises, setPaises] = useState([]);
   const [provincias, setProvincias] = useState([]);
@@ -164,7 +167,9 @@ export default function AdminUsersScreen() {
           params: queryParams,
           headers: { Authorization: `Bearer ${token}` }
         });
-        setUsuarios(Array.isArray(res.data) ? res.data : []);
+        const lista = Array.isArray(res.data) ? res.data : res.data?.results || [];
+        setUsuarios(lista);
+        setPaginaActual(1);
       } catch (err) {
         const data = err.response?.data;
         let msg = 'No se pudo obtener el directorio de usuarios. Verifique los filtros aplicados.';
@@ -182,10 +187,13 @@ export default function AdminUsersScreen() {
     [token, filtroDni, filtroEmail, filtroRol, filtroEstado, filtroPais, filtroProvincia, filtroCiudad]
   );
 
+  const consultarUsuariosRef = useRef(consultarUsuarios);
+  consultarUsuariosRef.current = consultarUsuarios;
+
   // Carga inicial
   useEffect(() => {
     if (!token) return;
-    consultarUsuarios({
+    consultarUsuariosRef.current({
       dni: '',
       email: '',
       id_rol: '',
@@ -194,7 +202,6 @@ export default function AdminUsersScreen() {
       id_provincia: '',
       id_ciudad: ''
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const handleAplicarFiltros = (e) => {
@@ -506,9 +513,8 @@ export default function AdminUsersScreen() {
           {/* Tabla de Resultados */}
           <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl shadow-xl overflow-hidden">
             {cargando ? (
-              <div className="p-12 text-center space-y-3">
-                <div className="w-10 h-10 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-sm text-slate-400">Consultando directorio de usuarios...</p>
+              <div className="p-4">
+                <EsqueletoTabla filas={6} columnas={7} />
               </div>
             ) : usuarios.length === 0 ? (
               <div className="p-12 text-center space-y-3">
@@ -544,7 +550,9 @@ export default function AdminUsersScreen() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-sm">
-                    {usuarios.map((u) => {
+                    {usuarios
+                      .slice((paginaActual - 1) * TAMANO_PAGINA, paginaActual * TAMANO_PAGINA)
+                      .map((u) => {
                       const nombreCompleto =
                         [u.perfil?.nombre, u.perfil?.apellido].filter(Boolean).join(' ') ||
                         'Sin nombre registrado';
@@ -652,6 +660,15 @@ export default function AdminUsersScreen() {
                     })}
                   </tbody>
                 </table>
+                <div className="px-5 pb-4">
+                  <Paginacion
+                    paginaActual={paginaActual}
+                    totalPaginas={Math.ceil(usuarios.length / TAMANO_PAGINA)}
+                    totalRegistros={usuarios.length}
+                    tamanoPagina={TAMANO_PAGINA}
+                    onCambiarPagina={setPaginaActual}
+                  />
+                </div>
               </div>
             )}
           </div>

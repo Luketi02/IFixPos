@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 /**
  * Modal Cyber-Tech para Calificar el Servicio Técnico (CU-19).
  * Permite al cliente otorgar una valoración obligatoria de 1 a 5 estrellas

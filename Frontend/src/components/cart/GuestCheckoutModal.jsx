@@ -3,9 +3,10 @@ import PropTypes from 'prop-types';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatearMoneda } from '../../utils/productImages';
+import { obtenerCatalogoCacheado } from '../../utils/cacheCatalogos';
+import { procesarMediosPagoActivos, TIPOS_MODAL_PAGO } from '../../utils/mediosPago';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function GuestCheckoutModal({
   isOpen,
   onClose,
@@ -80,12 +81,15 @@ export default function GuestCheckoutModal({
         }
       }
 
-      // Cargar Medios de Pago registrados y habilitados en el sistema
+      // Cargar Medios de Pago registrados y habilitados en el sistema (con caché y filtrado activo)
       if (mediosPago.length === 0) {
         setIsLoadingMedios(true);
         try {
-          const resMedios = await axios.get(`${API_BASE_URL}/api/sales/medios-pago/`);
-          const listaMedios = Array.isArray(resMedios.data) ? resMedios.data : (resMedios.data?.results || []);
+          const resMedios = await obtenerCatalogoCacheado(
+            'sales:medios-pago',
+            '/api/sales/medios-pago/'
+          );
+          const listaMedios = Array.isArray(resMedios) ? resMedios : (resMedios?.results || []);
           const activos = listaMedios.filter((m) => Boolean(m.estado));
           setMediosPago(activos);
           if (activos.length > 0) {
@@ -222,24 +226,47 @@ export default function GuestCheckoutModal({
     ));
   }, [ciudades]);
 
+  const mediosPagoProcesados = useMemo(() => {
+    return procesarMediosPagoActivos(mediosPago, { metodoEntrega });
+  }, [mediosPago, metodoEntrega]);
+
+  // Si el usuario cambia a ENVIO y tenía seleccionado EFECTIVO, reajustar automáticamente al primer medio compatible
+  useEffect(() => {
+    if (mediosPagoProcesados.length === 0) return;
+    const medioActual = mediosPagoProcesados.find((m) => m.id_mediopago === idMedioPago);
+    if (!medioActual || medioActual.deshabilitado) {
+      const primeroHabilitado = mediosPagoProcesados.find((m) => !m.deshabilitado);
+      if (primeroHabilitado) {
+        setIdMedioPago(primeroHabilitado.id_mediopago);
+      }
+    }
+  }, [mediosPagoProcesados, idMedioPago]);
+
   const listaMediosPagoRender = useMemo(() => {
-    return mediosPago.map((m) => {
+    return mediosPagoProcesados.map((m) => {
       const nombre = m.nombre_medio_pago || m.nombre || 'Medio de Pago';
-      const esMP = nombre.toLowerCase().includes('mercado') || nombre.toLowerCase().includes('mp');
-      const esEfectivo = nombre.toLowerCase().includes('efectivo');
-      const esTarjeta = nombre.toLowerCase().includes('tarjeta');
+      const esMP = m.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO;
+      const esEfectivo = m.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO;
+      const esTarjeta = m.tipoModal === TIPOS_MODAL_PAGO.TARJETA;
       const recargo = parseFloat(m.recargo || 0);
       const isSelected = idMedioPago === m.id_mediopago;
+      const deshabilitado = Boolean(m.deshabilitado);
 
       return (
         <button
           key={m.id_mediopago}
           type="button"
-          onClick={() => setIdMedioPago(m.id_mediopago)}
+          disabled={deshabilitado}
+          onClick={() => {
+            if (!deshabilitado) setIdMedioPago(m.id_mediopago);
+          }}
+          title={deshabilitado ? m.motivoDeshabilitado : nombre}
           className={`p-3 rounded-xl border text-left text-xs font-semibold flex items-center justify-between transition-colors ${
-            isSelected
-              ? 'bg-[#06B6D4]/10 border-cyan-400 text-white shadow-[0_0_12px_rgba(6,182,212,0.2)]'
-              : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600'
+            deshabilitado
+              ? 'bg-slate-900/30 border-slate-800 text-slate-500 opacity-50 cursor-not-allowed'
+              : isSelected
+              ? 'bg-[#06B6D4]/10 border-cyan-400 text-white shadow-[0_0_12px_rgba(6,182,212,0.2)] cursor-pointer'
+              : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600 cursor-pointer'
           }`}
         >
           <div className="space-y-0.5">
@@ -248,12 +275,21 @@ export default function GuestCheckoutModal({
                 {esMP ? '💳' : esEfectivo ? '💵' : esTarjeta ? '💳' : '🏦'}
               </span>
               <span>{nombre}</span>
+              {m.etiquetaBadge && (
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-cyan-300 border border-slate-700 font-mono uppercase">
+                  {m.etiquetaBadge}
+                </span>
+              )}
             </div>
-            {recargo > 0 && (
+            {deshabilitado ? (
+              <span className="text-[10px] text-amber-400 font-mono block">
+                No disponible para envíos a domicilio
+              </span>
+            ) : recargo > 0 ? (
               <span className="text-[10px] text-amber-400 font-mono block">
                 +{recargo}% recargo
               </span>
-            )}
+            ) : null}
           </div>
           {isSelected && (
             <span className="text-cyan-400 font-bold text-sm">✔</span>
@@ -261,7 +297,7 @@ export default function GuestCheckoutModal({
         </button>
       );
     });
-  }, [mediosPago, idMedioPago]);
+  }, [mediosPagoProcesados, idMedioPago]);
 
   // 5. Procesar Compra como Invitado
   const handleSubmitOrden = async (e) => {
@@ -287,6 +323,19 @@ export default function GuestCheckoutModal({
     }
     if (!idMedioPago) {
       setErrorMessage('Debe seleccionar un medio de pago habilitado por la administración.');
+      return;
+    }
+
+    const medioSeleccionado = mediosPagoProcesados.find((m) => m.id_mediopago === idMedioPago);
+    if (!medioSeleccionado) {
+      setErrorMessage('Debe seleccionar un medio de pago habilitado por la administración.');
+      return;
+    }
+    if (medioSeleccionado.deshabilitado) {
+      setErrorMessage(
+        medioSeleccionado.motivoDeshabilitado ||
+        'El medio de pago seleccionado no está disponible para envíos a domicilio.'
+      );
       return;
     }
 

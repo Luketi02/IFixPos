@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
-import { normalizeRole } from '../../utils/roleRoutes';
+import { normalizeRole, ROLES } from '../../utils/roleRoutes';
+import { API_BASE_URL } from '../../config/api';
+import { extraerMensajeError, useMensajeTemporal } from '../../utils/errores';
+import { obtenerCatalogoCacheado, esErrorCancelacion } from '../../utils/cacheCatalogos';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function RegisterDeviceScreen() {
   const navigate = useNavigate();
@@ -18,8 +19,8 @@ export default function RegisterDeviceScreen() {
   useEffect(() => {
     if (user) {
       const rol = normalizeRole(user.role || user.id_rol?.codigo);
-      if (rol && rol !== 'cliente') {
-        navigate(rol === 'admin' ? '/admin/dashboard' : '/tareas-tecnico', { replace: true });
+      if (rol && rol !== ROLES.CLIENTE) {
+        navigate(rol === ROLES.ADMIN ? '/admin/dashboard' : '/tareas-tecnico', { replace: true });
       }
     }
   }, [user, navigate]);
@@ -46,54 +47,48 @@ export default function RegisterDeviceScreen() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Estados de carga y feedback
+  // Estados de carga y feedback (Regla Global 6: 6 segundos para alertas de error)
   const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(true);
   const [isLoadingModelos, setIsLoadingModelos] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useMensajeTemporal();
   const [successMessage, setSuccessMessage] = useState('');
-  const [nuevoDispositivoId, setNuevoDispositivoId] = useState(null);
+  const [resumenEquipoRegistrado, setResumenEquipoRegistrado] = useState('');
 
-  // Auto-ocultamiento de alertas de error a los 15 segundos (Regla de UX)
+  // 1. Carga inicial de catálogos (Tipos de Dispositivo y Marcas con caché y AbortController)
   useEffect(() => {
-    if (errorMessage) {
-      const timer = setTimeout(() => {
-        setErrorMessage('');
-      }, 15000);
-      return () => clearTimeout(timer);
-    }
-  }, [errorMessage]);
-
-  // 1. Carga inicial de catálogos (Tipos de Dispositivo y Marcas)
-  useEffect(() => {
-    let isMounted = true;
+    const controller = new AbortController();
     const cargarCatalogosIniciales = async () => {
       setIsLoadingCatalogs(true);
       try {
-        const [resTipos, resMarcas] = await Promise.all([
-          axios.get(`${API_BASE_URL}/api/workshop/tipos-dispositivos/`),
-          axios.get(`${API_BASE_URL}/api/workshop/marcas/`)
+        const [datosTipos, datosMarcas] = await Promise.all([
+          obtenerCatalogoCacheado('workshop:tipos-dispositivos', '/api/workshop/tipos-dispositivos/', {
+            signal: controller.signal
+          }),
+          obtenerCatalogoCacheado('workshop:marcas', '/api/workshop/marcas/', {
+            signal: controller.signal
+          })
         ]);
 
-        if (isMounted) {
-          setTiposDispositivos(Array.isArray(resTipos.data) ? resTipos.data : []);
-          setMarcas(Array.isArray(resMarcas.data) ? resMarcas.data : []);
+        if (!controller.signal.aborted) {
+          setTiposDispositivos(Array.isArray(datosTipos) ? datosTipos : []);
+          setMarcas(Array.isArray(datosMarcas) ? datosMarcas : []);
         }
       } catch (err) {
-        if (isMounted) {
+        if (!esErrorCancelacion(err)) {
           console.error('Error al cargar catálogos iniciales:', err);
           setErrorMessage('No fue posible cargar el catálogo de equipos del sistema.');
         }
       } finally {
-        if (isMounted) setIsLoadingCatalogs(false);
+        if (!controller.signal.aborted) setIsLoadingCatalogs(false);
       }
     };
 
     cargarCatalogosIniciales();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
-  }, []);
+  }, [setErrorMessage]);
 
   // 2. Cascada: Al cambiar de Marca, cargar los modelos correspondientes
   const handleMarcaChange = async (e) => {
@@ -286,8 +281,23 @@ export default function RegisterDeviceScreen() {
       });
 
       if (res.status === 201 || res.status === 200) {
-        const idGenerado = res.data?.id_dispositivo || res.data?.dispositivo?.id_dispositivo;
-        setNuevoDispositivoId(idGenerado);
+        const nombreMarca =
+          selectedMarcaId === 'OTRO'
+            ? marcaPersonalizada.trim()
+            : marcas.find((m) => String(m.id_marca) === String(selectedMarcaId))?.nombre || '';
+        const nombreModelo =
+          isModoOtro || selectedModeloId === 'OTRO'
+            ? modeloPersonalizado.trim()
+            : modelos.find((m) => String(m.id_modelo) === String(selectedModeloId))?.nombre || '';
+        const serieFinal = numeroSerie.trim();
+        const descripcionEquipo = [
+          [nombreMarca, nombreModelo].filter(Boolean).join(' '),
+          serieFinal ? `N/S: ${serieFinal}` : null
+        ]
+          .filter(Boolean)
+          .join(' • ');
+
+        setResumenEquipoRegistrado(descripcionEquipo);
         setSuccessMessage('¡Dispositivo registrado correctamente en el sistema!');
 
         // Limpiar campos del formulario
@@ -302,11 +312,11 @@ export default function RegisterDeviceScreen() {
       }
     } catch (err) {
       console.error('Error al registrar dispositivo:', err);
-      const backendError = err.response?.data?.error || err.response?.data?.detail;
       setErrorMessage(
-        typeof backendError === 'string'
-          ? backendError
-          : 'Ocurrió un inconveniente al registrar el dispositivo. Por favor verifica los datos.'
+        extraerMensajeError(
+          err,
+          'Ocurrió un inconveniente al registrar el dispositivo. Por favor verifica los datos.'
+        )
       );
     } finally {
       setIsSubmitting(false);
@@ -443,7 +453,16 @@ export default function RegisterDeviceScreen() {
                     <div>
                       <p className="font-bold text-white text-base">{successMessage}</p>
                       <p className="text-xs text-slate-300 mt-0.5">
-                        Identificador único del equipo en taller: <span className="text-cyan-400 font-mono font-bold">#{nuevoDispositivoId}</span>
+                        {resumenEquipoRegistrado ? (
+                          <>
+                            Equipo vinculado a tu cuenta:{' '}
+                            <span className="text-cyan-400 font-mono font-bold">
+                              {resumenEquipoRegistrado}
+                            </span>
+                          </>
+                        ) : (
+                          'Ya puedes gestionar tu equipo y solicitar servicio técnico desde la sección Mis Dispositivos.'
+                        )}
                       </p>
                     </div>
                   </div>
@@ -681,31 +700,6 @@ export default function RegisterDeviceScreen() {
                     </div>
 
                   </div>
-
-                  {/* Panel Informativo Cyber-Tech: Homologación Inteligente (8 Usos) */}
-                  <AnimatePresence>
-                    {isModoOtro && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.2 }}
-                        className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-cyan-200 text-xs flex items-start gap-3 shadow-md shadow-cyan-950/20 backdrop-blur-sm"
-                      >
-                        <div className="w-6 h-6 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                        <div className="flex-1 text-[11px] leading-relaxed text-slate-300">
-                          <strong className="text-cyan-300 font-semibold font-mono uppercase tracking-wide">
-                            Homologación Automática del Sistema:
-                          </strong>{' '}
-                          Tu equipo quedará empadronado de inmediato en tu perfil. Para salvaguardar la calidad del catálogo público, los tipos, marcas y modelos cargados manualmente se conservarán aislados hasta alcanzar <span className="text-cyan-400 font-bold font-mono">8 registros</span> en el taller, momento en el cual el sistema los promoverá de forma automática a la lista oficial para todos los clientes y técnicos.
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </div>
 
                 {/* Sección 2: Número de Serie / IMEI */}

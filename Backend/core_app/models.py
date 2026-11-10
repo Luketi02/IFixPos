@@ -86,6 +86,12 @@ class LogSistema(models.Model):
 
     class Meta:
         db_table = 'log_sistema'
+        indexes = [
+            models.Index(
+                fields=['modulo_origen', 'tabla_afectada', 'id_registro_afectado'],
+                name='idx_log_mod_tabla_reg'
+            ),
+        ]
 
 
 class Notificacion(models.Model):
@@ -135,6 +141,9 @@ class Notificacion(models.Model):
 
     class Meta:
         db_table = 'notificacion'
+        indexes = [
+            models.Index(fields=['id_usuario', 'leida'], name='idx_notif_usuario_leida'),
+        ]
 
 
 class CopiaSeguridad(models.Model):

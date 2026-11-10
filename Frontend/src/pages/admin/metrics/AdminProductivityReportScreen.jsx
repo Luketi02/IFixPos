@@ -7,8 +7,7 @@ import AdminHeader from '../../../components/navigation/AdminHeader';
 import { HorizontalBarChart, DualBarChart } from '../../../components/charts/ReportCharts';
 import { exportarInformePDF } from '../../../utils/reportPrinter';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../../config/api';
 // ==============================================================================
 // UTILIDADES DE FORMATEO MONETARIO Y FECHAS
 // ==============================================================================

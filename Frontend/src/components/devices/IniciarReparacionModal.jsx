@@ -4,33 +4,19 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-/**
- * Extrae un mensaje legible ante distintas respuestas de error de Django REST Framework.
- */
-const extraerMensajeError = (err, porDefecto = 'Ocurrió un error al procesar la solicitud.') => {
-  const data = err?.response?.data;
-  if (!data) return porDefecto;
-  if (typeof data === 'string') return data;
-  if (Array.isArray(data)) return data.map(String).join(' ');
-  if (typeof data.error === 'string') return data.error;
-  if (typeof data.detail === 'string') return data.detail;
-  if (typeof data === 'object') {
-    const valores = Object.entries(data).map(([k, v]) => {
-      const txt = Array.isArray(v) ? v.join(' ') : String(v);
-      return k !== 'non_field_errors' && k !== 'error' ? `${k}: ${txt}` : txt;
-    });
-    return valores.length ? valores.join(' | ') : porDefecto;
-  }
-  return porDefecto;
-};
+import { API_BASE_URL } from '../../config/api';
+import { extraerMensajeError, useMensajeTemporal } from '../../utils/errores';
+import { obtenerCatalogoCacheado, esErrorCancelacion } from '../../utils/cacheCatalogos';
+import { useAccesibilidadModal } from '../../hooks/useAccesibilidadModal';
+import { useMediosPagoActivos } from '../../hooks/useMediosPagoActivos';
+import { TIPOS_MODAL_PAGO } from '../../utils/mediosPago';
+import PaymentMethodModalDispatcher from '../payments/PaymentMethodModalDispatcher';
 
 /**
- * Modal para Iniciar Reparación de un Dispositivo (React + Vite + Tailwind v4).
+ * Modal Inteligente para Iniciar Reparación de un Dispositivo (React + Vite + Tailwind v4).
+ * Cobro de Diagnóstico por Adelantado / Pasarela de Pagos (Mercado Pago QR & Presencial).
  * Estética Cyber-Tech: Fondo #0F172A, Tarjetas #1E293B, Acentos #06B6D4 y #8B5CF6.
- * Flujo wizard: 'FORM' -> 'CONFIRM' -> 'SUCCESS'.
+ * Flujo wizard: 'FORM' -> 'CONFIRM' -> 'QR_PAGO' (si MP) -> 'SUCCESS'.
  */
 export default function IniciarReparacionModal({
   isOpen,
@@ -40,22 +26,46 @@ export default function IniciarReparacionModal({
 }) {
   const { token } = useAuth();
 
-  // Paso del wizard: 'FORM' | 'CONFIRM' | 'SUCCESS'
+  // Paso del wizard: 'FORM' | 'CONFIRM' | 'QR_PAGO' | 'SUCCESS'
   const [paso, setPaso] = useState('FORM');
 
   // Catálogo de categorías disponibles
   const [categorias, setCategorias] = useState([]);
   const [cargandoCategorias, setCargandoCategorias] = useState(false);
 
+  // Parámetro institucional: Costo Base de Diagnóstico desde ConfiguracionSistema (sin importe falso hardcodeado - Fase 3 F5)
+  const [costoDiagnostico, setCostoDiagnostico] = useState(null);
+  const [cargandoCostoDiag, setCargandoCostoDiag] = useState(false);
+
   // Campos del formulario
   const [selectedCategorias, setSelectedCategorias] = useState([]);
   const [descripcion, setDescripcion] = useState('');
   const [credencial, setCredencial] = useState('');
   const [sinCredencial, setSinCredencial] = useState(false);
+  const [aceptoTerminos, setAceptoTerminos] = useState(false);
 
-  // Estados de control
+  // Medios de pago dinámicos desde la base de datos (/api/sales/medios-pago/)
+  const {
+    mediosPago,
+    medioSeleccionado,
+    idMedioSeleccionado,
+    setIdMedioSeleccionado,
+    cargandoMediosPago,
+    errorMediosPago,
+    recargarMediosPago
+  } = useMediosPagoActivos({
+    habilitado: isOpen,
+    metodoEntrega: 'PRESENCIAL',
+    tipoPreferidoInicial: TIPOS_MODAL_PAGO.EFECTIVO
+  });
+
+  // Control del modal reutilizable de pasarela/instrucciones según el medio de pago seleccionado
+  const [modalPagoAbierto, setModalPagoAbierto] = useState(false);
+  const [pagoAcreditadoOnline, setPagoAcreditadoOnline] = useState(false);
+
+  // Estados de control (useMensajeTemporal aplica auto-descarte a los 6 segundos - Regla Global 6)
   const [submitting, setSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useMensajeTemporal();
   const [formTocado, setFormTocado] = useState(false);
   const [copiado, setCopiado] = useState(false);
 
@@ -67,14 +77,7 @@ export default function IniciarReparacionModal({
   // Respuesta de orden exitosa
   const [resultado, setResultado] = useState(null);
 
-  // Auto-ocultamiento de alertas de error a los 15 segundos (Regla Global 6)
-  useEffect(() => {
-    if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 15000);
-    return () => clearTimeout(timer);
-  }, [errorMessage]);
-
-  // Carga de categorías activas al abrir el modal
+  // Carga de categorías y costo base al abrir el modal
   useEffect(() => {
     if (!isOpen) {
       // Reset de estados al cerrarse
@@ -83,6 +86,9 @@ export default function IniciarReparacionModal({
       setDescripcion('');
       setCredencial('');
       setSinCredencial(false);
+      setAceptoTerminos(false);
+      setModalPagoAbierto(false);
+      setPagoAcreditadoOnline(false);
       setSubmitting(false);
       setErrorMessage('');
       setFormTocado(false);
@@ -93,33 +99,61 @@ export default function IniciarReparacionModal({
       return;
     }
 
-    let activo = true;
+    const controller = new AbortController();
     setCargandoCategorias(true);
+    setCargandoCostoDiag(true);
 
-    axios
-      .get(`${API_BASE_URL}/api/workshop/categorias-reparacion/?estado=true`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      .then((res) => {
-        if (!activo) return;
-        const lista = Array.isArray(res.data) ? res.data : [];
-        // Filtrar activas por seguridad adicional en cliente
+    // 1. Obtener categorías activas (con caché en memoria y AbortController - Fase 2 F8)
+    obtenerCatalogoCacheado(
+      'workshop:categorias-reparacion-activas',
+      '/api/workshop/categorias-reparacion/?estado=true',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
+      }
+    )
+      .then((datos) => {
+        const lista = Array.isArray(datos) ? datos : [];
         const activas = lista.filter((c) => c.estado_activo !== false);
         setCategorias(activas);
       })
       .catch((err) => {
-        if (!activo) return;
+        if (esErrorCancelacion(err)) return;
         console.error('Error al cargar categorías de reparación:', err);
         setErrorMessage(
           extraerMensajeError(err, 'No fue posible cargar las categorías de reparación activas.')
         );
       })
       .finally(() => {
-        if (activo) setCargandoCategorias(false);
+        if (!controller.signal.aborted) setCargandoCategorias(false);
+      });
+
+    // 2. Obtener costo de diagnóstico base parametrizable (con caché en memoria)
+    obtenerCatalogoCacheado(
+      'workshop:configuracion-diagnostico',
+      '/api/workshop/configuracion-diagnostico/',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
+      }
+    )
+      .then((datos) => {
+        if (datos?.costo_diagnostico_base !== undefined) {
+          setCostoDiagnostico(Number(datos.costo_diagnostico_base));
+        }
+      })
+      .catch((err) => {
+        if (!esErrorCancelacion(err)) {
+          console.warn('No se pudo obtener el costo oficial de diagnóstico:', err);
+          setCostoDiagnostico(null);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCargandoCostoDiag(false);
       });
 
     return () => {
-      activo = false;
+      controller.abort();
     };
   }, [isOpen, token]);
 
@@ -183,16 +217,33 @@ export default function IniciarReparacionModal({
       return;
     }
 
-    // Todo válido, pasar al paso de confirmación
+    if (!aceptoTerminos) {
+      setErrorMessage('Debes aceptar los términos y condiciones para continuar.');
+      return;
+    }
+
+    if (cargandoCostoDiag || costoDiagnostico === null) {
+      setErrorMessage(
+        'Aguarda a que se cargue la tarifa oficial de diagnóstico del sistema antes de continuar.'
+      );
+      return;
+    }
+
+    // Todo válido, pasar al paso de confirmación y selección de pago
     setErrorMessage('');
     setPaso('CONFIRM');
   };
 
-  // Envío final del servicio al confirmar
+  // Envío final del servicio al confirmar y apertura del modal del medio de pago elegido
   const handleConfirmarReparacion = async () => {
     if (!dispositivo?.id_dispositivo) {
       setErrorMessage('No se encontró el identificador del equipo seleccionado.');
       setPaso('FORM');
+      return;
+    }
+
+    if (!medioSeleccionado) {
+      setErrorMessage('Debes seleccionar un medio de pago habilitado para continuar.');
       return;
     }
 
@@ -204,7 +255,12 @@ export default function IniciarReparacionModal({
         id_dispositivo: dispositivo.id_dispositivo,
         descripcion_problema: descripcion.trim(),
         credencial_acceso: credencial.trim() || 'Ninguna',
-        ids_categorias: selectedCategorias
+        ids_categorias: selectedCategorias,
+        medio_pago: String(
+          medioSeleccionado.id_mediopago ||
+            medioSeleccionado.codigo ||
+            medioSeleccionado.nombre_medio_pago
+        )
       };
 
       const res = await axios.post(
@@ -218,12 +274,12 @@ export default function IniciarReparacionModal({
         }
       );
 
-      // Respuesta exitosa 201 Created
-      setResultado(res.data);
-      setPaso('SUCCESS');
+      const ordenCreada = res.data;
+      setResultado(ordenCreada);
+      // Abrir el modal específico del medio de pago seleccionado (Mercado Pago, Transferencia, Tarjeta o Efectivo)
+      setModalPagoAbierto(true);
     } catch (err) {
       console.error('Error al iniciar la reparación:', err);
-      // En caso de error (400 u otro), volver al paso del formulario y mostrar alerta de error con fade-out
       setPaso('FORM');
       setErrorMessage(
         extraerMensajeError(
@@ -236,6 +292,21 @@ export default function IniciarReparacionModal({
     }
   };
 
+  // Callbacks del modal reutilizable de medio de pago
+  const handlePagoModalConfirmado = (datosPago) => {
+    if (datosPago?.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO) {
+      setResultado((prev) => (prev ? { ...prev, estado_pago: 'PAGADA' } : prev));
+      setPagoAcreditadoOnline(true);
+    }
+    setModalPagoAbierto(false);
+    setPaso('SUCCESS');
+  };
+
+  const handlePagoModalPendiente = () => {
+    setModalPagoAbierto(false);
+    setPaso('SUCCESS');
+  };
+
   // Copiar código de seguridad al portapapeles
   const handleCopiarCodigo = () => {
     if (!resultado?.codigo_seguridad) return;
@@ -244,7 +315,7 @@ export default function IniciarReparacionModal({
     setTimeout(() => setCopiado(false), 2500);
   };
 
-  // Cierre final del modal y notificación al padre
+  // Cierre final del modal y notificación al componente padre
   const handleCerrarFinal = () => {
     const ordenCreada = resultado;
     onClose();
@@ -253,64 +324,87 @@ export default function IniciarReparacionModal({
     }
   };
 
-  // Nombres de categorías seleccionadas para el resumen
-  const categoriasSeleccionadasInfo = useMemo(() => {
-    return categorias.filter((c) => selectedCategorias.includes(c.id_categoria));
-  }, [categorias, selectedCategorias]);
-
-  const descCaracteres = descripcion.trim().length;
-  const descValida = descCaracteres >= 10;
+  const { contenedorRef: modalAccesibilidadRef } = useAccesibilidadModal(
+    isOpen,
+    onClose,
+    submitting
+  );
 
   if (!isOpen) return null;
 
+  // Cálculos reactivos de validación
+  const descCaracteres = descripcion.trim().length;
+  const descValida = descCaracteres >= 10;
+  const categoriasSeleccionadasInfo = categorias.filter((c) =>
+    selectedCategorias.includes(c.id_categoria)
+  );
+
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
-        {/* Backdrop con Blur y Oscuridad Cyber-Tech */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
         <motion.div
-          key="modal-backdrop"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          onClick={() => !submitting && paso !== 'SUCCESS' && onClose()}
-          className="fixed inset-0 bg-slate-950/80 backdrop-blur-md"
-        />
-
-        {/* Contenedor Modal */}
-        <motion.div
-          key={`modal-container-${paso}`}
-          initial={{ opacity: 0, scale: 0.96, y: 16 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.96, y: 16 }}
-          transition={{ duration: 0.25, ease: 'easeOut' }}
+          ref={modalAccesibilidadRef}
           role="dialog"
           aria-modal="true"
-          className="relative w-full max-w-2xl bg-[#1E293B] border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden my-auto z-10"
+          aria-labelledby="modal-iniciar-reparacion-titulo"
+          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 15 }}
+          transition={{ duration: 0.2 }}
+          className="relative w-full max-w-2xl bg-[#1E293B] border border-slate-700/80 rounded-2xl shadow-2xl shadow-cyan-950/50 text-[#F8FAFC] my-8 overflow-hidden font-sans"
         >
-          {/* Alerta de Error flotante (Fade-out a los 6 segundos) */}
+          {/* ============================================================== */}
+          {/* CABECERA DINÁMICA DEL MODAL SEGÚN EL PASO                      */}
+          {/* ============================================================== */}
+          <div className="flex items-center justify-between p-5 border-b border-slate-700/70 bg-[#162032]">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </div>
+              <div>
+                <h3 id="modal-iniciar-reparacion-titulo" className="text-base sm:text-lg font-black text-white tracking-tight">
+                  Iniciar Orden de Reparación
+                </h3>
+                <p className="text-xs text-slate-300 font-medium">
+                  {dispositivo?.marca} {dispositivo?.modelo} • N/S: {dispositivo?.numero_serie || 'S/N'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-50"
+              title="Cerrar modal (Esc)"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* ============================================================== */}
+          {/* ALERTA DE ERROR GLOBAL CON TRANSICIÓN SUAVE (REGLA 6 UX)       */}
+          {/* ============================================================== */}
           <AnimatePresence>
             {errorMessage && (
               <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.25 }}
                 role="alert"
-                className="mx-6 mt-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-3 shadow-lg shadow-rose-950/20"
+                aria-live="assertive"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.25 }}
+                className="mx-6 mt-4 p-3 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5 shadow-lg"
               >
-                <div className="w-5 h-5 rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 font-bold shrink-0 mt-0.5">
-                  !
-                </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-rose-200">Atención al procesar orden</p>
-                  <p className="mt-0.5 text-rose-300/90 leading-relaxed">{errorMessage}</p>
-                </div>
+                <span className="text-base leading-none">⚠️</span>
+                <span className="flex-1 font-medium">{errorMessage}</span>
                 <button
                   type="button"
                   onClick={() => setErrorMessage('')}
-                  aria-label="Cerrar alerta"
-                  className="text-rose-400 hover:text-rose-200 text-sm font-mono shrink-0 transition-colors"
+                  aria-label="Cerrar alerta de error"
+                  className="text-rose-400 hover:text-rose-100 font-bold ml-1"
                 >
                   ✕
                 </button>
@@ -319,209 +413,188 @@ export default function IniciarReparacionModal({
           </AnimatePresence>
 
           {/* ============================================================== */}
-          {/* PASO 1: FORMULARIO ('FORM')                                    */}
+          {/* PASO 1: FORMULARIO TÉCNICO ('FORM')                            */}
           {/* ============================================================== */}
           {paso === 'FORM' && (
-            <div>
-              {/* Cabecera del Modal */}
-              <div className="p-6 border-b border-slate-700/60 flex items-start justify-between gap-4">
+            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+              {/* Tarifa Oficial de Diagnóstico Técnico Destacada */}
+              <div className="bg-gradient-to-r from-cyan-950/60 to-slate-900 border border-cyan-500/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_0_20px_rgba(6,182,212,0.15)]">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[10px] font-mono font-semibold uppercase tracking-wider">
-                      Servicio Técnico
-                    </span>
-                    </div>
-                  <h2 className="text-xl font-black text-[#F8FAFC] tracking-tight mt-1.5">
-                    Iniciar reparación para:{' '}
-                    <span className="text-[#06B6D4]">
-                      {dispositivo?.marca || 'Dispositivo'} {dispositivo?.modelo || ''}
-                    </span>
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Describe la falla y selecciona las áreas afectadas para habilitar el diagnóstico en taller.
+                  <div className="text-xs font-bold text-cyan-300 flex items-center gap-1.5 uppercase tracking-wide">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                    Tarifa Base de Diagnóstico Técnico
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-0.5 max-w-sm">
+                    Se abona una sola vez por cada ciclo de servicio. Cubre la revisión exhaustiva en banco de trabajo y la emisión del presupuesto oficial.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  aria-label="Cerrar modal"
-                  className="w-8 h-8 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center shrink-0"
-                >
-                  ✕
-                </button>
+                <div className="text-left sm:text-right shrink-0 bg-slate-950/70 px-3.5 py-2 rounded-xl border border-cyan-500/30 min-w-[140px]">
+                  {cargandoCostoDiag ? (
+                    <div className="space-y-1.5 py-0.5" aria-busy="true">
+                      <div className="h-5 w-24 bg-slate-800 rounded animate-pulse sm:ml-auto" />
+                      <div className="h-3 w-20 bg-slate-800/70 rounded animate-pulse sm:ml-auto" />
+                    </div>
+                  ) : costoDiagnostico !== null ? (
+                    <>
+                      <span className="text-lg font-black text-white font-mono block">
+                        ${costoDiagnostico.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 font-mono font-bold tracking-wider">
+                        ARS • PAGO ÚNICO
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs font-semibold text-amber-300 font-mono block">
+                      Sincronizando tarifa...
+                    </span>
+                  )}
+                </div>
               </div>
 
-              {/* Formulario */}
-              <form onSubmit={handleAvanzarAConfirmacion} className="p-6 space-y-6 max-h-[72vh] overflow-y-auto">
-                {/* 1. Categorías de Reparación (Multi-select) */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
+              <form onSubmit={handleAvanzarAConfirmacion} className="space-y-5">
+                {/* 1. Selector Multicategoría */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
                     <label className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#06B6D4]" />
-                      Categorías del Problema <span className="text-rose-400">*</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                      Categorías de Falla
                     </label>
-                    <span className="text-[11px] font-mono text-cyan-400">
+                    <span className="text-[11px] font-mono text-cyan-400 font-semibold">
                       {selectedCategorias.length} seleccionada(s)
                     </span>
                   </div>
 
-                  {cargandoCategorias ? (
-                    <div className="h-10 bg-slate-900 rounded-xl border border-slate-800 animate-pulse" />
-                  ) : categorias.length === 0 ? (
-                    <div className="p-3 rounded-xl bg-slate-900 border border-dashed border-slate-700 text-center text-xs text-slate-400">
-                      No hay categorías de reparación activas disponibles en este momento.
-                    </div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {/* Campo buscador con lista desplegable interactiva (Combobox) */}
-                      <div ref={dropdownRef} className="relative">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            placeholder="Escribe para buscar categoría (ej. Pantalla, Batería, Conector)..."
-                            value={busquedaCategoria}
-                            onFocus={() => setDropdownAbierto(true)}
-                            onChange={(e) => {
-                              setBusquedaCategoria(e.target.value);
-                              setDropdownAbierto(true);
-                            }}
-                            className="w-full pl-9 pr-10 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium focus:outline-none focus:border-[#06B6D4] focus:ring-2 focus:ring-[#06B6D4]/30 transition-all duration-200"
-                          />
-                          <span className="absolute left-3 top-2.5 text-slate-400 text-xs">
-                            🔍
+                  <div ref={dropdownRef} className="relative">
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDropdownAbierto((prev) => !prev)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          setDropdownAbierto((prev) => !prev);
+                        }
+                      }}
+                      className={`w-full min-h-[46px] p-2.5 rounded-xl bg-slate-900 border text-xs cursor-pointer flex items-center justify-between gap-2 transition-all ${
+                        dropdownAbierto
+                          ? 'border-[#06B6D4] ring-2 ring-[#06B6D4]/30 shadow-[0_0_15px_rgba(6,182,212,0.25)]'
+                          : 'border-slate-700 hover:border-slate-600'
+                      }`}
+                    >
+                      <div className="flex flex-wrap gap-1.5 flex-1 items-center">
+                        {selectedCategorias.length === 0 ? (
+                          <span className="text-slate-400 text-xs">
+                            {cargandoCategorias
+                              ? 'Cargando categorías activas...'
+                              : 'Selecciona una o más categorías de falla...'}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => setDropdownAbierto(!dropdownAbierto)}
-                            className="absolute right-2.5 top-2 text-cyan-400 hover:text-cyan-300 p-1 text-xs"
-                            title="Desplegar categorías"
-                          >
-                            {dropdownAbierto ? '▲' : '▼'}
-                          </button>
-                        </div>
-
-                        {/* Menú flotante desplegable */}
-                        <AnimatePresence>
-                          {dropdownAbierto && (
-                            <motion.div
-                              initial={{ opacity: 0, y: -6 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -6 }}
-                              transition={{ duration: 0.15 }}
-                              className="absolute z-30 left-0 right-0 mt-1 bg-[#0F172A] border border-cyan-500/40 rounded-xl shadow-2xl shadow-cyan-950/60 max-h-56 overflow-y-auto overflow-x-hidden custom-scrollbar divide-y divide-slate-800/60"
-                            >
-                              {categoriasFiltradas.length === 0 ? (
-                                <div className="p-3 text-center text-xs text-slate-400 italic">
-                                  No se encontraron categorías que coincidan con &ldquo;{busquedaCategoria}&rdquo;.
-                                </div>
-                              ) : (
-                                categoriasFiltradas.map((cat) => {
-                                  const yaSeleccionada = selectedCategorias.includes(cat.id_categoria);
-                                  return (
-                                    <button
-                                      key={cat.id_categoria}
-                                      type="button"
-                                      onClick={() => {
-                                        handleToggleCategoria(cat.id_categoria);
-                                        setErrorMessage('');
-                                      }}
-                                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between transition-colors ${
-                                        yaSeleccionada
-                                          ? 'bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25'
-                                          : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
-                                      }`}
-                                    >
-                                      <span className="font-medium truncate">{cat.nombre}</span>
-                                      {yaSeleccionada ? (
-                                        <span className="text-[10px] font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/40 shrink-0">
-                                          ✓ Agregada
-                                        </span>
-                                      ) : (
-                                        <span className="text-[10px] font-mono text-slate-500 hover:text-cyan-400">
-                                          + Agregar
-                                        </span>
-                                      )}
-                                    </button>
-                                  );
-                                })
-                              )}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-
-                      {/* Chips / Etiquetas de Categorías Seleccionadas */}
-                      {selectedCategorias.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 p-2.5 bg-slate-900/60 border border-slate-800 rounded-xl">
-                          {categoriasSeleccionadasInfo.map((cat) => (
+                        ) : (
+                          categoriasSeleccionadasInfo.map((cat) => (
                             <span
                               key={cat.id_categoria}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500/15 border border-[#06B6D4]/40 text-cyan-200 text-xs font-semibold shadow-sm"
+                              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[11px] font-semibold"
                             >
-                              <span>{cat.nombre}</span>
+                              {cat.nombre}
                               <button
                                 type="button"
-                                onClick={() => handleToggleCategoria(cat.id_categoria)}
-                                className="text-cyan-400 hover:text-white hover:bg-cyan-500/30 rounded-full w-4 h-4 flex items-center justify-center text-[10px] transition-colors cursor-pointer"
-                                title={`Quitar ${cat.nombre}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleCategoria(cat.id_categoria);
+                                }}
+                                className="text-cyan-400 hover:text-white ml-0.5 font-bold"
                               >
-                                ✕
+                                ×
                               </button>
                             </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-[11px] text-slate-400 italic">
-                          Escribe en el campo o abre la lista para seleccionar las categorías aplicables al problema de tu equipo.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                          ))
+                        )}
+                      </div>
 
+                      <span className="text-slate-400 text-xs shrink-0 px-1">
+                        {dropdownAbierto ? '▲' : '▼'}
+                      </span>
+                    </div>
+
+                    {dropdownAbierto && (
+                      <div className="absolute z-30 left-0 right-0 mt-1.5 p-2 rounded-xl bg-[#0F172A] border border-slate-700 shadow-2xl max-h-60 overflow-y-auto space-y-1">
+                        <input
+                          type="text"
+                          value={busquedaCategoria}
+                          onChange={(e) => setBusquedaCategoria(e.target.value)}
+                          placeholder="Buscar categoría..."
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#06B6D4] mb-1.5"
+                        />
+
+                        {categoriasFiltradas.length === 0 ? (
+                          <div className="p-3 text-center text-xs text-slate-400">
+                            No se encontraron categorías coincidentes.
+                          </div>
+                        ) : (
+                          categoriasFiltradas.map((cat) => {
+                            const isSelected = selectedCategorias.includes(cat.id_categoria);
+                            return (
+                              <button
+                                key={cat.id_categoria}
+                                type="button"
+                                onClick={() => handleToggleCategoria(cat.id_categoria)}
+                                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
+                                  isSelected
+                                    ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/40'
+                                    : 'text-slate-300 hover:bg-slate-800'
+                                }`}
+                              >
+                                <span>{cat.nombre}</span>
+                                {isSelected && <span className="text-cyan-400 font-bold">✓</span>}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
                   {formTocado && selectedCategorias.length === 0 && (
-                    <p className="mt-1.5 text-[11px] text-rose-400 font-medium">
+                    <p className="text-[11px] text-amber-400 font-medium">
                       Debes seleccionar al menos una categoría de reparación.
                     </p>
                   )}
                 </div>
 
                 {/* 2. Descripción del Problema */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
                     <label
                       htmlFor="descripcion_problema"
                       className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono flex items-center gap-1.5"
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6]" />
-                      Descripción del Problema o Falla <span className="text-rose-400">*</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                      Descripción del Problema o Falla
                     </label>
                     <span
                       className={`text-[11px] font-mono ${
-                        descValida ? 'text-emerald-400' : descCaracteres > 0 ? 'text-amber-400' : 'text-slate-500'
+                        descValida ? 'text-cyan-400 font-semibold' : 'text-slate-400'
                       }`}
                     >
-                      {descCaracteres} {descCaracteres === 1 ? 'carácter' : 'caracteres'} (mínimo 10)
+                      {descCaracteres}/1000 caract. {descCaracteres < 10 && '(mín. 10)'}
                     </span>
                   </div>
 
                   <textarea
                     id="descripcion_problema"
-                    rows={4}
+                    rows={3}
+                    maxLength={1000}
                     value={descripcion}
                     onChange={(e) => setDescripcion(e.target.value)}
-                    placeholder="Describe los síntomas observados: caídas previas, fallas intermitentes, problemas de carga, reinicios imprevistos o roturas..."
-                    className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all duration-200 focus:outline-none focus:border-[#06B6D4] focus:ring-2 focus:ring-[#06B6D4]/30 focus:shadow-[0_0_15px_rgba(6,182,212,0.25)] resize-none"
+                    placeholder="Describe en detalle qué falla presenta el dispositivo (ej: 'El equipo se reinicia solo al abrir juegos y recalienta la parte trasera...')"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all focus:outline-none focus:border-[#06B6D4] focus:ring-2 focus:ring-[#06B6D4]/30 resize-none"
                   />
-
                   {descripcion.length > 0 && !descValida && (
-                    <p className="mt-1 text-[11px] text-amber-400 flex items-center gap-1 font-medium">
-                      <span>⚠</span>
+                    <p className="text-[11px] text-amber-400 font-medium">
                       La descripción debe contener al menos 10 caracteres (faltan {10 - descCaracteres}).
                     </p>
                   )}
                 </div>
 
-                {/* 3. Credencial de Acceso */}
+                {/* 3. Credencial de Acceso para Pruebas */}
                 <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -537,7 +610,6 @@ export default function IniciarReparacionModal({
                       </p>
                     </div>
 
-                    {/* Checkbox Rápido: "Sin contraseña / Ninguna" */}
                     <label className="flex items-center gap-2 cursor-pointer select-none shrink-0 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700 hover:border-cyan-500/50 transition-colors">
                       <input
                         type="checkbox"
@@ -558,8 +630,22 @@ export default function IniciarReparacionModal({
                     value={credencial}
                     onChange={(e) => setCredencial(e.target.value)}
                     placeholder="Ej: PIN 1234, Patrón en forma de 'L', o Contraseña"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all duration-200 focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
+                </div>
+
+                {/* Checkbox Obligatorio Términos y Condiciones */}
+                <div className="pt-2 pb-1 flex items-start gap-2.5 bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+                  <input
+                    type="checkbox"
+                    id="acepto_terminos"
+                    checked={aceptoTerminos}
+                    onChange={(e) => setAceptoTerminos(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded bg-slate-900 border-slate-700 text-[#06B6D4] focus:ring-[#06B6D4]/40 cursor-pointer"
+                  />
+                  <label htmlFor="acepto_terminos" className="text-xs text-slate-300 leading-relaxed cursor-pointer select-none">
+                    Acepto los <a href="/terminos" target="_blank" rel="noopener noreferrer" className="text-[#06B6D4] underline font-semibold hover:text-cyan-300">términos y condiciones</a> del servicio técnico y diagnóstico de IFixPos.
+                  </label>
                 </div>
 
                 {/* Botones de Acción */}
@@ -573,9 +659,10 @@ export default function IniciarReparacionModal({
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.35)] hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2"
+                    disabled={cargandoCostoDiag || costoDiagnostico === null}
+                    className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.35)] hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <span>Continuar a Confirmación</span>
+                    <span>Continuar al Pago</span>
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                     </svg>
@@ -586,139 +673,205 @@ export default function IniciarReparacionModal({
           )}
 
           {/* ============================================================== */}
-          {/* PASO 2: CONFIRMACIÓN ('CONFIRM')                               */}
+          {/* PASO 2: PASARELA DE PAGO Y CONFIRMACIÓN ('CONFIRM')            */}
           {/* ============================================================== */}
           {paso === 'CONFIRM' && (
-            <div>
-              {/* Cabecera */}
-              <div className="p-6 border-b border-slate-700/60">
+            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+              <div className="border-b border-slate-700/60 pb-3">
                 <span className="px-2.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/30 text-[10px] font-mono font-semibold uppercase tracking-wider">
-                  Paso 2 • Verificación
+                  Paso 2 • Modalidad de Pago
                 </span>
-                <h2 className="text-xl font-black text-[#F8FAFC] tracking-tight mt-1.5">
-                  Confirmar Apertura de Servicio
-                </h2>
-                <p className="text-xs text-slate-300 mt-1">
-                  Revisa los datos técnicos declarados antes de instanciar la orden en el sistema.
+                <h4 className="text-lg font-black text-white tracking-tight mt-1.5">
+                  Selecciona cómo abonar el Diagnóstico
+                </h4>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  El importe es de{' '}
+                  <strong className="text-white">${costoDiagnostico.toLocaleString('es-AR', { minimumFractionDigits: 2 })} ARS</strong>.
+                  Selecciona cualquiera de los medios de pago habilitados.
                 </p>
               </div>
 
-              {/* Contenido Resumen */}
-              <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
-                {/* Pregunta Central Destacada */}
-                <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-center">
-                  <p className="text-sm sm:text-base font-bold text-cyan-200">
-                    ¿Está seguro de iniciar el proceso de reparación para este equipo?
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Se generará el Remito de Ingreso y el Código de Seguridad indispensable para la entrega.
-                  </p>
+              {/* Selector Dinámico de Medios de Pago desde Base de Datos */}
+              {cargandoMediosPago ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {[1, 2].map((idx) => (
+                    <div
+                      key={idx}
+                      className="h-32 rounded-xl bg-slate-900/60 border border-slate-800 animate-pulse p-4"
+                    />
+                  ))}
                 </div>
-
-                {/* Tarjeta de Resumen */}
-                <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 space-y-4">
-                  {/* Fila Equipo */}
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div>
-                      <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider block">
-                        Dispositivo
-                      </span>
-                      <span className="text-sm font-bold text-white">
-                        {dispositivo?.marca} {dispositivo?.modelo}
-                      </span>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-xs font-mono">
-                      Serie: {dispositivo?.numero_serie || 'S/N'}
-                    </span>
-                  </div>
-
-                  {/* Fila Categorías */}
-                  <div>
-                    <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider block mb-1.5">
-                      Categorías de Falla
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {categoriasSeleccionadasInfo.map((cat) => (
-                        <span
-                          key={cat.id_categoria}
-                          className="px-2.5 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 text-xs font-medium"
-                        >
-                          {cat.nombre}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Fila Falla Declarada */}
-                  <div>
-                    <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider block mb-1">
-                      Descripción del Problema
-                    </span>
-                    <div className="p-3 rounded-lg bg-slate-900 border border-slate-800/80 text-xs text-slate-200 whitespace-pre-wrap leading-relaxed italic">
-                      &ldquo;{descripcion.trim()}&rdquo;
-                    </div>
-                  </div>
-
-                  {/* Fila Credencial */}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider">
-                      Credencial de Desbloqueo:
-                    </span>
-                    <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
-                      {credencial.trim() || 'Ninguna'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Botones de Confirmación */}
-                <div className="pt-3 flex flex-col-reverse sm:flex-row items-center justify-end gap-3">
+              ) : errorMediosPago ? (
+                <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs flex items-center justify-between gap-3">
+                  <span>{errorMediosPago}</span>
                   <button
                     type="button"
-                    disabled={submitting}
-                    onClick={() => setPaso('FORM')}
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-50"
+                    onClick={recargarMediosPago}
+                    className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 font-bold transition-colors cursor-pointer"
                   >
-                    Volver a editar
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={handleConfirmarReparacion}
-                    className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
-                  >
-                    {submitting ? (
-                      <>
-                        <svg className="animate-spin w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          />
-                        </svg>
-                        <span>Procesando orden...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Confirmar e Iniciar Reparación</span>
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                        </svg>
-                      </>
-                    )}
+                    Reintentar
                   </button>
                 </div>
+              ) : mediosPago.length === 0 ? (
+                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+                  No hay medios de pago activos configurados en el sistema en este momento.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {mediosPago.map((medio) => {
+                    const seleccionado =
+                      String(medio.id_mediopago) === String(idMedioSeleccionado);
+                    const icono =
+                      medio.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO
+                        ? '📱'
+                        : medio.tipoModal === TIPOS_MODAL_PAGO.TRANSFERENCIA
+                        ? '🏦'
+                        : medio.tipoModal === TIPOS_MODAL_PAGO.TARJETA
+                        ? '💳'
+                        : '💵';
+
+                    return (
+                      <div
+                        key={medio.id_mediopago}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setIdMedioSeleccionado(medio.id_mediopago)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setIdMedioSeleccionado(medio.id_mediopago);
+                          }
+                        }}
+                        className={`p-4 rounded-xl border-2 transition-all cursor-pointer select-none space-y-2 ${
+                          seleccionado
+                            ? 'bg-slate-900/90 border-[#06B6D4] shadow-[0_0_20px_rgba(6,182,212,0.22)]'
+                            : 'bg-slate-900/40 border-slate-800 hover:border-slate-700 opacity-85 hover:opacity-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-2xl">{icono}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300 border border-slate-700">
+                              {medio.etiquetaBadge}
+                            </span>
+                            <span
+                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                seleccionado
+                                  ? 'border-cyan-400 bg-cyan-400'
+                                  : 'border-slate-600'
+                              }`}
+                            >
+                              {seleccionado && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-950" />
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <h5 className="text-sm font-bold text-white">
+                            {medio.nombre_medio_pago}
+                          </h5>
+                          <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                            {medio.descripcionCorta}
+                          </p>
+                        </div>
+                        {Number(medio.recargo) > 0 && (
+                          <div className="text-[10px] text-amber-300 font-medium bg-amber-500/10 px-2 py-1 rounded border border-amber-500/20">
+                            Recargo financiero: {Number(medio.recargo)}%
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Aviso dinámico según la modalidad elegida */}
+              {medioSeleccionado && (
+                <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-200 text-xs flex items-start gap-3">
+                  <span className="text-xl">
+                    {medioSeleccionado.esPasarelaOnline ? '📲' : '🔔'}
+                  </span>
+                  <div className="space-y-1">
+                    <p className="font-bold text-white">
+                      Modalidad seleccionada: {medioSeleccionado.nombre_medio_pago}
+                    </p>
+                    <p className="leading-relaxed text-cyan-200/90">
+                      {medioSeleccionado.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO
+                        ? 'Al confirmar se abrirá el modal de Mercado Pago con el código QR oficial y enlace directo para abonar tu diagnóstico.'
+                        : medioSeleccionado.tipoModal === TIPOS_MODAL_PAGO.TRANSFERENCIA
+                        ? 'Al confirmar se abrirá el modal con los datos bancarios (CBU / Alias) para realizar la transferencia.'
+                        : `Al confirmar se abrirá el detalle de confirmación para abonar $${costoDiagnostico.toLocaleString('es-AR')} ARS mediante ${medioSeleccionado.nombre_medio_pago}.`}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Resumen Compacto de la Orden */}
+              <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-4 text-xs space-y-2">
+                <div className="flex justify-between text-slate-400">
+                  <span>Dispositivo:</span>
+                  <span className="text-white font-semibold">{dispositivo?.marca} {dispositivo?.modelo}</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Categorías:</span>
+                  <span className="text-cyan-300 font-medium">
+                    {categoriasSeleccionadasInfo.map((c) => c.nombre).join(', ')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-400 border-t border-slate-800/80 pt-2 font-bold">
+                  <span className="text-white">Importe Diagnóstico:</span>
+                  <span className="text-cyan-400 font-mono text-sm">
+                    ${costoDiagnostico.toLocaleString('es-AR', { minimumFractionDigits: 2 })} ARS
+                  </span>
+                </div>
+              </div>
+
+              {/* Botones de Acción */}
+              <div className="pt-3 flex flex-col-reverse sm:flex-row items-center justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => setPaso('FORM')}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-50"
+                >
+                  Volver a editar
+                </button>
+
+                <button
+                  type="button"
+                  disabled={submitting || !medioSeleccionado || cargandoMediosPago}
+                  onClick={handleConfirmarReparacion}
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {submitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Generando orden...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        {medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO
+                          ? 'Continuar y Abrir Mercado Pago'
+                          : 'Confirmar y Abrir Modal de Pago'}
+                      </span>
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                      </svg>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           )}
 
           {/* ============================================================== */}
-          {/* PASO 3: TICKET DE ÉXITO ('SUCCESS')                            */}
+          {/* PASO FINAL: TICKET DE ÉXITO ('SUCCESS')                        */}
           {/* ============================================================== */}
           {paso === 'SUCCESS' && resultado && (
             <div className="p-6 sm:p-8 text-center space-y-6">
-              {/* Ícono Gigante de Check (✔) */}
+              {/* Ícono de Confirmación */}
               <div className="mx-auto w-20 h-20 rounded-full bg-gradient-to-tr from-cyan-500 to-emerald-400 p-1 shadow-[0_0_35px_rgba(6,182,212,0.5)]">
                 <div className="w-full h-full rounded-full bg-[#1E293B] flex items-center justify-center">
                   <svg
@@ -733,11 +886,11 @@ export default function IniciarReparacionModal({
                 </div>
               </div>
 
-              {/* Título Grande */}
+              {/* Título de la Orden */}
               <div>
-                <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                <h4 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
                   ¡Orden de Servicio Creada!
-                </h2>
+                </h4>
                 <p className="text-xs text-slate-300 mt-1">
                   La orden se ha registrado formalmente para{' '}
                   <span className="font-semibold text-cyan-300">
@@ -755,7 +908,7 @@ export default function IniciarReparacionModal({
                 </div>
               </div>
 
-              {/* CRÍTICO: Bloque del Código para Presentar en Mostrador */}
+              {/* Token de Seguridad para Presentar en Mostrador */}
               <div className="p-6 rounded-2xl bg-gradient-to-b from-[#090D16] to-[#0F172A] border-2 border-[#06B6D4] shadow-[0_0_30px_rgba(6,182,212,0.25)] relative overflow-hidden group">
                 <span className="text-[10px] font-mono font-bold tracking-widest uppercase text-cyan-400 block mb-1">
                   CÓDIGO PARA PRESENTAR EN MOSTRADOR
@@ -793,14 +946,19 @@ export default function IniciarReparacionModal({
                   </button>
                 </div>
 
-                <div className="mt-3 p-3 rounded-xl bg-cyan-950/40 border border-cyan-500/20 text-xs text-cyan-200/90 leading-relaxed">
-                  <p className="font-semibold text-cyan-100">
-                    Guarde este Código de Seguridad. Es su Token de Entrega indispensable para presentar en el mostrador.
-                  </p>
-                </div>
+                {/* Banner de Estado Financiero de la Orden */}
+                {pagoAcreditadoOnline || resultado.estado_pago === 'PAGADA' ? (
+                  <div className="mt-3 p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300">
+                    ✓ Diagnóstico abonado online exitosamente (${costoDiagnostico.toLocaleString('es-AR')} ARS). Presenta este código al entregar el equipo.
+                  </div>
+                ) : (
+                  <div className="mt-3 p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-200">
+                    ⚠️ Debe asistir con su DNI y abonar el costo del diagnóstico (${costoDiagnostico.toLocaleString('es-AR')} ARS) para iniciar el proceso.
+                  </div>
+                )}
               </div>
 
-              {/* Nota sobre el Remito PDF */}
+              {/* Nota sobre el Remito Oficial por Correo */}
               <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-300 flex items-center justify-center gap-2">
                 <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -817,12 +975,28 @@ export default function IniciarReparacionModal({
                   onClick={handleCerrarFinal}
                   className="w-full sm:w-auto min-w-[200px] px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold transition-all shadow-[0_0_25px_rgba(6,182,212,0.4)] hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  Cerrar
+                  Entendido y Finalizar
                 </button>
               </div>
             </div>
           )}
         </motion.div>
+
+        {/* Modal reutilizable del medio de pago seleccionado */}
+        <PaymentMethodModalDispatcher
+          isOpen={modalPagoAbierto}
+          onClose={handlePagoModalPendiente}
+          medioPago={medioSeleccionado}
+          idVenta={resultado?.id_venta || null}
+          montoTotal={costoDiagnostico || 0}
+          concepto={`Diagnóstico Técnico • ${dispositivo?.marca || ''} ${dispositivo?.modelo || ''}`.trim()}
+          codigoSeguridad={resultado?.codigo_seguridad || null}
+          permitirContinuarPendiente={true}
+          textoBotonPendiente="Continuar y abonar al entregar el equipo"
+          textoConfirmar="Confirmar compromiso de pago y ver Token"
+          onPagoConfirmado={handlePagoModalConfirmado}
+          onContinuarPendiente={handlePagoModalPendiente}
+        />
       </div>
     </AnimatePresence>
   );

@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function CoverageZonesSection({ token }) {
   // Parámetros de Filtro (CU-59)
   const [nivel, setNivel] = useState('PAIS'); // 'PAIS' | 'PROVINCIA' | 'CIUDAD'

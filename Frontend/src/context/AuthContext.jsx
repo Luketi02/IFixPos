@@ -4,7 +4,13 @@ import { EVENTO_CUENTA_CAMBIADA } from '../utils/sesionExpirada';
 
 const getInitialSession = () => {
   try {
-    const storedToken = localStorage.getItem('access_token') || localStorage.getItem('token') || null;
+    // Unificación de clave a 'access_token' (Fase 1 - F3)
+    let storedToken = localStorage.getItem('access_token');
+    if (!storedToken && localStorage.getItem('token')) {
+      storedToken = localStorage.getItem('token');
+      localStorage.setItem('access_token', storedToken);
+      localStorage.removeItem('token');
+    }
     const storedUser = localStorage.getItem('user');
     const parsedUser = storedUser ? JSON.parse(storedUser) : null;
 
@@ -117,7 +123,8 @@ export const AuthProvider = ({ children }) => {
 
     if (accessToken) {
       localStorage.setItem('access_token', accessToken);
-      localStorage.setItem('token', accessToken);
+      // Mantener compatibilidad temporal durante la migración sin duplicar fuente de verdad
+      localStorage.removeItem('token');
     }
 
     if (refreshToken) {

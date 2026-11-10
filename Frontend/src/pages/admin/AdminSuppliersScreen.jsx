@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
@@ -7,8 +7,7 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import SupplierModal from '../../components/purchases/SupplierModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminSuppliersScreen() {
   const { token } = useAuth();
   const location = useLocation();
@@ -140,16 +139,18 @@ export default function AdminSuppliersScreen() {
     [token, filtroNombre, filtroCuit, filtroEstado, filtroEnvio]
   );
 
+  const consultarProveedoresRef = useRef(consultarProveedores);
+  consultarProveedoresRef.current = consultarProveedores;
+
   // Carga inicial
   useEffect(() => {
     if (!token) return;
-    consultarProveedores({
+    consultarProveedoresRef.current({
       buscar: '',
       cuit_prov: '',
       estado: '',
       ofrece_envio: ''
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const handleAplicarFiltros = (e) => {

@@ -7,11 +7,37 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import DispositivoModal from '../../components/devices/DispositivoModal';
 import IniciarReparacionModal from '../../components/devices/IniciarReparacionModal';
+import DevicePlaceholder from '../../components/common/DevicePlaceholder';
+import Paginacion from '../../components/common/Paginacion';
+import { EsqueletoTarjetas } from '../../components/common/EsqueletoCarga';
 import { resolverUrlImagen } from '../../utils/imagenes';
+import { formatearEstadoReparacion, obtenerColorBadgeEstado } from '../../utils/repairStatus';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '../../config/api';
 
+const ETAPAS_CERRADAS = new Set([
+  'FINALIZADO',
+  'FINALIZADA',
+  'ENTREGADO',
+  'ENTREGADA',
+  'CANCELADO',
+  'CANCELADA'
+]);
+
+const obtenerEtapaActivaDispositivo = (dispositivo) => {
+  if (dispositivo?.etapa_reparacion_activa) {
+    return dispositivo.etapa_reparacion_activa;
+  }
+  if (Array.isArray(dispositivo?.reparaciones)) {
+    const activa = dispositivo.reparaciones.find((r) => {
+      const etapa = String(r?.etapa || '').trim().toUpperCase();
+      return etapa && !ETAPAS_CERRADAS.has(etapa);
+    });
+    return activa?.etapa || null;
+  }
+  return null;
+};
 const FILTER_CLASS =
   'w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-[#F8FAFC] placeholder-slate-500 text-xs font-medium transition-all duration-200 focus:outline-none focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/30 focus:shadow-[0_0_15px_rgba(139,92,246,0.25)] disabled:opacity-50 disabled:cursor-not-allowed';
 
@@ -20,6 +46,8 @@ export default function MisDispositivos() {
   const { token } = useAuth();
 
   const [dispositivos, setDispositivos] = useState([]);
+  const [paginaActual, setPaginaActual] = useState(1);
+  const TAMANO_PAGINA = 12;
   // Clave de la última consulta resuelta: mientras difiera de la actual, se muestra el estado de carga
   const [claveCargada, setClaveCargada] = useState(null);
   const [recarga, setRecarga] = useState(0);
@@ -44,16 +72,16 @@ export default function MisDispositivos() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Las alertas desaparecen solas (error: 6 s, éxito: 5 s)
+  // Las alertas desaparecen solas (error: 6 s, éxito: 6 s)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 15000);
+    const t = setTimeout(() => setErrorMessage(''), 6000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
   useEffect(() => {
     if (!successMessage) return undefined;
-    const t = setTimeout(() => setSuccessMessage(''), 15000);
+    const t = setTimeout(() => setSuccessMessage(''), 6000);
     return () => clearTimeout(t);
   }, [successMessage]);
 
@@ -102,8 +130,11 @@ export default function MisDispositivos() {
       })
       .then((res) => {
         if (!activo) return;
-        // Sin resultados el backend responde { mensaje, resultados: [] }
-        setDispositivos(Array.isArray(res.data) ? res.data : res.data?.resultados || []);
+        const lista = Array.isArray(res.data)
+          ? res.data
+          : res.data?.results || res.data?.resultados || [];
+        setDispositivos(lista);
+        setPaginaActual(1);
       })
       .catch((err) => {
         if (!activo) return;
@@ -295,11 +326,7 @@ export default function MisDispositivos() {
 
             {/* Grilla */}
             {isLoading ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                {[0, 1, 2].map((i) => (
-                  <div key={i} className="h-72 rounded-2xl bg-[#1E293B]/60 border border-slate-800 animate-pulse" />
-                ))}
-              </div>
+              <EsqueletoTarjetas cantidad={6} />
             ) : dispositivos.length === 0 ? (
               <motion.div
                 initial={{ opacity: 0 }}
@@ -316,10 +343,14 @@ export default function MisDispositivos() {
                 </p>
               </motion.div>
             ) : (
+              <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 <AnimatePresence>
-                  {dispositivos.map((d) => {
+                  {dispositivos
+                    .slice((paginaActual - 1) * TAMANO_PAGINA, paginaActual * TAMANO_PAGINA)
+                    .map((d) => {
                     const imagen = resolverUrlImagen(d.imagen);
+                    const etapaActiva = obtenerEtapaActivaDispositivo(d);
                     return (
                       <motion.article
                         key={d.id_dispositivo}
@@ -346,22 +377,11 @@ export default function MisDispositivos() {
                             <img
                               src={imagen}
                               alt={`${d.marca} ${d.modelo}`}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                             />
-                          ) : (
-                            <svg
-                              className="w-14 h-14 text-slate-700"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={1.4}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"
-                              />
-                            </svg>
+                          ) : (<DevicePlaceholder tipo={d.tipo} className="w-16 h-16" />
                           )}
                         </div>
 
@@ -370,12 +390,12 @@ export default function MisDispositivos() {
                             <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[10px] font-mono font-semibold uppercase">
                               {d.tipo || 'Sin tipo'}
                             </span>
-                            {!d.editable && (
+                            {etapaActiva && (
                               <span
-                                title="Posee historial técnico: no puede editarse"
-                                className="px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 border border-violet-500/30 text-[10px] font-mono"
+                                title={`Estado actual de la reparación: ${formatearEstadoReparacion(etapaActiva)}`}
+                                className={`px-2 py-0.5 rounded-full border text-[10px] font-mono font-semibold ${obtenerColorBadgeEstado(etapaActiva)}`}
                               >
-                                Con historial
+                                {formatearEstadoReparacion(etapaActiva)}
                               </span>
                             )}
                           </div>
@@ -464,6 +484,14 @@ export default function MisDispositivos() {
                   })}
                 </AnimatePresence>
               </div>
+              <Paginacion
+                paginaActual={paginaActual}
+                totalPaginas={Math.ceil(dispositivos.length / TAMANO_PAGINA)}
+                totalRegistros={dispositivos.length}
+                tamanoPagina={TAMANO_PAGINA}
+                onCambiarPagina={setPaginaActual}
+              />
+              </>
             )}
           </motion.div>
         </main>

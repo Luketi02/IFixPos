@@ -10,10 +10,12 @@ import { formatearFecha } from '../../utils/fechas';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
 import CalificarServicioModal from '../../components/workshop/CalificarServicioModal';
+import PaymentMethodModalDispatcher from '../../components/payments/PaymentMethodModalDispatcher';
+import { useMediosPagoActivos } from '../../hooks/useMediosPagoActivos';
+import { TIPOS_MODAL_PAGO } from '../../utils/mediosPago';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function ReparacionDetalle() {
   const { id_reparacion } = useParams();
   const navigate = useNavigate();
@@ -28,19 +30,33 @@ export default function ReparacionDetalle() {
   // Estados locales para el Formulario de Decisión Comercial (CU-09)
   const [decision, setDecision] = useState(null); // 'ACEPTAR' | 'RECHAZAR' | null
   const [metodoEntrega, setMetodoEntrega] = useState('RETIRO');
-  const [metodoPago, setMetodoPago] = useState('EFECTIVO');
   const [comentariosCliente, setComentariosCliente] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Medios de pago dinámicos desde la base de datos (/api/sales/medios-pago/)
+  const {
+    mediosPago,
+    medioSeleccionado,
+    idMedioSeleccionado,
+    setIdMedioSeleccionado,
+    cargandoMediosPago,
+    errorMediosPago
+  } = useMediosPagoActivos({
+    habilitado: true,
+    metodoEntrega,
+    tipoPreferidoInicial: TIPOS_MODAL_PAGO.EFECTIVO
+  });
+
+  // Estado para abrir el modal reutilizable de pasarela/instrucciones tras aceptar el presupuesto
+  const [modalPagoPresupuesto, setModalPagoPresupuesto] = useState({
+    abierto: false,
+    idVenta: null,
+    medioPago: null,
+    montoTotal: 0
+  });
+
   // Estado local para Modal de Calificación (CU-19)
   const [modalCalificarAbierto, setModalCalificarAbierto] = useState(false);
-
-  // Regla de negocio: Si se selecciona envío a domicilio, no se permite efectivo en mostrador
-  useEffect(() => {
-    if (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO') {
-      setMetodoPago('TRANSFERENCIA');
-    }
-  }, [metodoEntrega, metodoPago]);
 
   const isLoading = cargadoId !== id_reparacion;
 
@@ -149,12 +165,12 @@ export default function ReparacionDetalle() {
     if (!decision) return;
 
     if (decision === 'ACEPTAR') {
-      if (!metodoEntrega || !metodoPago) {
-        setErrorMessage('Por favor seleccione el método de entrega y el medio de pago.');
+      if (!metodoEntrega || !medioSeleccionado) {
+        setErrorMessage('Por favor seleccione el método de entrega y un medio de pago habilitado.');
         return;
       }
-      if (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO') {
-        setErrorMessage('El pago en efectivo en mostrador no está permitido para envíos a domicilio. Por favor seleccione Transferencia o Tarjeta.');
+      if (metodoEntrega === 'ENVIO' && medioSeleccionado.deshabilitado) {
+        setErrorMessage('El pago en efectivo en mostrador no está permitido para envíos a domicilio. Seleccione otro medio de pago.');
         return;
       }
     }
@@ -167,9 +183,13 @@ export default function ReparacionDetalle() {
       comentarios_cliente: comentariosCliente.trim() || undefined
     };
 
-    if (decision === 'ACEPTAR') {
+    if (decision === 'ACEPTAR' && medioSeleccionado) {
       payload.metodo_entrega = metodoEntrega;
-      payload.metodo_pago = metodoPago;
+      payload.metodo_pago = String(
+        medioSeleccionado.id_mediopago ||
+          medioSeleccionado.codigo ||
+          medioSeleccionado.nombre_medio_pago
+      );
     }
 
     try {
@@ -185,12 +205,26 @@ export default function ReparacionDetalle() {
           ? '¡Presupuesto aceptado exitosamente! La orden de insumos fue generada y los técnicos iniciaron los trabajos.'
           : 'Presupuesto de reparación rechazado. La orden de servicio ha sido cancelada.');
 
+      const idVentaGenerada =
+        res.data?.reparacion?.id_venta || res.data?.id_venta || null;
+      const medioElegidoSnapshot = medioSeleccionado;
+
       setSuccessMessage(msgExito);
       setDecision(null);
       setComentariosCliente('');
 
       // Recarga inmediata de los datos para actualizar estado y timeline
       await cargarDetalle();
+
+      // Si aceptó el presupuesto, abrir el modal correspondiente al medio de pago elegido
+      if (decision === 'ACEPTAR' && medioElegidoSnapshot) {
+        setModalPagoPresupuesto({
+          abierto: true,
+          idVenta: idVentaGenerada,
+          medioPago: medioElegidoSnapshot,
+          montoTotal: costoTotalEstimado
+        });
+      }
     } catch (err) {
       console.error('Error al enviar decisión sobre la reparación:', err);
       const data = err.response?.data;
@@ -645,13 +679,7 @@ export default function ReparacionDetalle() {
                                     </label>
                                     <select
                                       value={metodoEntrega}
-                                      onChange={(e) => {
-                                        const nuevoMetodo = e.target.value;
-                                        setMetodoEntrega(nuevoMetodo);
-                                        if (nuevoMetodo === 'ENVIO' && metodoPago === 'EFECTIVO') {
-                                          setMetodoPago('TRANSFERENCIA');
-                                        }
-                                      }}
+                                      onChange={(e) => setMetodoEntrega(e.target.value)}
                                       required
                                       className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                                     >
@@ -660,31 +688,54 @@ export default function ReparacionDetalle() {
                                     </select>
                                   </div>
 
-                                  {/* Selector Método de Pago */}
+                                  {/* Selector Dinámico de Método de Pago desde Base de Datos */}
                                   <div>
                                     <label className="block text-[11px] font-mono text-slate-300 uppercase tracking-wider mb-1.5 font-bold">
                                       Método de Pago <span className="text-cyan-400">*</span>
                                     </label>
                                     <select
-                                      value={metodoPago}
-                                      onChange={(e) => setMetodoPago(e.target.value)}
+                                      value={idMedioSeleccionado || ''}
+                                      onChange={(e) => setIdMedioSeleccionado(e.target.value)}
                                       required
-                                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                                      disabled={cargandoMediosPago || mediosPago.length === 0}
+                                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors disabled:opacity-50"
                                     >
-                                      {metodoEntrega !== 'ENVIO' ? (
-                                        <option value="EFECTIVO">Efectivo en mostrador</option>
+                                      {cargandoMediosPago ? (
+                                        <option value="">Cargando medios de pago...</option>
+                                      ) : mediosPago.length === 0 ? (
+                                        <option value="">Sin medios de pago habilitados</option>
                                       ) : (
-                                        <option value="EFECTIVO" disabled className="text-slate-500 bg-slate-950">
-                                          Efectivo en mostrador (No disponible para envíos)
-                                        </option>
+                                        mediosPago.map((medio) => (
+                                          <option
+                                            key={medio.id_mediopago}
+                                            value={medio.id_mediopago}
+                                            disabled={medio.deshabilitado}
+                                            className={
+                                              medio.deshabilitado
+                                                ? 'text-slate-500 bg-slate-950'
+                                                : 'text-slate-100 bg-slate-900'
+                                            }
+                                          >
+                                            {medio.nombre_medio_pago}
+                                            {Number(medio.recargo) > 0
+                                              ? ` (+${Number(medio.recargo)}%)`
+                                              : ''}
+                                            {medio.deshabilitado
+                                              ? ' (No disponible para envíos)'
+                                              : ''}
+                                          </option>
+                                        ))
                                       )}
-                                      <option value="TRANSFERENCIA">Transferencia Bancaria</option>
-                                      <option value="TARJETA">Tarjeta de Débito / Crédito</option>
                                     </select>
+                                    {errorMediosPago && (
+                                      <p className="text-[10px] text-rose-400 font-mono mt-1">
+                                        {errorMediosPago}
+                                      </p>
+                                    )}
                                     {metodoEntrega === 'ENVIO' && (
                                       <p className="text-[10px] text-amber-400/90 font-mono mt-1.5 flex items-center gap-1">
                                         <span>ℹ️</span>
-                                        <span>Los envíos a domicilio requieren pago electrónico previo (Transferencia o Tarjeta).</span>
+                                        <span>Los envíos a domicilio requieren un medio de pago electrónico o bancario habilitado.</span>
                                       </p>
                                     )}
                                   </div>
@@ -717,7 +768,13 @@ export default function ReparacionDetalle() {
 
                                   <button
                                     type="submit"
-                                    disabled={isSubmitting || !metodoEntrega || !metodoPago || (metodoEntrega === 'ENVIO' && metodoPago === 'EFECTIVO')}
+                                    disabled={
+                                      isSubmitting ||
+                                      cargandoMediosPago ||
+                                      !metodoEntrega ||
+                                      !medioSeleccionado ||
+                                      medioSeleccionado.deshabilitado
+                                    }
                                     className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-400 hover:from-cyan-400 hover:to-cyan-300 text-slate-950 font-black text-xs font-mono tracking-wider uppercase transition-all shadow-[0_0_20px_rgba(6,182,212,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
                                   >
                                     {isSubmitting ? (
@@ -911,12 +968,12 @@ export default function ReparacionDetalle() {
                                   </span>
                                   {(item.estado_nombre || item.estado_alcanzado) && (
                                     <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-[#06B6D4] border border-[#06B6D4]/30">
-                                      {item.estado_nombre || formatearEstadoReparacion(item.estado_alcanzado)}
+                                      {item.estado_nombre || item.estado_alcanzado_nombre || 'Actualización técnica'}
                                     </span>
                                   )}
                                 </div>
                                 <span className="font-mono text-[11px] text-slate-400">
-                                  Hora: {item.fecha_hora || '—'}
+                                  {item.fecha_hora_display || item.fecha_hora || '—'}
                                 </span>
                               </div>
 
@@ -956,6 +1013,30 @@ export default function ReparacionDetalle() {
         onSuccess={(nuevaCalificacion) => {
           setSuccessMessage('¡Muchas gracias por su calificación y retroalimentación!');
           setReparacion((prev) => (prev ? { ...prev, calificacion: nuevaCalificacion } : prev));
+        }}
+      />
+
+      {/* Modal reutilizable del medio de pago seleccionado al aceptar el presupuesto */}
+      <PaymentMethodModalDispatcher
+        isOpen={modalPagoPresupuesto.abierto}
+        onClose={() =>
+          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }))
+        }
+        medioPago={modalPagoPresupuesto.medioPago}
+        idVenta={modalPagoPresupuesto.idVenta}
+        montoTotal={modalPagoPresupuesto.montoTotal}
+        concepto={`Presupuesto de Reparación • ${reparacion?.dispositivo?.marca || ''} ${reparacion?.dispositivo?.modelo || ''}`.trim()}
+        codigoSeguridad={reparacion?.codigo_seguridad || reparacion?.codigo_sec || null}
+        permitirContinuarPendiente={true}
+        textoBotonPendiente="Continuar y abonar al retirar el equipo"
+        textoConfirmar="Confirmar compromiso de pago"
+        onPagoConfirmado={async () => {
+          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
+          setSuccessMessage('¡Pago confirmado exitosamente! Tu reparación ya se encuentra en curso.');
+          await cargarDetalle();
+        }}
+        onContinuarPendiente={() => {
+          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
         }}
       />
     </div>

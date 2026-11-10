@@ -364,11 +364,30 @@ class DispositivoListOutputSerializer(serializers.Serializer):
     id_tipo = serializers.IntegerField(source='id_modelo.id_tipo_dispositivo_id', read_only=True)
     tipo = serializers.CharField(source='id_modelo.id_tipo_dispositivo.nombre', read_only=True)
     reparaciones = ReparacionAnidadoSerializer(source='reparacion_set', many=True, read_only=True)
+    etapa_reparacion_activa = serializers.SerializerMethodField()
     editable = serializers.SerializerMethodField()
+
+    def get_etapa_reparacion_activa(self, obj):
+        etapas_inactivas = {
+            'FINALIZADO', 'FINALIZADA',
+            'ENTREGADO', 'ENTREGADA',
+            'CANCELADO', 'CANCELADA'
+        }
+        reparaciones = sorted(
+            obj.reparacion_set.all(),
+            key=lambda r: (getattr(r, 'fecha_inicio', None) or 0, getattr(r, 'id_reparacion', 0)),
+            reverse=True
+        )
+        for rep in reparaciones:
+            etapa_actual = (getattr(rep, 'etapa', '') or '').strip()
+            if etapa_actual and etapa_actual.upper() not in etapas_inactivas:
+                return etapa_actual
+        return None
 
     def get_editable(self, obj):
         # CU-07: un equipo con historial técnico o en proceso de reparación no puede editarse.
-        return not obj.reparacion_set.exists()
+        # len() aprovecha el prefetch_related('reparacion_set') evitando una consulta SQL adicional por cada dispositivo.
+        return len(obj.reparacion_set.all()) == 0
 
 
 class DispositivoUpdateInputSerializer(serializers.Serializer):
@@ -396,11 +415,15 @@ class DispositivoUpdateInputSerializer(serializers.Serializer):
 # ==============================================================================
 
 class BitacoraOutputSerializer(serializers.Serializer):
-    """CU-61: Formato de eventos cronológicos en la bitácora técnica."""
+    """CU-61: Formato de eventos cronológicos en la bitácora técnica con trazabilidad rica."""
     id_bitacora = serializers.IntegerField(read_only=True)
     fecha_hora = serializers.SerializerMethodField()
+    fecha = serializers.SerializerMethodField()
+    hora = serializers.SerializerMethodField()
+    fecha_hora_display = serializers.SerializerMethodField()
     estado_alcanzado = serializers.IntegerField(read_only=True)
     estado_nombre = serializers.SerializerMethodField()
+    estado_alcanzado_nombre = serializers.SerializerMethodField()
     comentario = serializers.CharField(read_only=True)
     tecnico = serializers.SerializerMethodField()
     rol_usuario = serializers.SerializerMethodField()
@@ -409,9 +432,34 @@ class BitacoraOutputSerializer(serializers.Serializer):
         if not obj.fecha_hora:
             return ""
         if hasattr(obj.fecha_hora, 'strftime'):
-            return obj.fecha_hora.strftime("%H:%M:%S")
+            return obj.fecha_hora.strftime("%d/%m/%Y %H:%M:%S")
         val_str = str(obj.fecha_hora)
         return val_str.split('.')[0] if '.' in val_str else val_str
+
+    def get_fecha(self, obj):
+        if not obj.fecha_hora:
+            return ""
+        if hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%d/%m/%Y")
+        return str(obj.fecha_hora)[:10]
+
+    def get_hora(self, obj):
+        if not obj.fecha_hora:
+            return ""
+        if hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%H:%M:%S")
+        val_str = str(obj.fecha_hora)
+        return val_str.split(' ')[1] if ' ' in val_str else val_str
+
+    def get_fecha_hora_display(self, obj):
+        if not obj.fecha_hora:
+            return ""
+        if hasattr(obj.fecha_hora, 'strftime'):
+            return obj.fecha_hora.strftime("%d/%m/%Y - %H:%M hs")
+        return str(obj.fecha_hora)
+
+    def get_estado_alcanzado_nombre(self, obj):
+        return self.get_estado_nombre(obj)
 
     def get_estado_nombre(self, obj):
         MAPA = {
@@ -804,6 +852,16 @@ class IniciarReparacionInputSerializer(serializers.Serializer):
             'empty': 'Debe seleccionar al menos una categoría de reparación.'
         }
     )
+    medio_pago = serializers.CharField(
+        required=False,
+        default='PRESENCIAL',
+        allow_blank=True
+    )
+    id_pago_online = serializers.CharField(
+        required=False,
+        default='',
+        allow_blank=True
+    )
 
     def to_internal_value(self, data):
         mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
@@ -854,6 +912,28 @@ class IniciarReparacionInputSerializer(serializers.Serializer):
                 "ids_categorias": f"Las siguientes categorías de reparación no existen: {sorted(list(inexistentes))}."
             })
 
+        medio_raw = str(attrs.get('medio_pago') or 'PRESENCIAL').strip()
+        if medio_raw:
+            from sales_app.models import MedioPago
+            from core_app.constantes import deducir_codigo_medio_pago
+            medio_obj = None
+            if medio_raw.isdigit():
+                medio_obj = MedioPago.objects.filter(id_mediopago=int(medio_raw)).first()
+                if not medio_obj:
+                    raise serializers.ValidationError({
+                        "medio_pago": "El medio de pago seleccionado no existe en el catálogo."
+                    })
+            else:
+                medio_obj = (
+                    MedioPago.objects.filter(nombre_medio_pago__iexact=medio_raw).first()
+                    or MedioPago.objects.filter(codigo__iexact=medio_raw).first()
+                    or MedioPago.objects.filter(codigo=deducir_codigo_medio_pago(medio_raw)).first()
+                )
+            if medio_obj and not medio_obj.estado:
+                raise serializers.ValidationError({
+                    "medio_pago": f"El medio de pago '{medio_obj.nombre_medio_pago}' no se encuentra habilitado actualmente."
+                })
+
         return attrs
 
 
@@ -868,6 +948,20 @@ class ReparacionIniciadaOutputSerializer(serializers.Serializer):
     desc_cliente = serializers.CharField(read_only=True)
     credencial_acceso = serializers.CharField(read_only=True)
     id_dispositivo = serializers.IntegerField(source='id_dispositivo_id', read_only=True)
+
+
+class ImagenRecepcionInputSerializer(serializers.Serializer):
+    """Entrada para fotos de respaldo físico de la recepción."""
+    imagen = serializers.CharField(required=True, allow_blank=False)
+    descripcion = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+
+
+class ImagenRecepcionOutputSerializer(serializers.Serializer):
+    """Salida para fotos de respaldo físico de la recepción."""
+    id_imagen_recepcion = serializers.IntegerField(read_only=True)
+    imagen = serializers.CharField(read_only=True)
+    descripcion = serializers.CharField(read_only=True, allow_null=True)
+    fecha_subida = serializers.DateTimeField(read_only=True)
 
 
 class RecepcionarDispositivoInputSerializer(serializers.Serializer):
@@ -909,6 +1003,11 @@ class RecepcionarDispositivoInputSerializer(serializers.Serializer):
             'required': 'Debe detallar el estado físico y estético del equipo para salvaguardar la responsabilidad del local.',
             'blank': 'Debe detallar el estado físico y estético del equipo para salvaguardar la responsabilidad del local.'
         }
+    )
+    imagenes = serializers.ListField(
+        child=ImagenRecepcionInputSerializer(),
+        required=False,
+        default=list
     )
 
     def to_internal_value(self, data):
@@ -981,6 +1080,7 @@ class ReparacionRecepcionadaOutputSerializer(serializers.Serializer):
     desc_cliente = serializers.CharField(read_only=True)
     credencial_acceso = serializers.CharField(read_only=True)
     observaciones_fisicas = serializers.SerializerMethodField()
+    imagenes_recepcion = ImagenRecepcionOutputSerializer(source='imagenes_recepcion.all', many=True, read_only=True)
     id_dispositivo = serializers.IntegerField(source='id_dispositivo_id', read_only=True)
 
     def get_observaciones_fisicas(self, obj):
@@ -1415,10 +1515,37 @@ class DecisionReparacionInputSerializer(serializers.Serializer):
                 })
             attrs['metodo_pago'] = metodo_pago
 
+            from sales_app.models import MedioPago
+            from core_app.constantes import deducir_codigo_medio_pago, CodigoMedioPago
+            medio_obj = None
+            if metodo_pago.isdigit():
+                medio_obj = MedioPago.objects.filter(id_mediopago=int(metodo_pago)).first()
+                if not medio_obj:
+                    raise serializers.ValidationError({
+                        "metodo_pago": "El medio de pago seleccionado no existe en el catálogo."
+                    })
+            else:
+                medio_obj = (
+                    MedioPago.objects.filter(nombre_medio_pago__iexact=metodo_pago).first()
+                    or MedioPago.objects.filter(codigo__iexact=metodo_pago).first()
+                    or MedioPago.objects.filter(codigo=deducir_codigo_medio_pago(metodo_pago)).first()
+                )
+
+            if medio_obj and not medio_obj.estado:
+                raise serializers.ValidationError({
+                    "metodo_pago": f"El medio de pago '{medio_obj.nombre_medio_pago}' no se encuentra habilitado actualmente."
+                })
+
             # Regla de Negocio: Los envíos a domicilio no admiten pago en efectivo en mostrador
             if metodo_entrega.upper() == 'ENVIO':
                 metodo_pago_upper = metodo_pago.upper()
-                if 'EFECTIVO' in metodo_pago_upper or metodo_pago_upper in ('MOSTRADOR', 'EFECTIVO_MOSTRADOR'):
+                es_efectivo_bd = bool(
+                    medio_obj and (
+                        (medio_obj.codigo or '').upper() == CodigoMedioPago.EFECTIVO
+                        or 'EFECTIVO' in (medio_obj.nombre_medio_pago or '').upper()
+                    )
+                )
+                if es_efectivo_bd or 'EFECTIVO' in metodo_pago_upper or metodo_pago_upper in ('MOSTRADOR', 'EFECTIVO_MOSTRADOR'):
                     raise serializers.ValidationError({
                         "metodo_pago": "El método de pago en efectivo en mostrador no está disponible para envíos a domicilio."
                     })

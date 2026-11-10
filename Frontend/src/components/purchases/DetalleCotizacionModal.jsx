@@ -4,8 +4,7 @@ import axios from 'axios';
 import useAuth from '../../context/useAuth';
 import EvaluarCotizacionModal from './EvaluarCotizacionModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function DetalleCotizacionModal({
   isOpen,
   onClose,
@@ -44,7 +43,7 @@ export default function DetalleCotizacionModal({
       setCargando(true);
       setError('');
       try {
-        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+        const activeToken = token || localStorage.getItem('access_token');
         const config = {
           headers: activeToken
             ? {

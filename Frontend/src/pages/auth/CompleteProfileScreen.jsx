@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { getDashboardPath } from '../../utils/roleRoutes';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 const CompleteProfileScreen = () => {
   const { user, token, updateUser, logout } = useAuth();
   const navigate = useNavigate();

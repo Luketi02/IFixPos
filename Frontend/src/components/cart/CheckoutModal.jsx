@@ -1,12 +1,17 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { formatearMoneda, obtenerImagenProducto } from '../../utils/productImages';
 import DireccionModal from '../geo/DireccionModal';
-import { QRCodeSVG } from 'qrcode.react';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import CuentaRegresiva from '../common/CuentaRegresiva';
+import { API_BASE_URL } from '../../config/api';
+import { useIntervaloVisible } from '../../utils/polling';
+import { obtenerCatalogoCacheado } from '../../utils/cacheCatalogos';
+import { QRCodeSVG } from '../common/CodigoQRDiferido';
+import { useAccesibilidadModal } from '../../hooks/useAccesibilidadModal';
+import { procesarMediosPagoActivos, TIPOS_MODAL_PAGO } from '../../utils/mediosPago';
+import PaymentMethodModalDispatcher from '../payments/PaymentMethodModalDispatcher';
 
 // =============================================================================
 // REGLAS DE VALIDACIÓN ESTRICTAS (IDÉNTICAS AL REGISTRO Y ADUANA BACKEND)
@@ -18,75 +23,37 @@ const REGEX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // =============================================================================
 // SUBCOMPONENTE AISLADO: RELOJ TEMPORIZADOR DE RESERVA (0 RE-RENDERS AL MODAL)
-// Sincronizado estrictamente con la hora oficial del sistema (Wall-Clock Time)
+// Utiliza el componente compartido <CuentaRegresiva /> (Fase 2 - F7)
 // =============================================================================
-function TemporizadorReservaModal({ segundosIniciales = 1800, onExpirado }) {
-  const tiempoFinRef = useRef(Date.now() + Math.max(0, segundosIniciales) * 1000);
-  const [segundos, setSegundos] = useState(Math.max(0, segundosIniciales));
-
-  useEffect(() => {
-    tiempoFinRef.current = Date.now() + Math.max(0, segundosIniciales) * 1000;
-    setSegundos(Math.max(0, segundosIniciales));
-  }, [segundosIniciales]);
-
-  useEffect(() => {
-    const calcularRestante = () => {
-      const difMs = tiempoFinRef.current - Date.now();
-      return Math.max(0, Math.ceil(difMs / 1000));
-    };
-
-    const sincronizarTiempo = () => {
-      const segs = calcularRestante();
-      setSegundos(segs);
-      if (segs <= 0 && onExpirado) {
-        onExpirado();
-      }
-    };
-
-    sincronizarTiempo();
-    const timer = setInterval(sincronizarTiempo, 1000);
-
-    // Eventos para sincronizar de inmediato al salir y volver de WhatsApp o de otra pestaña
-    const handleVisibilidad = () => {
-      if (document.visibilityState === 'visible') {
-        sincronizarTiempo();
-      }
-    };
-    const handleFocus = () => {
-      sincronizarTiempo();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilidad);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', handleVisibilidad);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [onExpirado]);
-
+function TemporizadorReservaModal({ expiraEn = null, segundosIniciales = 1800, onExpirado }) {
   return (
-    <div className="max-w-md mx-auto p-3.5 rounded-xl bg-slate-900/80 border border-cyan-500/30 flex items-center justify-between text-xs shadow-md">
-      <div className="flex items-center gap-2 text-slate-300">
-        <span className="text-base">⏱️</span>
-        <div>
-          <p className="font-bold text-white leading-tight">Stock apartado temporalmente</p>
-          <p className="text-[11px] text-slate-400">Tu reserva se mantendrá activa durante:</p>
+    <CuentaRegresiva
+      expiraEn={expiraEn}
+      segundosIniciales={segundosIniciales}
+      onExpirado={onExpirado}
+    >
+      {(segundos, textoMMSS) => (
+        <div className="max-w-md mx-auto p-3.5 rounded-xl bg-slate-900/80 border border-cyan-500/30 flex items-center justify-between text-xs shadow-md">
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="text-base">⏱️</span>
+            <div>
+              <p className="font-bold text-white leading-tight">Stock apartado temporalmente</p>
+              <p className="text-[11px] text-slate-400">Tu reserva se mantendrá activa durante:</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <span
+              className={`font-mono font-black text-base tracking-widest ${
+                segundos <= 300 ? 'text-rose-400 font-bold' : 'text-cyan-400'
+              }`}
+            >
+              {textoMMSS}
+            </span>
+            <p className="text-[10px] text-slate-500 uppercase font-mono">Minutos</p>
+          </div>
         </div>
-      </div>
-      <div className="text-right">
-        <span
-          className={`font-mono font-black text-base tracking-widest ${
-            segundos <= 300 ? 'text-rose-400 font-bold' : 'text-cyan-400'
-          }`}
-        >
-          {String(Math.floor(segundos / 60)).padStart(2, '0')}:
-          {String(segundos % 60).padStart(2, '0')}
-        </span>
-        <p className="text-[10px] text-slate-500 uppercase font-mono">Minutos</p>
-      </div>
-    </div>
+      )}
+    </CuentaRegresiva>
   );
 }
 
@@ -109,6 +76,13 @@ export default function CheckoutModal({
   // 1: Facturación, 2: Entrega, 3: Pago, 4: Revisión, 5: Éxito
   const [pasoActual, setPasoActual] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { contenedorRef: modalAccesibilidadRef } = useAccesibilidadModal(
+    isOpen,
+    () => {
+      if (!isSubmitting && pasoActual !== 5) onClose();
+    },
+    isSubmitting
+  );
   const [errorMessage, setErrorMessage] = useState('');
   const [copiadoExito, setCopiadoExito] = useState(false);
 
@@ -233,10 +207,10 @@ export default function CheckoutModal({
   const [mostrarConfirmacionRetorno, setMostrarConfirmacionRetorno] = useState(false);
   const [descargandoFactura, setDescargandoFactura] = useState(false);
 
-  // Auto-ocultar alertas temporales a los 15 segundos
+  // Auto-ocultar alertas temporales a los 6 segundos (Regla Global 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const timer = setTimeout(() => setErrorMessage(''), 15000);
+    const timer = setTimeout(() => setErrorMessage(''), 6000);
     return () => clearTimeout(timer);
   }, [errorMessage]);
 
@@ -390,24 +364,27 @@ export default function CheckoutModal({
     if (!token) return;
     setCargandoMediosPago(true);
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/sales/medios-pago/`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const lista = Array.isArray(res.data) ? res.data : [];
+      const datos = await obtenerCatalogoCacheado(
+        'sales:medios-pago',
+        '/api/sales/medios-pago/',
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const lista = Array.isArray(datos)
+        ? datos.filter((m) => m && Boolean(m.estado))
+        : [];
       setMediosPago(lista);
 
       if (lista.length > 0) {
         setMedioPagoSeleccionadoId((prev) => prev || lista[0].id_mediopago);
         setErrorMedioPago('');
+      } else {
+        setMedioPagoSeleccionadoId(null);
       }
     } catch (err) {
       console.warn('No se pudieron cargar los medios de pago:', err);
-      const fallback = [
-        { id_mediopago: 1, nombre_medio_pago: 'Transferencia Bancaria', estado: true },
-        { id_mediopago: 2, nombre_medio_pago: 'Efectivo en Mostrador', estado: true }
-      ];
-      setMediosPago(fallback);
-      setMedioPagoSeleccionadoId((prev) => prev || fallback[0].id_mediopago);
+      setMediosPago([]);
+      setMedioPagoSeleccionadoId(null);
+      setErrorMedioPago('No se pudieron cargar los medios de pago habilitados. Reintenta en unos segundos.');
     } finally {
       setCargandoMediosPago(false);
     }
@@ -571,9 +548,27 @@ export default function CheckoutModal({
     return direcciones.find((d) => d.id_direccion === direccionSeleccionadaId) || null;
   }, [direcciones, direccionSeleccionadaId]);
 
+  const mediosPagoProcesados = useMemo(
+    () => procesarMediosPagoActivos(mediosPago, { metodoEntrega }),
+    [mediosPago, metodoEntrega]
+  );
+
   const medioPagoSeleccionado = useMemo(() => {
-    return mediosPago.find((m) => m.id_mediopago === medioPagoSeleccionadoId) || null;
-  }, [mediosPago, medioPagoSeleccionadoId]);
+    return (
+      mediosPagoProcesados.find((m) => m.id_mediopago === medioPagoSeleccionadoId) ||
+      null
+    );
+  }, [mediosPagoProcesados, medioPagoSeleccionadoId]);
+
+  // Si el usuario cambia a ENVIO y tenía seleccionado EFECTIVO, reajustar automáticamente al primer medio compatible
+  useEffect(() => {
+    if (!medioPagoSeleccionado || !medioPagoSeleccionado.deshabilitado) return;
+    const primeroCompatible = mediosPagoProcesados.find((m) => !m.deshabilitado);
+    setMedioPagoSeleccionadoId(primeroCompatible ? primeroCompatible.id_mediopago : null);
+  }, [medioPagoSeleccionado, mediosPagoProcesados]);
+
+  // Estado para abrir el modal reutilizable de instrucciones cuando el pago no es Mercado Pago
+  const [modalInstruccionesPagoAbierto, setModalInstruccionesPagoAbierto] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Validación de Datos de Facturación (Exclusivo para la Compra)
@@ -741,6 +736,12 @@ export default function CheckoutModal({
       setTiempoExpirado(false);
       setPasoActual(1);
       setMostrarConfirmacionRetorno(false);
+      setCuponesSeleccionados([]);
+
+      // Recargar cupones inmediatamente para refrescar el listado con los beneficios revertidos
+      try {
+        await cargarCupones();
+      } catch (_) {}
 
       if (onOrdenCancelada) {
         try {
@@ -774,31 +775,33 @@ export default function CheckoutModal({
 
   // ---------------------------------------------------------------------------
   // Sondeo (Polling) en Tiempo Real para Acreditación de Mercado Pago (Webhook)
+  // Pausa cuando la pestaña está oculta y comprueba al instante al volver (Fase 2 - F8)
   // ---------------------------------------------------------------------------
-  useEffect(() => {
+  const sondearEstadoPagoMP = useCallback(async () => {
     if (!esperandoPagoMP || !resultadoVenta?.id_venta || !token) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await axios.get(
-          `${API_BASE_URL}/api/sales/compras/virtual/${resultadoVenta.id_venta}/estado/`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (res.data?.pagada) {
-          setEsperandoPagoMP(false);
-          setResultadoVenta((prev) => ({ ...prev, estado_venta: 'PAGADA' }));
-          setPasoActual(5);
-          if (onCompraCompletada) {
-            onCompraCompletada({ ...resultadoVenta, estado_venta: 'PAGADA' });
-          }
+    try {
+      const res = await axios.get(
+        `${API_BASE_URL}/api/sales/compras/virtual/${resultadoVenta.id_venta}/estado/`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.data?.pagada) {
+        setEsperandoPagoMP(false);
+        setResultadoVenta((prev) => ({ ...prev, estado_venta: 'PAGADA' }));
+        setPasoActual(5);
+        if (onCompraCompletada) {
+          onCompraCompletada({ ...resultadoVenta, estado_venta: 'PAGADA' });
         }
-      } catch (err) {
-        // Sondeo silencioso
       }
-    }, 4000);
+    } catch (err) {
+      // Sondeo silencioso
+    }
+  }, [esperandoPagoMP, resultadoVenta, token, onCompraCompletada]);
 
-    return () => clearInterval(interval);
-  }, [esperandoPagoMP, resultadoVenta?.id_venta, token, onCompraCompletada]);
+  useIntervaloVisible(
+    sondearEstadoPagoMP,
+    esperandoPagoMP && resultadoVenta?.id_venta && token ? 4000 : null,
+    { ejecutarAlMontar: false, sincronizarAlVolver: true }
+  );
 
   const handleVerificarAcreditacionMP = async () => {
     if (!resultadoVenta?.id_venta || !token) return;
@@ -824,6 +827,8 @@ export default function CheckoutModal({
   };
 
   const handleSimularPagoMP = async () => {
+    // Protección estricta: la simulación solo está permitida en entorno de desarrollo local (Fase 1 - F1)
+    if (!import.meta.env.DEV) return;
     if (!resultadoVenta?.id_venta) return;
     setVerificandoPagoMP(true);
     try {
@@ -877,8 +882,11 @@ export default function CheckoutModal({
       setResultadoVenta(datosVenta);
 
       // Si el medio de pago seleccionado es Mercado Pago, generar la preferencia oficial
-      const nombreMedio = String(medioPagoSeleccionado?.nombre_medio_pago || '').toLowerCase();
-      const esMP = nombreMedio.includes('mercado') || nombreMedio.includes('mp');
+      const esMP =
+        medioPagoSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO ||
+        String(medioPagoSeleccionado?.nombre_medio_pago || '')
+          .toLowerCase()
+          .includes('mercado');
 
       if (esMP) {
         try {
@@ -898,14 +906,12 @@ export default function CheckoutModal({
         } catch (prefErr) {
           console.warn('Inconveniente al generar preferencia de Mercado Pago:', prefErr);
           const errDetalle = prefErr.response?.data?.error || 'Inconveniente al conectar con Mercado Pago.';
-          setErrorMessage(`Tu orden fue reservada (#${datosVenta.codigo_sec || datosVenta.id_venta}), pero ocurrió un inconveniente con la pasarela: ${errDetalle}. Puedes reintentar la conexión o pagar desde el banner superior.`);
+          setErrorMessage(`Tu orden fue reservada (Código ${datosVenta.codigo_sec}), pero ocurrió un inconveniente con la pasarela: ${errDetalle}. Puedes reintentar la conexión o pagar desde el banner superior.`);
           setEsperandoPagoMP(true);
         }
       } else {
-        setPasoActual(5);
-        if (onCompraCompletada) {
-          onCompraCompletada(datosVenta);
-        }
+        // Abrir el modal específico del medio de pago seleccionado (Transferencia, Tarjeta o Efectivo)
+        setModalInstruccionesPagoAbierto(true);
       }
     } catch (err) {
       console.error('Error al procesar la compra virtual:', err);
@@ -988,6 +994,10 @@ export default function CheckoutModal({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/90 flex items-center justify-center p-3 sm:p-4 md:p-6 font-sans">
       <motion.div
+        ref={modalAccesibilidadRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="checkout-virtual-titulo"
         initial={{ opacity: 0, scale: 0.96, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 16 }}
@@ -1003,7 +1013,7 @@ export default function CheckoutModal({
               </svg>
             </div>
             <div>
-              <h2 className="text-lg font-black text-white tracking-tight flex items-center gap-2">
+              <h2 id="checkout-virtual-titulo" className="text-lg font-black text-white tracking-tight flex items-center gap-2">
                 Checkout Virtual
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 uppercase font-mono">
                   Compra Segura
@@ -1081,10 +1091,12 @@ export default function CheckoutModal({
           </div>
         )}
 
-        {/* Alerta de Error Temporal (Fade-out 15s) */}
+        {/* Alerta de Error Temporal */}
         <AnimatePresence>
           {errorMessage && (
             <motion.div
+              role="alert"
+              aria-live="assertive"
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
@@ -1567,28 +1579,33 @@ export default function CheckoutModal({
                 </div>
               )}
 
-              {/* Lista de Medios de Pago */}
+              {/* Lista Dinámica de Medios de Pago Activos desde Base de Datos */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {mediosPago.map((medio) => {
+                {mediosPagoProcesados.map((medio) => {
                   const seleccionado = medio.id_mediopago === medioPagoSeleccionadoId;
                   const nombre = medio.nombre_medio_pago || medio.nombre || 'Medio de Pago';
-                  const esMP = nombre.toLowerCase().includes('mercado') || nombre.toLowerCase().includes('mp');
-                  const esTransferencia = !esMP && nombre.toLowerCase().includes('transfer');
-                  const esEfectivo = !esMP && nombre.toLowerCase().includes('efectivo');
+                  const esMP = medio.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO;
+                  const esTransferencia = medio.tipoModal === TIPOS_MODAL_PAGO.TRANSFERENCIA;
+                  const esEfectivo = medio.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO;
+                  const deshabilitado = Boolean(medio.deshabilitado);
 
                   return (
                     <div
                       key={medio.id_mediopago}
                       onClick={() => {
+                        if (deshabilitado) return;
                         setMedioPagoSeleccionadoId(medio.id_mediopago);
                         setErrorMedioPago('');
                       }}
-                      className={`p-4 rounded-xl border cursor-pointer transition-all flex items-center justify-between gap-3 ${
-                        seleccionado
+                      title={deshabilitado ? medio.motivoDeshabilitado : nombre}
+                      className={`p-4 rounded-xl border transition-all flex items-center justify-between gap-3 ${
+                        deshabilitado
+                          ? 'bg-slate-900/30 border-slate-800/60 opacity-50 cursor-not-allowed'
+                          : seleccionado
                           ? esMP
-                            ? 'bg-sky-500/15 border-sky-400 shadow-lg shadow-sky-950/30'
-                            : 'bg-cyan-500/15 border-cyan-400 shadow-lg shadow-cyan-950/20'
-                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                            ? 'bg-sky-500/15 border-sky-400 shadow-lg shadow-sky-950/30 cursor-pointer'
+                            : 'bg-cyan-500/15 border-cyan-400 shadow-lg shadow-cyan-950/20 cursor-pointer'
+                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 cursor-pointer'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -1629,13 +1646,9 @@ export default function CheckoutModal({
                             )}
                           </div>
                           <p className="text-[11px] text-slate-400 truncate">
-                            {esMP
-                              ? 'Transferencia inmediata, débito o dinero en cuenta'
-                              : esTransferencia
-                              ? 'CBU / Alias provisto tras confirmar'
-                              : esEfectivo
-                              ? 'Abona al momento de recibir o retirar'
-                              : 'Canal habilitado para la orden'}
+                            {deshabilitado
+                              ? 'No disponible para envíos a domicilio'
+                              : medio.descripcionCorta}
                           </p>
                         </div>
                       </div>
@@ -2050,8 +2063,8 @@ export default function CheckoutModal({
                 </div>
               </div>
 
-              {/* Banner de Modo Simulación / Desarrollo */}
-              {mpPreferencia?.modo_simulacion && (
+              {/* Banner de Modo Simulación / Desarrollo (solo visible en DEV y cuando el backend lo habilita) */}
+              {import.meta.env.DEV && mpPreferencia?.modo_simulacion && (
                 <div className="max-w-md mx-auto p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/30 text-left space-y-2">
                   <p className="text-xs font-bold text-violet-300 flex items-center gap-1.5">
                     <span>🧪</span>
@@ -2073,6 +2086,7 @@ export default function CheckoutModal({
 
               {/* Temporizador Aislado de Reserva de Stock TTL */}
               <TemporizadorReservaModal
+                expiraEn={resultadoVenta?.expira_en || ordenParaRetomar?.expira_en || null}
                 segundosIniciales={resultadoVenta?.segundos_restantes || ordenParaRetomar?.segundos_restantes || 30 * 60}
                 onExpirado={handleExpirarReserva}
               />
@@ -2197,6 +2211,25 @@ export default function CheckoutModal({
                   Tu orden ha sido registrada y pagada. Los repuestos han sido reservados y descontados del inventario en tiempo real.
                 </p>
               </div>
+
+              {/* Advertencias no bloqueantes devueltas por el backend (Fase 3 - F.4.3) */}
+              {Array.isArray(resultadoVenta?.advertencias) && resultadoVenta.advertencias.length > 0 && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="max-w-md mx-auto p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-left space-y-1.5 text-xs text-amber-200"
+                >
+                  <p className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>ℹ️</span>
+                    <span>Aviso sobre el comprobante:</span>
+                  </p>
+                  {resultadoVenta.advertencias.map((adv, idx) => (
+                    <p key={idx} className="text-[11px] text-amber-200/90 leading-relaxed">
+                      • {adv}
+                    </p>
+                  ))}
+                </div>
+              )}
 
               {/* Desglose Detallado de Beneficios y Cupones Canjeados */}
               {calculoDescuentos?.desglose?.length > 0 && (
@@ -2392,6 +2425,31 @@ export default function CheckoutModal({
           isOpen={modalNuevaDireccionAbierto}
           onClose={() => setModalNuevaDireccionAbierto(false)}
           onSaved={handleNuevaDireccionGuardada}
+        />
+
+        {/* Modal reutilizable del medio de pago seleccionado (Transferencia, Tarjeta o Efectivo) */}
+        <PaymentMethodModalDispatcher
+          isOpen={modalInstruccionesPagoAbierto}
+          onClose={() => {
+            setModalInstruccionesPagoAbierto(false);
+            setPasoActual(5);
+            if (onCompraCompletada && resultadoVenta) {
+              onCompraCompletada(resultadoVenta);
+            }
+          }}
+          medioPago={medioPagoSeleccionado}
+          idVenta={resultadoVenta?.id_venta || null}
+          montoTotal={totalEsperandoMP}
+          concepto="Compra en Tienda Virtual IFix"
+          codigoSeguridad={resultadoVenta?.codigo_sec || null}
+          textoConfirmar="Finalizar y ver Comprobante"
+          onPagoConfirmado={() => {
+            setModalInstruccionesPagoAbierto(false);
+            setPasoActual(5);
+            if (onCompraCompletada && resultadoVenta) {
+              onCompraCompletada(resultadoVenta);
+            }
+          }}
         />
       </motion.div>
     </div>

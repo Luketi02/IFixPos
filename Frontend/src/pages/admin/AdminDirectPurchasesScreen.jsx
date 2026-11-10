@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
@@ -6,8 +6,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminDirectPurchasesScreen() {
   const { token } = useAuth();
   const navigate = useNavigate();
@@ -97,10 +96,12 @@ export default function AdminDirectPurchasesScreen() {
     [token, filtroBuscar, filtroImpacto]
   );
 
+  const consultarComprasRef = useRef(consultarCompras);
+  consultarComprasRef.current = consultarCompras;
+
   useEffect(() => {
     if (!token) return;
-    consultarCompras({ buscar: '', impacto_stock: '' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    consultarComprasRef.current({ buscar: '', impacto_stock: '' });
   }, [token]);
 
   const handleFiltrar = (e) => {

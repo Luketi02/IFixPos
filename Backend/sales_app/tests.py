@@ -2755,3 +2755,582 @@ class MotorBeneficiosInteligenteTestCase(TestCase):
         )
         self.assertEqual(res_canje['descuento_total'], Decimal('0.00'))
         self.assertEqual(res_canje['beneficios_canjeados'], [])
+
+
+# ==============================================================================
+# SEGURIDAD DEL WEBHOOK DE MERCADO PAGO (Auditoría - Fase 1)
+# ==============================================================================
+
+class WebhookMercadoPagoSeguridadTests(TestCase):
+    """
+    Verifica las restricciones de seguridad del webhook de Mercado Pago:
+    - La acreditación simulada ('SIMULADO-<id>') solo funciona si el entorno la habilita.
+    - Con secreto configurado, las notificaciones reales exigen firma 'x-signature' válida.
+    - Los comprobantes no inventan datos fiscales/contacto del comercio.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.rol_cliente = RolUsuario.objects.create(
+            codigo='CLIENTE', nombre_rol='Cliente', descripcion='Rol Cliente'
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente.webhook@test.com',
+            contrasena='hash_pwd',
+            id_rol=self.rol_cliente,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.venta = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='RETIRO',
+            fecha_venta=timezone.now().date(),
+            estado_venta='PENDIENTE',
+            codigo_sec='SEC-WEBHOOK-001',
+            monto_subtotal=Decimal('7500.00'),
+            costo_envio=Decimal('0.00')
+        )
+        self.client = APIClient()
+        self.media_tmp = tempfile.mkdtemp()
+
+    def _post_simulado(self):
+        return self.client.post(
+            '/api/sales/mercadopago/webhook/',
+            data={'data': {'id': f'SIMULADO-{self.venta.id_venta}'}},
+            format='json'
+        )
+
+    def test_simulacion_deshabilitada_rechaza_con_403_y_no_acredita(self):
+        from django.test import override_settings
+        with override_settings(MERCADOPAGO_PERMITIR_SIMULACION=False):
+            res = self._post_simulado()
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(res.data['status'], 'forbidden')
+        self.venta.refresh_from_db()
+        self.assertEqual(self.venta.estado_venta, 'PENDIENTE')
+        from sales_app.models import Pago
+        self.assertFalse(Pago.objects.filter(id_venta=self.venta).exists())
+
+    def test_simulacion_habilitada_acredita_la_venta(self):
+        from django.test import override_settings
+        with override_settings(MERCADOPAGO_PERMITIR_SIMULACION=True, MEDIA_ROOT=self.media_tmp):
+            res = self._post_simulado()
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'approved')
+        self.venta.refresh_from_db()
+        self.assertEqual(self.venta.estado_venta, 'PAGADA')
+
+    def test_notificacion_real_con_firma_invalida_retorna_401(self):
+        from django.test import override_settings
+        with override_settings(MERCADOPAGO_WEBHOOK_SECRET='secreto-de-prueba'):
+            res = self.client.post(
+                '/api/sales/mercadopago/webhook/?data.id=123456789',
+                data={'data': {'id': '123456789'}},
+                format='json',
+                HTTP_X_SIGNATURE='ts=1700000000,v1=firma-falsa',
+                HTTP_X_REQUEST_ID='req-1'
+            )
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(res.data['status'], 'invalid_signature')
+
+    def test_notificacion_real_sin_firma_con_secreto_configurado_retorna_401(self):
+        from django.test import override_settings
+        with override_settings(MERCADOPAGO_WEBHOOK_SECRET='secreto-de-prueba'):
+            res = self.client.post(
+                '/api/sales/mercadopago/webhook/',
+                data={'data': {'id': '987654321'}},
+                format='json'
+            )
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_validar_firma_acepta_hmac_correcto_y_rechaza_alterado(self):
+        import hashlib
+        import hmac
+        from sales_app.services import validar_firma_webhook_mercadopago
+
+        secreto = 'clave-secreta'
+        manifiesto = 'id:abc123;request-id:req-9;ts:1700000001;'
+        firma_ok = hmac.new(secreto.encode(), manifiesto.encode(), hashlib.sha256).hexdigest()
+
+        self.assertTrue(validar_firma_webhook_mercadopago(
+            firma=f'ts=1700000001,v1={firma_ok}',
+            request_id='req-9',
+            data_id='ABC123',  # Mercado Pago exige comparar el id en minúsculas
+            secreto=secreto
+        ))
+        # Firma alterada
+        self.assertFalse(validar_firma_webhook_mercadopago(
+            firma=f'ts=1700000001,v1={firma_ok[:-1]}0',
+            request_id='req-9',
+            data_id='abc123',
+            secreto=secreto
+        ))
+        # Request-id distinto invalida el manifiesto
+        self.assertFalse(validar_firma_webhook_mercadopago(
+            firma=f'ts=1700000001,v1={firma_ok}',
+            request_id='otro',
+            data_id='abc123',
+            secreto=secreto
+        ))
+        # Sin cabecera o sin secreto
+        self.assertFalse(validar_firma_webhook_mercadopago(
+            firma='', request_id='req-9', data_id='abc123', secreto=secreto
+        ))
+        self.assertFalse(validar_firma_webhook_mercadopago(
+            firma=f'ts=1700000001,v1={firma_ok}', request_id='req-9', data_id='abc123', secreto=''
+        ))
+
+    def test_direccion_comercio_no_inventa_domicilio_si_no_hay_configuracion(self):
+        from sales_app.services import _resolver_direccion_comercio, SIN_DATO_COMERCIO
+        self.assertEqual(_resolver_direccion_comercio({}), SIN_DATO_COMERCIO)
+        # Un ID suelto en 'direccionLocal' nunca debe mostrarse como texto al cliente
+        self.assertEqual(_resolver_direccion_comercio({'direccionLocal': '99999'}), SIN_DATO_COMERCIO)
+
+
+class Fase2EstabilidadRendimientoTests(TestCase):
+    """
+    Pruebas unitarias de la Fase 2 del plan de auditoría del Backend:
+    - Limpieza eficiente de ventas pendientes expiradas mediante `fecha_hora_creacion` y comando programado.
+    - Pureza de lectura en `obtener_venta_pendiente_activa` (`selectors.py`).
+    - Caché en memoria (`LocMemCache`) de `ConfiguracionSistema` con invalidación automática.
+    - Eliminación de consultas N+1 sobre `diagnostico_set` en `_calcular_monto_reparacion`.
+    """
+
+    def setUp(self):
+        self.rol_cli, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+        self.cliente = Usuario.objects.create(
+            email='lucia.fase2@ifixpos.com',
+            contrasena='hash',
+            id_rol=self.rol_cli,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            nombre='Lucía',
+            apellido='Pérez',
+            dni='38111222'
+        )
+
+    def test_limpiar_ventas_pendientes_expiradas_por_fecha_hora_creacion_y_comando(self):
+        import datetime
+        from django.core.management import call_command
+        from sales_app.services import limpiar_ventas_pendientes_expiradas
+
+        ahora = timezone.now()
+        venta_vencida = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=ahora.date(),
+            fecha_hora_creacion=ahora - datetime.timedelta(minutes=45),
+            monto_subtotal=Decimal('10000.00'),
+            costo_envio=Decimal('0.00'),
+            metodo_entrega='RETIRO EN LOCAL',
+            estado_venta='PENDIENTE',
+            codigo_sec='VTA-EXP-01'
+        )
+        venta_vigente = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=ahora.date(),
+            fecha_hora_creacion=ahora - datetime.timedelta(minutes=10),
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('0.00'),
+            metodo_entrega='RETIRO EN LOCAL',
+            estado_venta='PENDIENTE',
+            codigo_sec='VTA-VIG-01'
+        )
+
+        canceladas = limpiar_ventas_pendientes_expiradas(minutos_limite=30)
+        self.assertEqual(canceladas, 1)
+        venta_vencida.refresh_from_db()
+        venta_vigente.refresh_from_db()
+        self.assertEqual(venta_vencida.estado_venta, 'CANCELADA')
+        self.assertEqual(venta_vigente.estado_venta, 'PENDIENTE')
+
+        # Ejecutar comando programado con umbral de 5 minutos para alcanzar a venta_vigente
+        call_command('limpiar_ventas_expiradas', minutos=5)
+        venta_vigente.refresh_from_db()
+        self.assertEqual(venta_vigente.estado_venta, 'CANCELADA')
+
+    def test_obtener_venta_pendiente_activa_es_solo_lectura(self):
+        import datetime
+        from unittest.mock import patch as mock_patch
+        from sales_app.selectors import obtener_venta_pendiente_activa
+
+        ahora = timezone.now()
+        venta_vencida = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=ahora.date(),
+            fecha_hora_creacion=ahora - datetime.timedelta(minutes=40),
+            monto_subtotal=Decimal('8000.00'),
+            costo_envio=Decimal('0.00'),
+            metodo_entrega='RETIRO EN LOCAL',
+            estado_venta='PENDIENTE',
+            codigo_sec='VTA-RO-01'
+        )
+        # Cuando está vencida retorna None pero NO muta el estado en base de datos
+        res_vencida = obtener_venta_pendiente_activa(self.cliente)
+        self.assertIsNone(res_vencida)
+        venta_vencida.refresh_from_db()
+        self.assertEqual(venta_vencida.estado_venta, 'PENDIENTE')
+
+        # Cuando está vigente calcula segundos_restantes desde fecha_hora_creacion
+        venta_vencida.fecha_hora_creacion = ahora - datetime.timedelta(minutes=5)
+        venta_vencida.save(update_fields=['fecha_hora_creacion'])
+        with mock_patch('sales_app.services.crear_preferencia_mercadopago', return_value={'preference_id': 'pref-1', 'init_point': 'https://mp/test'}):
+            datos = obtener_venta_pendiente_activa(self.cliente)
+        self.assertIsNotNone(datos)
+        self.assertEqual(datos['id_venta'], venta_vencida.id_venta)
+        self.assertGreater(datos['segundos_restantes'], 1400)
+
+    def test_cache_configuracion_sistema_evita_queries_y_se_invalida_al_guardar(self):
+        from core_app.models import ConfiguracionSistema
+        from core_app.selectors import obtener_configuracion_texto, invalidar_cache_configuracion
+
+        ConfiguracionSistema.objects.update_or_create(
+            clave='nombreEmpresa',
+            defaults={'valor': 'IFixPos Original'}
+        )
+        invalidar_cache_configuracion()
+
+        # Primera lectura carga el caché
+        self.assertEqual(obtener_configuracion_texto('nombreEmpresa'), 'IFixPos Original')
+
+        # Lecturas subsecuentes se resuelven con 0 consultas SQL
+        with self.assertNumQueries(0):
+            self.assertEqual(obtener_configuracion_texto('nombreEmpresa'), 'IFixPos Original')
+
+        # Al actualizar el registro en BD se invalida automáticamente el caché
+        cfg = ConfiguracionSistema.objects.get(clave='nombreEmpresa')
+        cfg.valor = 'IFixPos Renovado'
+        cfg.save()
+
+        self.assertEqual(obtener_configuracion_texto('nombreEmpresa'), 'IFixPos Renovado')
+
+    def test_calcular_monto_reparacion_usa_prefetch_sin_queries_adicionales(self):
+        from catalog_app.models import TipoDispositivo, Marca, ModeloDispositivo
+        from workshop_app.models import Dispositivo, Reparacion, Diagnostico
+        from sales_app.selectors import _calcular_monto_reparacion
+
+        hoy = timezone.now().date()
+        tipo, _ = TipoDispositivo.objects.get_or_create(
+            nombre='Smartphone',
+            defaults={'estado_activo': True}
+        )
+        marca, _ = Marca.objects.get_or_create(
+            nombre='Samsung',
+            defaults={'estado_activo': True}
+        )
+        modelo, _ = ModeloDispositivo.objects.get_or_create(
+            nombre='Galaxy S23',
+            id_marca=marca,
+            id_tipo_dispositivo=tipo,
+            defaults={'estado_activo': True}
+        )
+        disp = Dispositivo.objects.create(
+            numero_serie='SN-FASE2-001',
+            fecha_registro=hoy,
+            id_usuario=self.cliente,
+            id_modelo=modelo
+        )
+        rep = Reparacion.objects.create(
+            id_dispositivo=disp,
+            id_usuario=self.cliente,
+            fecha_inicio=hoy,
+            etapa='FINALIZADO',
+            codigo_sec='SEC-REP-F2-01',
+            desc_cliente='Pantalla rota'
+        )
+        Diagnostico.objects.create(
+            id_reparacion=rep,
+            fecha_diagnostico=hoy,
+            descripcion_falla='Cambio de módulo OLED',
+            costo_diagnostico=Decimal('25000.00')
+        )
+
+        rep_prefetched = Reparacion.objects.prefetch_related(
+            'diagnostico_set',
+            'detalleinsumoreparacion_set__id_producto'
+        ).get(pk=rep.pk)
+
+        with self.assertNumQueries(0):
+            monto = _calcular_monto_reparacion(rep_prefetched)
+        self.assertEqual(monto, Decimal('25000.00'))
+
+
+class Fase3MantenibilidadYUXTests(TestCase):
+    """
+    Pruebas unitarias de la Fase 3 del plan de auditoría del Backend:
+    - TextChoices y normalización de estados de venta (`venta_esta_pagada`, `normalizar_estado_venta`).
+    - Parámetros de negocio en `ConfiguracionSistema` (§2.3).
+    - Exposición de `expira_en` en checkout y venta pendiente activa (§4.3).
+    - Despacho seguro de correos con `despachar_correo_en_commit` (§3.5).
+    - Contrato de errores unificado (`manejador_excepciones_ifixpos`) y Throttling (§4.1 y §4.5).
+    """
+
+    def setUp(self):
+        self.rol_cli, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+        self.cliente = Usuario.objects.create(
+            email='martin.fase3@ifixpos.com',
+            contrasena='hash',
+            id_rol=self.rol_cli,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+    def test_textchoices_y_normalizacion_estado_venta(self):
+        from core_app.constantes import (
+            EstadoVenta,
+            CodigoRol,
+            EtapaReparacion,
+            venta_esta_pagada,
+            venta_esta_cancelada,
+            normalizar_estado_venta,
+            truncar_log,
+        )
+        self.assertEqual(CodigoRol.ADMIN, 'ADMIN')
+        self.assertEqual(EtapaReparacion.NUEVO_DIAGNOSTICO, 'NUEVO_DIAGNOSTICO')
+        self.assertTrue(venta_esta_pagada('PAGADA'))
+        self.assertTrue(venta_esta_pagada('pagado'))
+        self.assertFalse(venta_esta_pagada('PENDIENTE'))
+        self.assertTrue(venta_esta_cancelada('CANCELADA'))
+        self.assertTrue(venta_esta_cancelada('ANULADO'))
+        self.assertEqual(normalizar_estado_venta('pagado'), EstadoVenta.PAGADA)
+        self.assertEqual(len(truncar_log('x' * 1500)), 1000)
+
+    def test_parametros_negocio_en_configuracion_sistema_y_expira_en(self):
+        from core_app.models import ConfiguracionSistema
+        from core_app.selectors import (
+            obtener_minutos_reserva_venta_pendiente,
+            obtener_dias_validez_cotizacion,
+            obtener_minutos_vida_access_token,
+            obtener_minutos_vida_otp_recuperacion,
+            obtener_minutos_vida_otp_admin,
+            obtener_longitud_codigo_seguridad,
+            obtener_limite_resultados_geo,
+            obtener_max_tamano_archivo_bytes,
+            obtener_extensiones_permitidas_archivos,
+        )
+        from sales_app.serializers import VentaOutputSerializer
+
+        # Los parámetros existen desde la migración 0007 de core_app
+        self.assertEqual(obtener_minutos_reserva_venta_pendiente(), 30)
+        self.assertEqual(obtener_dias_validez_cotizacion(), 15)
+        self.assertEqual(obtener_minutos_vida_access_token(), 60)
+        self.assertEqual(obtener_minutos_vida_otp_recuperacion(), 15)
+        self.assertEqual(obtener_minutos_vida_otp_admin(), 5)
+        self.assertEqual(obtener_longitud_codigo_seguridad(), 10)
+        self.assertEqual(obtener_limite_resultados_geo(), 100)
+        self.assertGreaterEqual(obtener_max_tamano_archivo_bytes(), 1024 * 1024)
+        self.assertIn('.jpg', obtener_extensiones_permitidas_archivos(solo_imagenes=True))
+
+        # Si el administrador modifica minutosReservaVentaPendiente a 45 min, expira_en refleja ~2700s
+        ConfiguracionSistema.objects.update_or_create(
+            clave='minutosReservaVentaPendiente',
+            defaults={'valor': '45', 'descripcion': 'Reserva de prueba'}
+        )
+        self.assertEqual(obtener_minutos_reserva_venta_pendiente(), 45)
+
+        venta = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=timezone.now().date(),
+            fecha_hora_creacion=timezone.now(),
+            monto_subtotal=Decimal('5000.00'),
+            costo_envio=Decimal('0.00'),
+            metodo_entrega='RETIRO EN LOCAL',
+            estado_venta='PENDIENTE',
+            codigo_sec='VTA-F3-EXP'
+        )
+        data = VentaOutputSerializer(venta).data
+        self.assertIn('expira_en', data)
+        self.assertGreater(data['expira_en'], 2600)
+
+    def test_despachar_correo_en_commit_no_propaga_excepcion_smtp(self):
+        from core_app.correos import despachar_correo_en_commit
+
+        llamado = {'ejecutado': False}
+
+        def envio_fallido():
+            llamado['ejecutado'] = True
+            raise RuntimeError("Fallo simulado de servidor SMTP")
+
+        # No debe levantar excepción aunque falle el servidor de correo
+        despachar_correo_en_commit(envio_fallido, contexto="Test SMTP")
+        self.assertTrue(llamado['ejecutado'])
+
+    def test_manejador_excepciones_ifixpos_inyecta_error_y_codigo(self):
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from core_app.exceptions import manejador_excepciones_ifixpos
+
+        exc = DRFValidationError({'email': ['El correo electrónico es inválido.']})
+        res = manejador_excepciones_ifixpos(exc, {})
+        self.assertIsNotNone(res)
+        self.assertEqual(res.data['error'], 'El correo electrónico es inválido.')
+        self.assertIn('codigo_error', res.data)
+        self.assertIn('email', res.data)
+
+
+class PendientesBackendAuditoriaTests(TestCase):
+    """
+    Pruebas unitarias que verifican el cierre del 100% de los pendientes de Backend
+    documentados en la Parte III (§P.2.1) de la Auditoría:
+    1. Código inmutable `MedioPago.codigo` (§2.4).
+    2. Caducidad exacta por horas de `Beneficio` con `fecha_hora_creacion`, `expira_en` y `segundos_restantes` (§4.6).
+    3. Objeto estructurado `desglose_cobro` en cobros/pagos y ocultamiento de `#id` al cliente (§4.4 y §4.7 / Regla 10).
+    4. Encabezados HTTP `Cache-Control` y `ETag` con soporte `304 Not Modified` (§3.3–§3.4).
+    """
+
+    def setUp(self):
+        self.rol_admin, _ = RolUsuario.objects.get_or_create(
+            codigo='ADMIN',
+            defaults={'nombre_rol': 'Administrador', 'descripcion': 'Rol Admin'}
+        )
+        self.rol_cli, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente', 'descripcion': 'Rol Cliente'}
+        )
+        self.admin = Usuario.objects.create(
+            email='admin.pendientes@ifixpos.com',
+            contrasena='hash',
+            id_rol=self.rol_admin,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+        self.cliente = Usuario.objects.create(
+            email='cliente.pendientes@ifixpos.com',
+            contrasena='hash',
+            id_rol=self.rol_cli,
+            fecha_registro=timezone.now().date(),
+            is_active=True
+        )
+
+    def test_medio_pago_codigo_inmutable_mercado_pago(self):
+        from core_app.constantes import CodigoMedioPago
+        from sales_app.selectors import obtener_medio_pago_por_codigo
+        from sales_app.services_mercadopago import _obtener_o_crear_medio_pago_mp
+
+        mp = MedioPago.objects.create(
+            codigo=CodigoMedioPago.MERCADO_PAGO,
+            nombre_medio_pago='Pasarela Digital Personalizada',
+            estado=True,
+            recargo=Decimal('0.00')
+        )
+        resuelto = _obtener_o_crear_medio_pago_mp()
+        self.assertEqual(resuelto.id_mediopago, mp.id_mediopago)
+        self.assertEqual(obtener_medio_pago_por_codigo('MP').id_mediopago, mp.id_mediopago)
+
+    def test_beneficio_caducidad_exacta_por_horas_y_expira_en(self):
+        import datetime
+        from sales_app.models import Beneficio
+        from sales_app.selectors import obtener_beneficios_activos_cliente, beneficio_esta_activo
+        from sales_app.serializers import BeneficioClienteOutputSerializer
+
+        ahora = timezone.now()
+        dt_vencido = ahora - datetime.timedelta(hours=3)
+        beneficio_vencido = Beneficio.objects.create(
+            id_usuario=self.cliente,
+            motivo='Cupón relámpago de 2 horas (vencido)',
+            fecha=timezone.localtime(dt_vencido).date(),
+            fecha_hora_creacion=dt_vencido,
+            enviado_momento_compra=True,
+            enviado_durante_carrito=False,
+            por_desc=Decimal('15.00'),
+            tiempo_disp=Decimal('2.00')
+        )
+        dt_vigente = ahora - datetime.timedelta(hours=1)
+        beneficio_vigente = Beneficio.objects.create(
+            id_usuario=self.cliente,
+            motivo='Cupón relámpago de 4 horas (vigente)',
+            fecha=timezone.localtime(dt_vigente).date(),
+            fecha_hora_creacion=dt_vigente,
+            enviado_momento_compra=True,
+            enviado_durante_carrito=False,
+            por_desc=Decimal('20.00'),
+            tiempo_disp=Decimal('4.00')
+        )
+
+        self.assertEqual(beneficio_vencido.estado, 'CADUCADO')
+        self.assertFalse(beneficio_esta_activo(beneficio_vencido))
+        self.assertEqual(beneficio_vigente.estado, 'ACTIVO')
+        self.assertTrue(beneficio_esta_activo(beneficio_vigente))
+
+        activos = obtener_beneficios_activos_cliente(self.cliente.id_usuario)
+        ids_activos = [b.id_beneficio for b in activos]
+        self.assertIn(beneficio_vigente.id_beneficio, ids_activos)
+        self.assertNotIn(beneficio_vencido.id_beneficio, ids_activos)
+
+        serializado = BeneficioClienteOutputSerializer(beneficio_vigente).data
+        self.assertIsNotNone(serializado['expira_en'])
+        self.assertGreater(serializado['segundos_restantes'], 9000)
+
+    def test_desglose_cobro_y_notificacion_cliente_sin_ids_internos(self):
+        from core_app.models import Notificacion
+        from sales_app.selectors import filtrar_cobros_y_pagos
+        from sales_app.services import registrar_cobro_operacion
+
+        medio_ef, _ = MedioPago.objects.get_or_create(
+            codigo='EFECTIVO',
+            defaults={'nombre_medio_pago': 'EFECTIVO', 'estado': True, 'recargo': Decimal('0.00')}
+        )
+        venta = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=timezone.now().date(),
+            monto_subtotal=Decimal('18500.00'),
+            costo_envio=Decimal('1500.00'),
+            metodo_entrega='RETIRO EN LOCAL',
+            estado_venta='PENDIENTE',
+            codigo_sec='VTA-DESGLOSE-99'
+        )
+
+        resultado_filtro = filtrar_cobros_y_pagos(
+            usuario_ejecutor=self.admin,
+            filtros={'busqueda': 'VTA-DESGLOSE-99'}
+        )
+        listado = resultado_filtro['resultados']
+        self.assertEqual(len(listado), 1)
+        self.assertIn('desglose_cobro', listado[0])
+        self.assertEqual(listado[0]['desglose_cobro']['concepto'], 'VENTA_PRODUCTOS')
+        self.assertEqual(listado[0]['desglose_cobro']['saldo_pendiente'], '20000.00')
+
+        pago = registrar_cobro_operacion(
+            usuario_ejecutor=self.admin,
+            operacion=venta,
+            datos_validados={
+                'medio_pago': str(medio_ef.id_mediopago),
+                'monto_pagado': Decimal('20000.00'),
+            }
+        )
+        self.assertTrue(hasattr(pago, 'desglose_cobro'))
+        self.assertEqual(pago.desglose_cobro['saldo_pendiente'], '0.00')
+
+        notif_cliente = Notificacion.objects.filter(id_usuario=self.cliente).order_by('-id_notificacion').first()
+        self.assertIsNotNone(notif_cliente)
+        self.assertNotIn(f"#{venta.id_venta}", notif_cliente.mensaje)
+        self.assertIn('VTA-DESGLOSE-99', notif_cliente.mensaje)
+
+    def test_respuesta_catalogo_cacheada_etag_y_304(self):
+        from rest_framework.test import APIRequestFactory
+        from core_app.cache_http import respuesta_catalogo_cacheada
+
+        factory = APIRequestFactory()
+        datos_catalogo = [{'id_categoria': 1, 'nombre_categoria': 'Pantallas OLED'}]
+
+        req_1 = factory.get('/api/catalog/categorias/')
+        res_200 = respuesta_catalogo_cacheada(req_1, datos_catalogo, max_age=60)
+        self.assertEqual(res_200.status_code, 200)
+        self.assertIn('ETag', res_200)
+        self.assertEqual(res_200['Cache-Control'], 'public, max-age=60')
+
+        etag = res_200['ETag']
+        req_2 = factory.get('/api/catalog/categorias/', HTTP_IF_NONE_MATCH=etag)
+        res_304 = respuesta_catalogo_cacheada(req_2, datos_catalogo, max_age=60)
+        self.assertEqual(res_304.status_code, 304)
+        self.assertEqual(res_304['ETag'], etag)
+
+
+

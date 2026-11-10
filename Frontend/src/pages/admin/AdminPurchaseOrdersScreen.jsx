@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
@@ -9,8 +9,7 @@ import DetalleOrdenCompraModal from '../../components/purchases/DetalleOrdenComp
 import GenerarOrdenCompraModal from '../../components/purchases/GenerarOrdenCompraModal';
 import RecepcionarCompraModal from '../../components/purchases/RecepcionarCompraModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminPurchaseOrdersScreen() {
   const { token } = useAuth();
   const { id_orden: idOrdenUrl } = useParams();
@@ -114,7 +113,7 @@ export default function AdminPurchaseOrdersScreen() {
   const consultarEstadoMotor = useCallback(async () => {
     try {
       setCargandoEstadoMotor(true);
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
       };
@@ -136,7 +135,7 @@ export default function AdminPurchaseOrdersScreen() {
     try {
       setEjecutandoMotor(true);
       setErrorAlerta('');
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
       };
@@ -162,7 +161,7 @@ export default function AdminPurchaseOrdersScreen() {
   useEffect(() => {
     const cargarProveedores = async () => {
       try {
-        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+        const activeToken = token || localStorage.getItem('access_token');
         const config = {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         };
@@ -214,7 +213,7 @@ export default function AdminPurchaseOrdersScreen() {
 
     setCargando(true);
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {},
         params: {}
@@ -250,10 +249,12 @@ export default function AdminPurchaseOrdersScreen() {
     }
   }, [filtros, token]);
 
+  const consultarOrdenesRef = useRef(consultarOrdenesCompra);
+  consultarOrdenesRef.current = consultarOrdenesCompra;
+
   // Carga inicial al montar la pantalla
   useEffect(() => {
-    consultarOrdenesCompra();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    consultarOrdenesRef.current();
   }, [token]);
 
   const handleFiltroChange = (e) => {

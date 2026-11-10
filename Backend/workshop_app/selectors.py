@@ -272,13 +272,29 @@ def obtener_historial_reparaciones(id_dispositivo: int) -> QuerySet[Reparacion]:
 
 def obtener_reparacion_activa(id_dispositivo: int) -> Optional[Reparacion]:
     """
-    CU-11: Retorna la reparación que se encuentra en curso (no 'FINALIZADA' ni 'ENTREGADA'), si existe.
+    CU-11: Retorna la reparación que se encuentra en curso (no 'FINALIZADA', 'FINALIZADO', 'ENTREGADA', 'ENTREGADO', 'CANCELADA', 'CANCELADO'), si existe.
     """
-    etapas_cerradas = ['FINALIZADA', 'ENTREGADA']
+    etapas_cerradas = [
+        'FINALIZADO', 'FINALIZADA',
+        'ENTREGADO', 'ENTREGADA',
+        'CANCELADO', 'CANCELADA'
+    ]
     return Reparacion.objects.filter(
         id_dispositivo_id=id_dispositivo
     ).exclude(
         etapa__in=etapas_cerradas
+    ).exclude(
+        etapa__iexact='FINALIZADO'
+    ).exclude(
+        etapa__iexact='FINALIZADA'
+    ).exclude(
+        etapa__iexact='ENTREGADO'
+    ).exclude(
+        etapa__iexact='ENTREGADA'
+    ).exclude(
+        etapa__iexact='CANCELADO'
+    ).exclude(
+        etapa__iexact='CANCELADA'
     ).select_related(
         'id_usuario',
         'id_usuario__perfilusuario'
@@ -309,7 +325,8 @@ def obtener_reparacion_detallada(*, usuario_solicitante: Usuario, id_reparacion:
         'detalleinsumoreparacion_set__id_producto',
         'diagnostico_set',
         'calificacion_set',
-        'categorias'
+        'categorias',
+        'imagenes_recepcion'
     ).first()
 
     if not reparacion:
@@ -443,6 +460,22 @@ def filtrar_reparaciones(
         # Cláusula de aislamiento estricto para clientes
         qs = qs.filter(id_dispositivo__id_usuario=usuario_ejecutor)
     elif rol_codigo in ('ADMIN', 'TECNICO'):
+        # Búsqueda unificada 'q' (CU-45, Dashboard y Mostrador)
+        q_general = str(filtros.get('q') or '').strip()
+        if q_general:
+            q_filtro = (
+                Q(id_dispositivo__id_usuario__perfilusuario__dni__icontains=q_general) |
+                Q(id_dispositivo__id_usuario__perfilusuario__nombre__icontains=q_general) |
+                Q(id_dispositivo__id_usuario__perfilusuario__apellido__icontains=q_general) |
+                Q(id_dispositivo__id_usuario__email__icontains=q_general) |
+                Q(id_dispositivo__id_usuario__perfilusuario__telefono__icontains=q_general) |
+                Q(codigo_sec__icontains=q_general) |
+                Q(id_dispositivo__numero_serie__icontains=q_general) |
+                Q(id_dispositivo__id_modelo__nombre__icontains=q_general) |
+                Q(id_dispositivo__id_modelo__id_marca__nombre__icontains=q_general)
+            )
+            qs = qs.filter(q_filtro)
+
         # Búsqueda multicriterio de cliente
         cliente_query = str(filtros.get('cliente_query') or '').strip()
         if cliente_query:

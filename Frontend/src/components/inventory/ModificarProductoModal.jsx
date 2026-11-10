@@ -6,8 +6,7 @@ import { normalizarUrlImagen } from '../../utils/productImages';
 import CyberNumberInput from '../common/CyberNumberInput';
 import ProductCompatibilitySection from './ProductCompatibilitySection';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function ModificarProductoModal({ isOpen, producto, onClose, onSuccess }) {
   const { token } = useAuth();
 

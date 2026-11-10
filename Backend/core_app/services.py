@@ -1,4 +1,6 @@
 import os
+import logging
+from datetime import date, time
 from typing import Optional, Any
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
@@ -7,7 +9,9 @@ from django.utils import timezone as django_timezone
 from email.mime.image import MIMEImage
 
 from core_app.models import Notificacion, ConfiguracionSistema, LogSistema, CopiaSeguridad
-from core_app.selectors import obtener_email_emisor
+from core_app.selectors import obtener_email_emisor, invalidar_cache_configuracion
+
+logger = logging.getLogger(__name__)
 
 def enmascarar_contenido_sensible(texto: str, codigo_sensible: Optional[str] = None) -> str:
     """
@@ -87,8 +91,8 @@ def registrar_y_enviar_notificacion_correo(
         try:
             email_msg.send(fail_silently=False)
         except Exception as e:
-            # Notificar en consola en caso de fallo de red/SMTP sin interrumpir la persistencia
-            print(f"[Motor Notificaciones] Error o advertencia al enviar correo a {usuario.email}: {e}")
+            # Registrar advertencia en log técnico sin interrumpir la persistencia
+            logger.warning("[Motor Notificaciones] Error o advertencia al enviar correo a %s: %s", usuario.email, e)
 
         return notificacion
 
@@ -114,6 +118,50 @@ def marcar_ultima_notificacion_como_leida(*, usuario: Any, tipo: str) -> Optiona
 
 
 @transaction.atomic
+def asegurar_configuraciones_predeterminadas() -> int:
+    """
+    Verifica que el 100% de los parámetros del catálogo canónico existan
+    en la tabla ConfiguracionSistema de PostgreSQL.
+    Cualquier clave ausente se crea físicamente en la base de datos con su valor
+    predeterminado, garantizando que el sistema opere con cero hardcodeo (CU-42).
+    Retorna la cantidad de configuraciones creadas.
+    """
+    from core_app.constantes import CATALOGO_CONFIGURACIONES_SISTEMA
+
+    existentes = set(
+        ConfiguracionSistema.objects.exclude(clave__isnull=True).values_list('clave', flat=True)
+    )
+    faltantes = [
+        clave for clave in CATALOGO_CONFIGURACIONES_SISTEMA if clave not in existentes
+    ]
+
+    if not faltantes:
+        return 0
+
+    ahora = django_timezone.now()
+    nuevos_registros = []
+    for clave in faltantes:
+        info = CATALOGO_CONFIGURACIONES_SISTEMA[clave]
+        nuevos_registros.append(
+            ConfiguracionSistema(
+                clave=clave,
+                descripcion=info.get('descripcion', f"Parámetro {clave}"),
+                valor=str(info.get('valor_defecto', '')),
+                ultima_modif=ahora
+            )
+        )
+
+    ConfiguracionSistema.objects.bulk_create(nuevos_registros, ignore_conflicts=True)
+    invalidar_cache_configuracion(faltantes)
+    logger.info(
+        "[Autosanado Configuración CU-42] Creadas %d configuraciones ausentes en BD: %s",
+        len(faltantes),
+        ", ".join(faltantes)
+    )
+    return len(faltantes)
+
+
+@transaction.atomic
 def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict) -> dict:
     """
     Actualiza de forma transaccional los parámetros en ConfiguracionSistema
@@ -125,11 +173,12 @@ def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict
     for clave, valor in datos_validados.items():
         if clave is None:
             continue
-        config = ConfiguracionSistema.objects.filter(clave=clave).first()
-        if config:
-            config.valor = str(valor) if valor is not None else ""
-            config.ultima_modif = ahora
-            config.save()
+        configs = list(ConfiguracionSistema.objects.filter(clave=clave))
+        if configs:
+            for cfg in configs:
+                cfg.valor = str(valor) if valor is not None else ""
+                cfg.ultima_modif = ahora
+                cfg.save(update_fields=['valor', 'ultima_modif'])
             claves_alteradas.append(clave)
         else:
             ConfiguracionSistema.objects.create(
@@ -139,6 +188,10 @@ def actualizar_configuracion_global(*, usuario_admin: Any, datos_validados: dict
                 ultima_modif=ahora
             )
             claves_alteradas.append(clave)
+
+    # Invalidar caché de las claves alteradas
+    if claves_alteradas:
+        invalidar_cache_configuracion(claves_alteradas)
 
     # Detalle descriptivo de auditoría
     if claves_alteradas:
@@ -205,11 +258,12 @@ def guardar_logo_empresa(*, archivo: Any, usuario_admin: Any) -> str:
     # Actualizar en ConfiguracionSistema de forma atómica
     with transaction.atomic():
         ahora = django_timezone.now()
-        config = ConfiguracionSistema.objects.filter(clave='imagenLocal').first()
-        if config:
-            config.valor = url_relativa
-            config.ultima_modif = ahora
-            config.save(update_fields=['valor', 'ultima_modif'])
+        configs = list(ConfiguracionSistema.objects.filter(clave='imagenLocal'))
+        if configs:
+            for cfg in configs:
+                cfg.valor = url_relativa
+                cfg.ultima_modif = ahora
+                cfg.save(update_fields=['valor', 'ultima_modif'])
         else:
             ConfiguracionSistema.objects.create(
                 clave='imagenLocal',
@@ -229,6 +283,7 @@ def guardar_logo_empresa(*, archivo: Any, usuario_admin: Any) -> str:
             id_usuario=usuario_admin
         )
 
+    invalidar_cache_configuracion(['imagenLocal'])
     return url_relativa
 
 
@@ -353,48 +408,122 @@ def registrar_log_evento(
 
 
 # ==============================================================================
-# CU-22: REALIZAR COPIA DE SEGURIDAD (SERVICES)
+# 💾 SUBSISTEMA DE RESPALDOS MULTINIVEL Y ROTACIÓN FIFO (CU-22)
 # ==============================================================================
 
-@transaction.atomic
-def generar_copia_seguridad_manual(
-    *,
-    usuario_admin: Any,
-    version: str = "1.0.0"
-) -> CopiaSeguridad:
+DIRECTORIOS_BACKUP = {
+    'DIARIO': os.path.join(settings.BASE_DIR, 'backups', 'diarios'),
+    'SEMANAL': os.path.join(settings.BASE_DIR, 'backups', 'semanales'),
+    'QUINCENAL': os.path.join(settings.BASE_DIR, 'backups', 'quincenales'),
+    'MENSUAL': os.path.join(settings.BASE_DIR, 'backups', 'mensuales'),
+    'MANUAL': os.path.join(settings.BASE_DIR, 'backups', 'manuales'),
+}
+
+CARPETAS_POR_TIPO = {
+    'DIARIO': 'diarios',
+    'SEMANAL': 'semanales',
+    'QUINCENAL': 'quincenales',
+    'MENSUAL': 'mensuales',
+    'MANUAL': 'manuales',
+}
+
+
+def asegurar_directorios_backup() -> dict:
+    """Asegura la existencia de las subcarpetas especializadas de respaldos."""
+    for d in DIRECTORIOS_BACKUP.values():
+        os.makedirs(d, exist_ok=True)
+    return DIRECTORIOS_BACKUP
+
+
+def obtener_directorio_backup_por_tipo(tipo: str) -> str:
+    """Obtiene la ruta física del directorio correspondiente al tipo de respaldo."""
+    tipo_up = (tipo or 'MANUAL').upper()
+    asegurar_directorios_backup()
+    return DIRECTORIOS_BACKUP.get(tipo_up, DIRECTORIOS_BACKUP['MANUAL'])
+
+
+def purgar_copias_excedentes_fifo_por_tipo(*, tipo_backup: str, limite: int) -> int:
     """
-    CU-22: Realizar Copia de Seguridad Manual.
-    1. Verifica que exista espacio suficiente en disco del servidor (shutil.disk_usage).
-    2. Genera el archivo físico de volcado SQL (.sql).
-    3. Registra la CopiaSeguridad en la base de datos con metadata inmutable.
-    4. Envía notificación por correo electrónico al Administrador.
-    5. Registra la auditoría en LogSistema.
+    Garantía Estricta FIFO: Si la cantidad de copias registradas de este tipo es >= limite,
+    elimina físicamente del disco y de la base de datos la(s) copia(s) más antigua(s)
+    ANTES de generar la nueva copia, garantizando que nunca se sobrepase el límite.
     """
+    tipo_up = (tipo_backup or 'MANUAL').upper()
+    carpeta_clave = CARPETAS_POR_TIPO.get(tipo_up, 'manuales')
+
+    todas = list(CopiaSeguridad.objects.all().order_by('fecha_creacion', 'id_backup'))
+    copias_tipo = []
+    for c in todas:
+        ruta = (c.ubicacion_archivo or '').replace('\\', '/').lower()
+        if f"/{carpeta_clave}/" in ruta:
+            copias_tipo.append(c)
+        elif tipo_up == 'MANUAL' and not c.automatico and '/backups/' in ruta and not any(f"/{k}/" in ruta for k in ['diarios', 'semanales', 'quincenales', 'mensuales']):
+            copias_tipo.append(c)
+        elif tipo_up == 'DIARIO' and c.automatico and '/backups/' in ruta and not any(f"/{k}/" in ruta for k in ['semanales', 'quincenales', 'mensuales', 'manuales']):
+            copias_tipo.append(c)
+
+    eliminadas = 0
+    # Si tenemos >= limite copias, purgamos las más antiguas antes de instanciar la nueva
+    while len(copias_tipo) >= limite and copias_tipo:
+        c_antigua = copias_tipo.pop(0)
+        if c_antigua.ubicacion_archivo and os.path.exists(c_antigua.ubicacion_archivo):
+            try:
+                os.remove(c_antigua.ubicacion_archivo)
+            except OSError:
+                pass
+        c_antigua.delete()
+        eliminadas += 1
+
+    return eliminadas
+
+
+def depurar_archivos_backup_huerfanos() -> dict:
+    """
+    Escanea la carpeta de respaldos (y sus subdirectorios) y elimina físicamente
+    cualquier archivo .sql que no se encuentre registrado en la base de datos (CopiaSeguridad).
+    Retorna métricas de archivos eliminados y espacio liberado en bytes.
+    """
+    base_backups = os.path.join(settings.BASE_DIR, 'backups')
+    if not os.path.exists(base_backups):
+        return {"eliminados": 0, "bytes_liberados": 0, "archivos": []}
+
+    rutas_en_bd = set(
+        os.path.normcase(os.path.abspath(r)) for r in
+        CopiaSeguridad.objects.exclude(ubicacion_archivo__isnull=True).values_list('ubicacion_archivo', flat=True)
+    )
+
+    eliminados = 0
+    bytes_liberados = 0
+    archivos_purgados = []
+
+    for root, dirs, files in os.walk(base_backups):
+        for f in files:
+            if f.lower().endswith('.sql'):
+                ruta_fisica = os.path.normcase(os.path.abspath(os.path.join(root, f)))
+                if ruta_fisica not in rutas_en_bd:
+                    try:
+                        tamano = os.path.getsize(ruta_fisica)
+                        os.remove(ruta_fisica)
+                        eliminados += 1
+                        bytes_liberados += tamano
+                        archivos_purgados.append(f)
+                    except OSError:
+                        pass
+
+    return {
+        "eliminados": eliminados,
+        "bytes_liberados": bytes_liberados,
+        "mb_liberados": round(bytes_liberados / (1024 * 1024), 2),
+        "archivos": archivos_purgados
+    }
+
+
+def _ejecutar_volcado_fisico(ruta_archivo: str, version: str, usuario_admin: Any) -> None:
+    """Ejecuta el volcado físico de base de datos a un archivo .sql (pg_dump o dump simulado consistente)."""
     import shutil
     import subprocess
     from rest_framework.exceptions import ValidationError
 
-    backup_dir = os.path.join(settings.BASE_DIR, 'backups')
-    os.makedirs(backup_dir, exist_ok=True)
-
-    # 1. Validación de espacio en disco (mínimo 50 MB) y permisos de escritura
-    try:
-        _, _, free_bytes = shutil.disk_usage(backup_dir)
-        espacio_minimo = 50 * 1024 * 1024  # 50 MB
-        if free_bytes < espacio_minimo:
-            raise ValidationError("Espacio de almacenamiento insuficiente en el servidor para generar el respaldo.")
-    except OSError:
-        pass
-
-    if not os.access(backup_dir, os.W_OK):
-        raise ValidationError("Permisos de escritura insuficientes en el directorio de destino del servidor.")
-
-    # 2. Definición de ruta y nombre del archivo
-    timestamp = django_timezone.now().strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"backup_{timestamp}.sql"
-    ruta_archivo = os.path.join(backup_dir, nombre_archivo)
-
-    # 3. Volcado de la base de datos (pg_dump si existe o volcado estructurado seguro)
     db_settings = settings.DATABASES.get('default', {})
     db_name = db_settings.get('NAME', 'ifixpos')
     db_user = db_settings.get('USER', 'postgres')
@@ -439,7 +568,6 @@ def generar_copia_seguridad_manual(
                     pass
             raise ValidationError("El proceso de volcado de la base de datos excedió el tiempo límite permitido.")
     else:
-        # Volcado de respaldo consistente en entornos de desarrollo/pruebas
         with open(ruta_archivo, 'w', encoding='utf-8') as f:
             f.write(f"-- ============================================================\n")
             f.write(f"-- IFixPos ERP Database Backup Dump (CU-22)\n")
@@ -450,6 +578,59 @@ def generar_copia_seguridad_manual(
             f.write(f"-- Estado: Dump íntegro generado satisfactoriamente.\n")
             f.write(f"-- ============================================================\n\n")
 
+
+def _obtener_usuario_admin_sistema():
+    """Localiza el usuario administrador del sistema para asociar a backups automáticos."""
+    from users_app.models import Usuario
+    admin = Usuario.objects.filter(id_rol__codigo='ADMIN', is_active=True).first()
+    if not admin:
+        admin = Usuario.objects.filter(is_superuser=True).first()
+    return admin
+
+
+def generar_copia_seguridad_manual(
+    *,
+    usuario_admin: Any,
+    version: str = "1.0.0"
+) -> CopiaSeguridad:
+    """
+    CU-22: Realizar Copia de Seguridad Manual.
+    1. Verifica que exista espacio suficiente en disco del servidor.
+    2. Aplica rotación FIFO previa en subcarpeta manuales/.
+    3. Genera el archivo físico de volcado SQL en backups/manuales/.
+    4. Registra la CopiaSeguridad en la base de datos con metadata inmutable.
+    5. Depura archivos huérfanos residuales.
+    6. Envía notificación por correo electrónico y registra auditoría en LogSistema.
+    """
+    import shutil
+    from rest_framework.exceptions import ValidationError
+
+    dir_destino = obtener_directorio_backup_por_tipo('MANUAL')
+
+    # 1. Validación de espacio en disco (mínimo 50 MB) y permisos de escritura
+    try:
+        _, _, free_bytes = shutil.disk_usage(dir_destino)
+        espacio_minimo = 50 * 1024 * 1024  # 50 MB
+        if free_bytes < espacio_minimo:
+            raise ValidationError("Espacio de almacenamiento insuficiente en el servidor para generar el respaldo.")
+    except OSError:
+        pass
+
+    if not os.access(dir_destino, os.W_OK):
+        raise ValidationError("Permisos de escritura insuficientes en el directorio de destino del servidor.")
+
+    # 2. Rotación FIFO previa en la categoría MANUAL antes de generar el nuevo archivo
+    from core_app.selectors import obtener_retencion_copias_backup
+    limite_retencion = obtener_retencion_copias_backup()
+    purgar_copias_excedentes_fifo_por_tipo(tipo_backup='MANUAL', limite=limite_retencion)
+
+    # 3. Definición de ruta y volcado físico
+    ahora_dt = django_timezone.now()
+    timestamp = ahora_dt.strftime("%Y%m%d_%H%M%S_%f")
+    nombre_archivo = f"backup_manual_{timestamp}.sql"
+    ruta_archivo = os.path.join(dir_destino, nombre_archivo)
+    _ejecutar_volcado_fisico(ruta_archivo, version, usuario_admin)
+
     # 4. Creación del registro en base de datos
     copia = CopiaSeguridad.objects.create(
         fecha_creacion=django_timezone.now().date(),
@@ -459,28 +640,19 @@ def generar_copia_seguridad_manual(
         id_usuario=usuario_admin
     )
 
-    # 4.1 Aplicar política de retención histórica según configuración (backupRetencionCopias)
-    from core_app.selectors import obtener_retencion_copias_backup
-    limite_retencion = obtener_retencion_copias_backup()
-    todas_copias = list(CopiaSeguridad.objects.order_by('-fecha_creacion', '-id_backup'))
-    if len(todas_copias) > limite_retencion:
-        sobrantes = todas_copias[limite_retencion:]
-        for c_antigua in sobrantes:
-            if c_antigua.ubicacion_archivo and os.path.exists(c_antigua.ubicacion_archivo):
-                try:
-                    os.remove(c_antigua.ubicacion_archivo)
-                except OSError:
-                    pass
-            c_antigua.delete()
+    # 5. Depurar huérfanos silenciosamente
+    depurar_archivos_backup_huerfanos()
 
-    # 5. Notificación por correo al administrador
+    # 6. Notificación por correo al administrador
     asunto = "Copia de Seguridad Generada Exitosamente - IFixPos"
     cuerpo = (
         f"Estimado Administrador,\n\n"
         f"Se ha completado con éxito la generación manual del respaldo del sistema.\n\n"
         f"Detalles de la operación:\n"
         f"• Identificador de Copia: #{copia.id_backup}\n"
+        f"• Tipo: Manual\n"
         f"• Archivo: {nombre_archivo}\n"
+        f"• Carpeta: backups/manuales/\n"
         f"• Versión: {version}\n"
         f"• Fecha: {copia.fecha_creacion}\n\n"
         f"El archivo se encuentra resguardado en el servidor y disponible para su descarga."
@@ -492,7 +664,7 @@ def generar_copia_seguridad_manual(
         tipo_notificacion='BACKUP'
     )
 
-    # 6. Registro en LogSistema
+    # 7. Registro en LogSistema
     ahora = django_timezone.now()
     admin_id = getattr(usuario_admin, 'id_usuario', None) or getattr(usuario_admin, 'id', None)
     LogSistema.objects.create(
@@ -507,6 +679,256 @@ def generar_copia_seguridad_manual(
     )
 
     return copia
+
+
+def generar_copia_seguridad_automatica(
+    *,
+    tipo_backup: str,
+    version: str = "auto",
+    usuario_admin: Optional[Any] = None
+) -> CopiaSeguridad:
+    """
+    Genera un respaldo automático programado en su subcarpeta dedicada
+    (diarios/, semanales/, quincenales/, mensuales/) aplicando rotación FIFO previa.
+    """
+    import shutil
+    from rest_framework.exceptions import ValidationError
+
+    tipo_up = (tipo_backup or 'DIARIO').upper()
+    dir_destino = obtener_directorio_backup_por_tipo(tipo_up)
+
+    try:
+        _, _, free_bytes = shutil.disk_usage(dir_destino)
+        espacio_minimo = 50 * 1024 * 1024
+        if free_bytes < espacio_minimo:
+            raise ValidationError("Espacio en disco insuficiente para el respaldo automático.")
+    except OSError:
+        pass
+
+    if not os.access(dir_destino, os.W_OK):
+        raise ValidationError("Sin permisos de escritura en la carpeta de respaldos.")
+
+    admin = usuario_admin or _obtener_usuario_admin_sistema()
+
+    from core_app.selectors import obtener_retencion_copias_backup
+    limite_retencion = obtener_retencion_copias_backup()
+    purgar_copias_excedentes_fifo_por_tipo(tipo_backup=tipo_up, limite=limite_retencion)
+
+    ahora_dt = django_timezone.now()
+    timestamp = ahora_dt.strftime("%Y%m%d_%H%M%S_%f")
+    nombre_archivo = f"backup_{tipo_up.lower()}_{timestamp}.sql"
+    ruta_archivo = os.path.join(dir_destino, nombre_archivo)
+    _ejecutar_volcado_fisico(ruta_archivo, version, admin)
+
+    copia = CopiaSeguridad.objects.create(
+        fecha_creacion=django_timezone.now().date(),
+        automatico=True,
+        ubicacion_archivo=ruta_archivo,
+        version=version,
+        id_usuario=admin
+    )
+
+    depurar_archivos_backup_huerfanos()
+
+    # Actualizar backupUltimaEjecucion
+    try:
+        from core_app.models import ConfiguracionSistema
+        import json
+        ahora_iso = django_timezone.now().isoformat()
+        cfg_ult = ConfiguracionSistema.objects.filter(clave='backupUltimaEjecucion').order_by('-id_config').first()
+        data_ult = {}
+        if cfg_ult and cfg_ult.valor:
+            try:
+                data_ult = json.loads(cfg_ult.valor)
+            except Exception:
+                data_ult = {}
+        data_ult[tipo_up.lower()] = ahora_iso
+        nuevo_valor = json.dumps(data_ult)
+        if cfg_ult:
+            cfg_ult.valor = nuevo_valor
+            cfg_ult.save(update_fields=['valor'])
+        else:
+            ConfiguracionSistema.objects.create(clave='backupUltimaEjecucion', valor=nuevo_valor)
+        invalidar_cache_configuracion(['backupUltimaEjecucion'])
+    except Exception:
+        pass
+
+    # Log de Auditoría
+    ahora = django_timezone.now()
+    admin_id = getattr(admin, 'id_usuario', None) if admin else 'SISTEMA'
+    LogSistema.objects.create(
+        fecha_hora=ahora,
+        accion=f"Generar Copia de Seguridad Automática ({tipo_up})",
+        detalle=f"Respaldo programado nivel [{tipo_up}] generado exitosamente en {ruta_archivo}",
+        tipo="BACKUP",
+        modulo_origen="core_app",
+        tabla_afectada="copia_seguridad",
+        id_registro_afectado=str(copia.id_backup),
+        id_usuario=admin
+    )
+
+    return copia
+
+
+def evaluar_y_ejecutar_backups_programados(
+    *,
+    forzar_nivel: Optional[str] = None,
+    fecha_evaluacion: Optional[date] = None,
+    hora_evaluacion: Optional[time] = None,
+    tolerancia_minutos: int = 15
+) -> dict:
+    """
+    Motor Central de Precedencia Jerárquica para Respaldos Programados:
+    1. Si forzar_nivel está presente, ejecuta inmediatamente ese nivel.
+    2. En ciclo normal:
+       - Si corresponde MENSUAL hoy -> Ejecuta MENSUAL y SUPRIME Quincenal, Semanal y Diario.
+       - Si no, si corresponde QUINCENAL hoy -> Ejecuta QUINCENAL y SUPRIME Semanal y Diario.
+       - Si no, si corresponde SEMANAL hoy -> Ejecuta SEMANAL y SUPRIME Diario.
+       - Si no, si corresponde DIARIO hoy -> Ejecuta DIARIO.
+    """
+    from core_app.selectors import obtener_configuracion_backups_completa
+    cfg = obtener_configuracion_backups_completa()
+
+    # Si el interruptor maestro está apagado, ninguna copia programada debe ejecutarse
+    if not cfg['automatico']:
+        return {
+            "ejecutado": False,
+            "motivo": "Los respaldos automáticos están desactivados en la configuración del sistema (backupAutomatico=False). Active el interruptor para permitir su ejecución.",
+            "suprimidos": []
+        }
+
+    if forzar_nivel:
+        nivel_up = forzar_nivel.upper()
+        copia = generar_copia_seguridad_automatica(tipo_backup=nivel_up, version=f"auto-{nivel_up.lower()}")
+        return {
+            "ejecutado": True,
+            "nivel": nivel_up,
+            "id_backup": copia.id_backup,
+            "archivo": copia.ubicacion_archivo,
+            "suprimidos": []
+        }
+
+    ahora = django_timezone.localtime(django_timezone.now())
+    hoy = fecha_evaluacion if fecha_evaluacion else ahora.date()
+    hora_str = hora_evaluacion.strftime("%H:%M") if hora_evaluacion else ahora.strftime("%H:%M")
+    dias_esp = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO']
+    dia_actual = dias_esp[hoy.weekday()]
+
+    # Verificar qué backups automáticos ya se ejecutaron hoy
+    copias_hoy = list(CopiaSeguridad.objects.filter(fecha_creacion=hoy, automatico=True))
+    niveles_ejecutados_hoy = set()
+    for c in copias_hoy:
+        r = (c.ubicacion_archivo or '').replace('\\', '/').lower()
+        for nivel, carp in CARPETAS_POR_TIPO.items():
+            if f"/{carp}/" in r:
+                niveles_ejecutados_hoy.add(nivel)
+
+    # Si ya se ejecutó un backup mensual hoy, todos los demás quedan suprimidos
+    if 'MENSUAL' in niveles_ejecutados_hoy:
+        return {
+            "ejecutado": False,
+            "motivo": "Respaldo MENSUAL ya ejecutado hoy; los demás niveles quedan suprimidos.",
+            "suprimidos": ['QUINCENAL', 'SEMANAL', 'DIARIO']
+        }
+
+    # Si ya se ejecutó un backup quincenal hoy, semanal y diario quedan suprimidos
+    if 'QUINCENAL' in niveles_ejecutados_hoy:
+        return {
+            "ejecutado": False,
+            "motivo": "Respaldo QUINCENAL ya ejecutado hoy; semanal y diario quedan suprimidos.",
+            "suprimidos": ['SEMANAL', 'DIARIO']
+        }
+
+    # Si ya se ejecutó un backup semanal hoy, el diario queda suprimido
+    if 'SEMANAL' in niveles_ejecutados_hoy:
+        return {
+            "ejecutado": False,
+            "motivo": "Respaldo SEMANAL ya ejecutado hoy; diario queda suprimido.",
+            "suprimidos": ['DIARIO']
+        }
+
+    # =========================================================================
+    # JERARQUÍA DE EVALUACIÓN
+    # =========================================================================
+
+    # 1. EVALUAR MENSUAL (Día 1 del mes, o cada 30 días)
+    cfg_men = cfg['mensual']
+    if cfg_men['activo'] and 'MENSUAL' not in niveles_ejecutados_hoy:
+        if hoy.day == 1 and hora_str >= cfg_men['hora_ejecucion']:
+            copia = generar_copia_seguridad_automatica(tipo_backup='MENSUAL', version="auto-mensual")
+            return {
+                "ejecutado": True,
+                "nivel": "MENSUAL",
+                "id_backup": copia.id_backup,
+                "archivo": copia.ubicacion_archivo,
+                "suprimidos": ['QUINCENAL', 'SEMANAL', 'DIARIO']
+            }
+
+    # 2. EVALUAR QUINCENAL (Día 1 y 15 de cada mes)
+    cfg_quin = cfg['quincenal']
+    if cfg_quin['activo'] and 'QUINCENAL' not in niveles_ejecutados_hoy:
+        if hoy.day in (1, 15) and hora_str >= cfg_quin['hora_ejecucion']:
+            copia = generar_copia_seguridad_automatica(tipo_backup='QUINCENAL', version="auto-quincenal")
+            return {
+                "ejecutado": True,
+                "nivel": "QUINCENAL",
+                "id_backup": copia.id_backup,
+                "archivo": copia.ubicacion_archivo,
+                "suprimidos": ['SEMANAL', 'DIARIO']
+            }
+
+    # 3. EVALUAR SEMANAL (Día de la semana configurado, ej. SABADO)
+    cfg_sem = cfg['semanal']
+    if cfg_sem['activo'] and 'SEMANAL' not in niveles_ejecutados_hoy:
+        if dia_actual == cfg_sem['dia_semana'] and hora_str >= cfg_sem['hora_ejecucion']:
+            copia = generar_copia_seguridad_automatica(tipo_backup='SEMANAL', version="auto-semanal")
+            return {
+                "ejecutado": True,
+                "nivel": "SEMANAL",
+                "id_backup": copia.id_backup,
+                "archivo": copia.ubicacion_archivo,
+                "suprimidos": ['DIARIO']
+            }
+
+    # 4. EVALUAR DIARIO (Solo si hoy no corresponde ni se ejecutó ninguno superior)
+    cfg_dia = cfg['diario']
+    if cfg_dia['activo'] and 'DIARIO' not in niveles_ejecutados_hoy:
+        # Verificar que no coincida con el día programado del semanal si aún no corrió
+        if cfg_sem['activo'] and dia_actual == cfg_sem['dia_semana']:
+            return {
+                "ejecutado": False,
+                "motivo": f"Hoy es {dia_actual}, día reservado para el respaldo SEMANAL. El diario queda suprimido.",
+                "suprimidos": ['DIARIO']
+            }
+        # Verificar que no coincida con el día programado de mensual o quincenal
+        if cfg_men['activo'] and hoy.day == 1:
+            return {
+                "ejecutado": False,
+                "motivo": "Hoy es día 1 del mes, reservado para el respaldo MENSUAL. El diario queda suprimido.",
+                "suprimidos": ['DIARIO']
+            }
+        if cfg_quin['activo'] and hoy.day in (1, 15):
+            return {
+                "ejecutado": False,
+                "motivo": f"Hoy es día {hoy.day}, reservado para el respaldo QUINCENAL. El diario queda suprimido.",
+                "suprimidos": ['DIARIO']
+            }
+
+        if hora_str >= cfg_dia['hora_ejecucion']:
+            copia = generar_copia_seguridad_automatica(tipo_backup='DIARIO', version="auto-diario")
+            return {
+                "ejecutado": True,
+                "nivel": "DIARIO",
+                "id_backup": copia.id_backup,
+                "archivo": copia.ubicacion_archivo,
+                "suprimidos": []
+            }
+
+    return {
+        "ejecutado": False,
+        "motivo": "No se cumplieron las condiciones de horario o día para los respaldos programados.",
+        "suprimidos": []
+    }
 
 
 # ==============================================================================
@@ -706,8 +1128,8 @@ def ejecutar_restauracion_sistema(
                 cuerpo_texto=cuerpo_falla,
                 tipo_notificacion='ERROR_SISTEMA'
             )
-        except Exception:
-            pass
+        except Exception as e_notif:
+            logger.warning("[Restauración BD] No fue posible enviar alerta de fallo crítico: %s", e_notif)
         raise exc
     finally:
         # Desactivar Modo Mantenimiento únicamente si la operación culminó con éxito

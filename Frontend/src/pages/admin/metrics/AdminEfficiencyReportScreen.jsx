@@ -6,21 +6,8 @@ import AdminSidebar from '../../../components/navigation/AdminSidebar';
 import AdminHeader from '../../../components/navigation/AdminHeader';
 import { DualBarChart, HorizontalBarChart, DonutChart } from '../../../components/charts/ReportCharts';
 import { exportarInformePDF } from '../../../utils/reportPrinter';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-// ==============================================================================
-// UTILIDADES DE FORMATEO MONETARIO Y FECHAS
-// ==============================================================================
-const formatearMoneda = (monto) => {
-  const num = Number(monto) || 0;
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(num);
-};
+import { API_BASE_URL } from '../../../config/api';
+import { formatearMoneda } from '../../../utils/productImages';
 
 const formatearPorcentaje = (valor) => {
   const num = Number(valor) || 0;
@@ -35,7 +22,7 @@ const obtenerFechaFormato = (d) => {
 };
 
 export default function AdminEfficiencyReportScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   // ============================================================================
   // ESTADOS DE PARÁMETROS TEMPORALES Y SEGMENTACIÓN (PASOS 2 Y 3)
@@ -384,6 +371,11 @@ export default function AdminEfficiencyReportScreen() {
       `--------------------------------------------------------\n` +
       `Desglose Operativo:\n${desgloseTexto}`;
 
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Usuario Autenticado';
+
     exportarInformePDF({
       titulo: 'Reporte de Demanda y Eficiencia por Categoría',
       subtitulo: 'Análisis de carga de trabajo, ingresos de mano de obra y detección de cuellos de botella',
@@ -391,7 +383,7 @@ export default function AdminEfficiencyReportScreen() {
       kpis,
       tablas,
       resumenTexto,
-      usuario: { nombre: 'Administrador General', email: 'admin@ifixpos.com' }
+      usuario: { nombre: nombreEjecutor, email: user?.email || '' }
     });
   };
 

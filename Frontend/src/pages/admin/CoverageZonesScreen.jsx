@@ -6,8 +6,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function CoverageZonesScreen() {
   const { token } = useAuth();
   const navigate = useNavigate();
@@ -197,10 +196,13 @@ export default function CoverageZonesScreen() {
     }
   }, [nivel, paisId, provinciaId, busqueda, estadoFiltro, token]);
 
+  const ejecutarConsultaRef = useRef(ejecutarConsulta);
+  ejecutarConsultaRef.current = ejecutarConsulta;
+
   // Carga inicial automática de Países al montar la pantalla
   useEffect(() => {
-    ejecutarConsulta({ nivel: 'PAIS' });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    ejecutarConsultaRef.current({ nivel: 'PAIS' });
+  }, []);
 
   // Cambio de Pestaña de Nivel Taxonómico
   const handleCambiarNivel = (nuevoNivel) => {

@@ -10,6 +10,7 @@ from .apis import (
     DispositivoDetalleApi,
     ReparacionDetalleApi,
     IniciarReparacionApi,
+    ConfiguracionDiagnosticoApi,
     RecepcionarDispositivoApi,
     ListarReparacionesApi,
     CargarDiagnosticoApi,
@@ -53,6 +54,7 @@ urlpatterns = [
 
     # CU-26: Iniciar Reparación
     path('reparaciones/iniciar/', IniciarReparacionApi.as_view(), name='iniciar-reparacion'),
+    path('configuracion-diagnostico/', ConfiguracionDiagnosticoApi.as_view(), name='configuracion-diagnostico'),
 
     # CU-45: Recepcionar Dispositivo
     path('reparaciones/<int:id_reparacion>/recepcionar/', RecepcionarDispositivoApi.as_view(), name='recepcionar-dispositivo'),

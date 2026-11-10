@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import { getDashboardPath } from '../../utils/roleRoutes';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 // Galería de 60 avatares locales predeterminados (/avatars/avatar1.png ... /avatars/avatar60.png)
 const AVATARES_PREDETERMINADOS = Array.from({ length: 60 }, (_, i) => `/avatars/avatar${i + 1}.png`);
 

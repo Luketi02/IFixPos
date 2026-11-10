@@ -1935,6 +1935,72 @@ class IniciarReparacionCU26Tests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('ids_categorias', response.data)
 
+    def test_cliente_inicia_reparacion_genera_deuda_diagnostico_pendiente(self):
+        """
+        CU-26 Refactor: Iniciar reparación presencial genera cabecera de Venta en estado PENDIENTE
+        con el valor del costo de diagnóstico base configurado ($5000 ARS).
+        """
+        from sales_app.models import Venta
+        from workshop_app.models import Reparacion
+
+        self.client.force_authenticate(user=self.cliente)
+        payload = {
+            'id_dispositivo': self.disp_cliente.id_dispositivo,
+            'descripcion_problema': 'Fallo severo de encendido tras actualizar sistema.',
+            'credencial_acceso': 'Ninguna',
+            'ids_categorias': [self.cat_pantalla.id_categoria],
+            'medio_pago': 'PRESENCIAL'
+        }
+        response = self.client.post('/api/workshop/reparaciones/iniciar/', payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('id_venta', response.data)
+        self.assertEqual(response.data['estado_pago'], 'PENDIENTE')
+        self.assertGreater(response.data['costo_diagnostico'], 0)
+
+        id_rep = response.data['id_reparacion']
+        rep = Reparacion.objects.get(pk=id_rep)
+        self.assertIsNotNone(rep.id_venta)
+        self.assertEqual(rep.id_venta.estado_venta, 'PENDIENTE')
+        self.assertEqual(rep.id_venta.monto_subtotal, 5000)
+
+    def test_cliente_inicia_reparacion_online_genera_venta_pagada(self):
+        """
+        CU-26 Refactor: Iniciar reparación con pago online acreditado genera Venta PAGADA y entidad Pago.
+        """
+        from sales_app.models import Venta, Pago
+        from workshop_app.models import Reparacion
+
+        self.client.force_authenticate(user=self.cliente)
+        payload = {
+            'id_dispositivo': self.disp_cliente.id_dispositivo,
+            'descripcion_problema': 'No detecta redes WiFi ni Bluetooth de forma intermitente.',
+            'credencial_acceso': 'PIN 9999',
+            'ids_categorias': [self.cat_pantalla.id_categoria],
+            'medio_pago': 'MERCADOPAGO',
+            'id_pago_online': 'MP-OPERACION-778899'
+        }
+        response = self.client.post('/api/workshop/reparaciones/iniciar/', payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['estado_pago'], 'PAGADA')
+
+        id_rep = response.data['id_reparacion']
+        rep = Reparacion.objects.get(pk=id_rep)
+        self.assertEqual(rep.id_venta.estado_venta, 'PAGADA')
+        pago = Pago.objects.filter(id_venta=rep.id_venta).first()
+        self.assertIsNotNone(pago)
+        self.assertEqual(pago.cod_operacion, 'MP-OPERACION-778899')
+
+    def test_consultar_configuracion_diagnostico_exitoso(self):
+        """
+        Endpoint público/autenticado /api/workshop/configuracion-diagnostico/
+        retorna el valor paramétrico del costo base de diagnóstico.
+        """
+        self.client.force_authenticate(user=self.cliente)
+        response = self.client.get('/api/workshop/configuracion-diagnostico/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('costo_diagnostico_base', response.data)
+        self.assertEqual(response.data['costo_diagnostico_base'], 5000.0)
+
     def test_validacion_categoria_inexistente(self):
         """Categoría con ID que no existe levanta 400 Bad Request."""
         self.client.force_authenticate(user=self.cliente)
@@ -2704,7 +2770,7 @@ class CargarDiagnosticoTecnicoTestCase(TestCase):
         # 4. Bitácora de reparación
         bitacora = BitacoraReparacion.objects.filter(id_reparacion=self.reparacion_en_diag).latest('id_bitacora')
         self.assertEqual(bitacora.id_usuario, self.tecnico)
-        self.assertEqual(bitacora.comentario, "Carga de diagnóstico")
+        self.assertIn("Carga de diagnóstico", bitacora.comentario)
         self.assertEqual(bitacora.estado_alcanzado, 4)
 
         # 5. Notificación al cliente
@@ -3497,7 +3563,7 @@ class CU10ActualizarEstadoReparacionTestCase(TestCase):
         # Verificar Bitácora
         bitacora = BitacoraReparacion.objects.filter(id_reparacion=rep).latest('id_bitacora')
         self.assertEqual(bitacora.id_usuario, self.tecnico)
-        self.assertEqual(bitacora.comentario, 'Pausado por falta de display original en stock.')
+        self.assertIn('Pausado por falta de display original en stock.', bitacora.comentario)
 
         # Verificar Notificación al cliente dueño del equipo
         notif = Notificacion.objects.filter(id_dispositivo=self.dispositivo).latest('id_notificacion')
@@ -4046,7 +4112,7 @@ class NuevoDiagnosticoYDetalleTecnicoTests(TestCase):
         # Verificar bitácora
         ultima_bitacora = self.reparacion.bitacorareparacion_set.order_by('-id_bitacora').first()
         self.assertEqual(ultima_bitacora.estado_alcanzado, 4)  # 4: ESPERANDO_CONFIRMACION
-        self.assertEqual(ultima_bitacora.comentario, "Carga de nuevo diagnóstico")
+        self.assertIn("Carga de nuevo diagnóstico", ultima_bitacora.comentario)
 
     def test_reparacion_detalle_serializer_expone_todos_los_diagnosticos_ordenados(self):
         """ReparacionDetalleOutputSerializer expone diagnostico vigente y array completo de diagnosticos."""

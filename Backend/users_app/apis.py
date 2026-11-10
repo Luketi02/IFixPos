@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from users_app.serializers import (
     LoginInputSerializer, GoogleLoginSerializer,
@@ -22,12 +23,33 @@ from users_app.services import (
     guardar_archivo_foto_perfil, refrescar_token_jwt
 )
 
+NOMBRE_COOKIE_REFRESH = 'ifixpos_refresh_token'
+
+
+def _adjuntar_cookie_refresh(response: Response, refresh_token: str | None) -> Response:
+    """
+    Adjunta de forma retrocompatible el refresh_token en una cookie HttpOnly + SameSite=Lax
+    para mitigar robo de sesión de larga duración vía XSS sin romper clientes que lean el JSON.
+    """
+    if refresh_token:
+        response.set_cookie(
+            key=NOMBRE_COOKIE_REFRESH,
+            value=refresh_token,
+            httponly=True,
+            secure=not getattr(settings, 'DEBUG', False),
+            samesite='Lax',
+            max_age=7 * 24 * 3600,
+            path='/'
+        )
+    return response
+
 
 class LoginApi(APIView):
     """
     Controlador HTTP puro para el manejo del inicio de sesión.
     """
     permission_classes = [AllowAny]
+    throttle_scope = 'login'
     
     def post(self, request):
         serializer = LoginInputSerializer(data=request.data)
@@ -40,7 +62,9 @@ class LoginApi(APIView):
                 email=serializer.validated_data['email'],
                 password_plano=serializer.validated_data['password']
             )
-            return Response(resultado, status=status.HTTP_200_OK)
+            resp = Response(resultado, status=status.HTTP_200_OK)
+            tokens = resultado.get('tokens') if isinstance(resultado, dict) else None
+            return _adjuntar_cookie_refresh(resp, tokens.get('refresh') if isinstance(tokens, dict) else None)
             
         except CredencialesInvalidasError as e:
             return Response({"detail": str(e)}, status=status.HTTP_401_UNAUTHORIZED)
@@ -62,7 +86,9 @@ class GoogleLoginApi(APIView):
             resultado = autenticar_con_google(
                 google_token=serializer.validated_data['google_token']
             )
-            return Response(resultado, status=status.HTTP_200_OK)
+            resp = Response(resultado, status=status.HTTP_200_OK)
+            tokens = resultado.get('tokens') if isinstance(resultado, dict) else None
+            return _adjuntar_cookie_refresh(resp, tokens.get('refresh') if isinstance(tokens, dict) else None)
             
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -95,6 +121,7 @@ class VerificarCorreoApi(APIView):
     Endpoint público para validar el código OTP de verificación de correo y activar la cuenta.
     """
     permission_classes = [AllowAny]
+    throttle_scope = 'otp'
 
     def post(self, request):
         serializer = ValidarCodigoInputSerializer(data=request.data)
@@ -106,7 +133,9 @@ class VerificarCorreoApi(APIView):
                 email=serializer.validated_data['email'],
                 codigo=serializer.validated_data['codigo']
             )
-            return Response(resultado, status=status.HTTP_200_OK)
+            resp = Response(resultado, status=status.HTTP_200_OK)
+            tokens = resultado.get('tokens') if isinstance(resultado, dict) else None
+            return _adjuntar_cookie_refresh(resp, tokens.get('refresh') if isinstance(tokens, dict) else None)
         except ValidationError as e:
             return Response(
                 {"detail": e.messages if hasattr(e, 'messages') else str(e)}, 
@@ -152,7 +181,11 @@ class LogoutApi(APIView):
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
-        serializer = LogoutInputSerializer(data=request.data)
+        datos_entrada = dict(request.data) if isinstance(request.data, dict) else request.data.copy()
+        if not datos_entrada.get('refresh_token') and request.COOKIES.get(NOMBRE_COOKIE_REFRESH):
+            datos_entrada['refresh_token'] = request.COOKIES.get(NOMBRE_COOKIE_REFRESH)
+
+        serializer = LogoutInputSerializer(data=datos_entrada)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
@@ -166,23 +199,31 @@ class LogoutApi(APIView):
             refresh_token=serializer.validated_data['refresh_token']
         )
         
-        return Response({"mensaje": "Sesión cerrada correctamente"}, status=status.HTTP_200_OK)
+        resp = Response({"mensaje": "Sesión cerrada correctamente"}, status=status.HTTP_200_OK)
+        resp.delete_cookie(NOMBRE_COOKIE_REFRESH, path='/')
+        return resp
 
 
 class RefreshTokenApi(APIView):
     """
-    Controlador HTTP para renovar el par de tokens JWT a partir del token de refresco.
+    Controlador HTTP para renovar el par de tokens JWT a partir del token de refresco
+    (recibido ya sea en el cuerpo JSON o mediante cookie HttpOnly `ifixpos_refresh_token`).
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = RefreshTokenInputSerializer(data=request.data)
+        datos_entrada = dict(request.data) if isinstance(request.data, dict) else request.data.copy()
+        if not datos_entrada.get('refresh') and request.COOKIES.get(NOMBRE_COOKIE_REFRESH):
+            datos_entrada['refresh'] = request.COOKIES.get(NOMBRE_COOKIE_REFRESH)
+
+        serializer = RefreshTokenInputSerializer(data=datos_entrada)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             tokens = refrescar_token_jwt(refresh_token=serializer.validated_data['refresh'])
-            return Response({"tokens": tokens}, status=status.HTTP_200_OK)
+            resp = Response({"tokens": tokens}, status=status.HTTP_200_OK)
+            return _adjuntar_cookie_refresh(resp, tokens.get('refresh') if isinstance(tokens, dict) else None)
         except ValidationError as e:
             msg = e.detail if hasattr(e, 'detail') else str(e)
             if isinstance(msg, list) and len(msg) > 0:
@@ -192,6 +233,7 @@ class RefreshTokenApi(APIView):
 
 class GenerarTokenSeguridadApi(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'otp'
 
     def post(self, request):
         serializer = GenerarTokenInputSerializer(data=request.data)

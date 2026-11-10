@@ -48,12 +48,13 @@ class PaisesListApi(APIView):
 
     def get(self, request):
         from .serializers import FiltroPaisesInputSerializer
+        from core_app.cache_http import respuesta_catalogo_cacheada
         input_serializer = FiltroPaisesInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
         solo_habilitados = input_serializer.validated_data['solo_habilitados']
         paises = obtener_paises(solo_habilitados=solo_habilitados)
         serializer = PaisOutputSerializer(paises, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return respuesta_catalogo_cacheada(request, serializer.data, max_age=120)
 
 
 class ProvinciasListApi(APIView):
@@ -66,6 +67,7 @@ class ProvinciasListApi(APIView):
 
     def get(self, request, id_pais=None):
         from .serializers import FiltroProvinciasInputSerializer
+        from core_app.cache_http import respuesta_catalogo_cacheada
         input_serializer = FiltroProvinciasInputSerializer(data=request.query_params)
         input_serializer.is_valid(raise_exception=True)
         filtros = input_serializer.validated_data
@@ -78,7 +80,7 @@ class ProvinciasListApi(APIView):
             if not solo_habilitadas:
                 provincias = obtener_todas_las_provincias(solo_habilitadas=False)
                 serializer = ProvinciaOutputSerializer(provincias, many=True)
-                return Response(serializer.data, status=status.HTTP_200_OK)
+                return respuesta_catalogo_cacheada(request, serializer.data, max_age=120)
             return Response(
                 {"error": "Debe especificar el identificador de país ('pais_id')."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -92,7 +94,7 @@ class ProvinciasListApi(APIView):
             )
 
         serializer = ProvinciaOutputSerializer(provincias, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return respuesta_catalogo_cacheada(request, serializer.data, max_age=120)
 
 
 class CiudadesListApi(APIView):
@@ -397,9 +399,10 @@ class ZonasCoberturaApi(APIView):
                 busqueda=busqueda
             )
 
-            # Si se busca ciudades globalmente sin especificar provincia, limitar a 100 resultados
+            # Si se busca ciudades globalmente sin especificar provincia, limitar según ConfiguracionSistema
             if nivel == 'CIUDAD' and not padre_id and busqueda.strip():
-                queryset = queryset[:100]
+                from core_app.selectors import obtener_limite_resultados_geo
+                queryset = queryset[:obtener_limite_resultados_geo()]
         except ValidationError as e:
             msg = e.message if hasattr(e, 'message') else str(e)
             return Response({"error": msg}, status=status.HTTP_400_BAD_REQUEST)

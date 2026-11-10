@@ -1,6 +1,7 @@
 from django.urls import path
 from core_app.apis import (
     SupportEmailApi,
+    ConfiguracionPublicaComercioApi,
     ConfiguracionGlobalApi,
     SubirLogoEmpresaApi,
     ListarNotificacionesApi,
@@ -15,10 +16,13 @@ from core_app.apis import (
     DescargarCopiaSeguridadApi,
     SolicitarTokenRestauracionApi,
     RestaurarSistemaApi,
+    DepurarBackupsHuerfanosApi,
+    EjecutarCicloBackupsApi,
 )
 
 urlpatterns = [
     path('config/email-soporte/', SupportEmailApi.as_view(), name='api_email_soporte'),
+    path('config/datos-publicos/', ConfiguracionPublicaComercioApi.as_view(), name='api_datos_publicos_comercio'),
     path('configuraciones/', ConfiguracionGlobalApi.as_view(), name='api_configuracion_global'),
     path('configuraciones/logo/', SubirLogoEmpresaApi.as_view(), name='api_subir_logo_empresa'),
 
@@ -38,6 +42,8 @@ urlpatterns = [
     path('backups/estado/', EstadoAlmacenamientoApi.as_view(), name='api_estado_almacenamiento'),
     path('backups/', ListarCopiasSeguridadApi.as_view(), name='api_listar_backups'),
     path('backups/manual/', GenerarCopiaSeguridadApi.as_view(), name='api_generar_backup_manual'),
+    path('backups/depurar-huerfanos/', DepurarBackupsHuerfanosApi.as_view(), name='api_depurar_backups_huerfanos'),
+    path('backups/ejecutar-ciclo/', EjecutarCicloBackupsApi.as_view(), name='api_ejecutar_ciclo_backups'),
     path('backups/<int:id_backup>/descargar/', DescargarCopiaSeguridadApi.as_view(), name='api_descargar_backup'),
 
     # CU-23: Restaurar Copia de Seguridad

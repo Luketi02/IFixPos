@@ -282,10 +282,11 @@ class CategoriaListApi(APIView):
     def get(self, request):
         from .selectors import obtener_categorias_activas
         from .serializers import CategoriaProductoOutputSerializer
+        from core_app.cache_http import respuesta_catalogo_cacheada
 
         categorias = obtener_categorias_activas()
         serializer = CategoriaProductoOutputSerializer(categorias, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return respuesta_catalogo_cacheada(request, serializer.data, max_age=60)
 
 
 class ProductoTiendaListApi(APIView):
@@ -395,10 +396,11 @@ class ProductoSubirImagenApi(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validar extensión
+        # Validar extensión según parámetro centralizado del sistema
+        from core_app.selectors import obtener_extensiones_permitidas_archivos
         nombre_original = archivo.name
         ext = os.path.splitext(nombre_original)[1].lower()
-        extensiones_validas = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.jfif']
+        extensiones_validas = list(obtener_extensiones_permitidas_archivos(solo_imagenes=True))
         if ext not in extensiones_validas:
             return Response(
                 {"error": f"Formato no válido. Extensiones permitidas: {', '.join(extensiones_validas)}."},

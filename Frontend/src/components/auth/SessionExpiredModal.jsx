@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
@@ -8,6 +8,7 @@ import {
   reiniciarNotificacionSesion,
   tokenEstaExpirado
 } from '../../utils/sesionExpirada';
+import { useIntervaloVisible } from '../../utils/polling';
 
 /**
  * Modal global de sesión expirada. Se muestra cuando el backend rechaza el token
@@ -26,19 +27,17 @@ export default function SessionExpiredModal() {
     return () => window.removeEventListener(EVENTO_SESION_EXPIRADA, abrir);
   }, []);
 
-  // Verificación proactiva de la expiración del JWT (cubre pantallas sin llamadas autenticadas)
-  useEffect(() => {
-    if (!token) return undefined;
-    const verificar = () => {
-      if (tokenEstaExpirado(token)) notificarSesionExpirada();
-    };
-    const inicial = setTimeout(verificar, 0);
-    const intervalo = setInterval(verificar, 15000);
-    return () => {
-      clearTimeout(inicial);
-      clearInterval(intervalo);
-    };
+  // Verificación proactiva de la expiración del JWT (pausa cuando la pestaña está oculta y sincroniza al volver)
+  const verificarExpiracion = useCallback(() => {
+    if (token && tokenEstaExpirado(token)) {
+      notificarSesionExpirada();
+    }
   }, [token]);
+
+  useIntervaloVisible(verificarExpiracion, token ? 15000 : null, {
+    ejecutarAlMontar: true,
+    sincronizarAlVolver: true
+  });
 
   const cerrarYRedirigir = () => {
     setVisible(false);

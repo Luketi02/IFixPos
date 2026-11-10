@@ -361,8 +361,26 @@ class IniciarReparacionApi(APIView):
             "id_reparacion": reparacion.id_reparacion,
             "codigo_seguridad": reparacion.codigo_sec,
             "etapa": reparacion.etapa,
-            "fecha_inicio": reparacion.fecha_inicio
+            "fecha_inicio": reparacion.fecha_inicio,
+            "costo_diagnostico": float(reparacion.id_venta.monto_subtotal) if reparacion.id_venta else 0.0,
+            "estado_pago": reparacion.id_venta.estado_venta if reparacion.id_venta else "PENDIENTE",
+            "id_venta": reparacion.id_venta.id_venta if reparacion.id_venta else None
         }, status=status.HTTP_201_CREATED)
+
+
+class ConfiguracionDiagnosticoApi(APIView):
+    """
+    Retorna el costo monetario base parametrizado del diagnóstico de servicio técnico.
+    Accesible para usuarios autenticados para informar el valor antes de abrir una orden.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core_app.selectors import obtener_costo_diagnostico_base
+        costo = obtener_costo_diagnostico_base()
+        return Response({
+            "costo_diagnostico_base": float(costo)
+        }, status=status.HTTP_200_OK)
 
 
 # ==============================================================================

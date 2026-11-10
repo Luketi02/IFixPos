@@ -145,6 +145,17 @@ export const CLIENT_MENU_ITEMS = [
 // ==============================================================================
 export const TECH_MENU_ITEMS = [
   {
+    label: 'Inicio',
+    children: [
+      {
+        value: 'tech-dashboard',
+        label: 'Panel Principal',
+        icon: Home01Icon,
+        route: '/tecnico/dashboard'
+      }
+    ]
+  },
+  {
     label: 'Dispositivos',
     children: [
       {
@@ -312,7 +323,7 @@ export default function AdminSidebar({
       if (effectiveRole === 'cliente') {
         navigate('/tienda');
       } else if (effectiveRole === 'tecnico') {
-        navigate('/tecnico/dispositivos/en-curso');
+        navigate('/tecnico/dashboard');
       } else {
         navigate('/admin/dashboard', { state: { activeMenu: val } });
       }

@@ -132,6 +132,10 @@ class Reparacion(models.Model):
 
     class Meta:
         db_table = 'reparacion'
+        indexes = [
+            models.Index(fields=['etapa'], name='idx_reparacion_etapa'),
+            models.Index(fields=['codigo_sec'], name='idx_reparacion_codigo_sec'),
+        ]
 
 
 class DetalleInsumoReparacion(models.Model):
@@ -264,3 +268,36 @@ class Calificacion(models.Model):
 
     class Meta:
         db_table = 'calificacion'
+
+
+class ImagenRecepcion(models.Model):
+    """
+    Fotografías de respaldo del estado físico (golpes, rayones) al recepcionar el dispositivo en taller.
+    """
+    id_imagen_recepcion = models.AutoField(
+        primary_key=True,
+        help_text='Identificador único de la imagen de recepción.'
+    )
+    id_reparacion = models.ForeignKey(
+        Reparacion,
+        on_delete=models.CASCADE,
+        related_name='imagenes_recepcion',
+        db_column='id_reparacion',
+        help_text='Reparación vinculada a esta captura fotográfica.'
+    )
+    imagen = models.TextField(
+        help_text='Ruta relativa de almacenamiento o cadena base64 de la fotografía.'
+    )
+    descripcion = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Detalle de la avería/estado fotografiado (ej: rayón en pantalla).'
+    )
+    fecha_subida = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Fecha y hora exacta en que se cargó el respaldo fotográfico.'
+    )
+
+    class Meta:
+        db_table = 'imagen_recepcion'

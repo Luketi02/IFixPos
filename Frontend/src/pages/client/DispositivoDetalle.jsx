@@ -11,10 +11,10 @@ import { formatearEstadoReparacion } from '../../utils/repairStatus';
 import IniciarReparacionModal from '../../components/devices/IniciarReparacionModal';
 import CalificarServicioModal from '../../components/workshop/CalificarServicioModal';
 import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
+import DevicePlaceholder from '../../components/common/DevicePlaceholder';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function DispositivoDetalle() {
   const { id_dispositivo } = useParams();
   const navigate = useNavigate();
@@ -225,22 +225,11 @@ export default function DispositivoDetalle() {
                       <img
                         src={imagenUrl}
                         alt={`${dispositivo.marca} ${dispositivo.modelo}`}
+                        loading="lazy"
+                        decoding="async"
                         className="w-full h-full object-cover"
                       />
-                    ) : (
-                      <svg
-                        className="w-16 h-16 text-slate-700"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.4}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"
-                        />
-                      </svg>
+                    ) : (<DevicePlaceholder tipo={dispositivo.tipo} className="w-20 h-20" />
                     )}
                   </div>
 

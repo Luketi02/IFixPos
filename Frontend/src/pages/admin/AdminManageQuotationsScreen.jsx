@@ -7,8 +7,7 @@ import AdminHeader from '../../components/navigation/AdminHeader';
 import DetalleCotizacionModal from '../../components/purchases/DetalleCotizacionModal';
 import EvaluarCotizacionModal from '../../components/purchases/EvaluarCotizacionModal';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
+import { API_BASE_URL } from '../../config/api';
 export default function AdminManageQuotationsScreen() {
   const { token } = useAuth();
 
@@ -60,7 +59,7 @@ export default function AdminManageQuotationsScreen() {
   useEffect(() => {
     const cargarAuxiliares = async () => {
       try {
-        const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+        const activeToken = token || localStorage.getItem('access_token');
         const config = { headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {} };
         const [respProv, respProd] = await Promise.allSettled([
           axios.get(`${API_BASE_URL}/api/purchases/proveedores/`, config),
@@ -97,7 +96,7 @@ export default function AdminManageQuotationsScreen() {
     }
 
     try {
-      const activeToken = token || localStorage.getItem('access_token') || localStorage.getItem('token');
+      const activeToken = token || localStorage.getItem('access_token');
       const config = {
         headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {},
         params: {}
