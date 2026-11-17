@@ -227,7 +227,7 @@ class CompletarPagoApi(APIView):
     def get(self, request, identificador=None):
         self._verificar_rol_cajero(request.user)
 
-        from sales_app.selectors import buscar_operacion_pendiente_cobro
+        from sales_app.selectors import buscar_operacion_pendiente_cobro, obtener_operacion_pendiente_por_id
         from sales_app.services import _calcular_total_operacion
         from sales_app.models import Venta
         from workshop_app.models import Reparacion
@@ -238,17 +238,31 @@ class CompletarPagoApi(APIView):
         input_query.is_valid(raise_exception=True)
 
         ident = identificador or input_query.validated_data.get('identificador')
-        if not ident:
+        id_operacion = input_query.validated_data.get('id_operacion')
+        tipo_operacion = input_query.validated_data.get('tipo_operacion')
+
+        if not ident and not id_operacion:
             return Response(
                 {"error": "Debe especificar el código de seguridad o correo del cliente."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            operacion = buscar_operacion_pendiente_cobro(identificador=ident)
-        except ObjectDoesNotExist as e:
+        operacion = None
+        if ident:
+            try:
+                operacion = buscar_operacion_pendiente_cobro(identificador=ident)
+            except ObjectDoesNotExist:
+                operacion = None
+
+        if not operacion and id_operacion:
+            try:
+                operacion = obtener_operacion_pendiente_por_id(tipo_operacion=tipo_operacion, id_operacion=id_operacion)
+            except ObjectDoesNotExist:
+                operacion = None
+
+        if not operacion:
             return Response(
-                {"error": str(e)},
+                {"error": "No se encontraron operaciones pendientes de cobro."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -330,31 +344,61 @@ class CompletarPagoApi(APIView):
     def post(self, request, identificador=None):
         self._verificar_rol_cajero(request.user)
 
-
         from sales_app.serializers import CompletarPagoInputSerializer, BuscarOperacionCobroInputSerializer
-        from sales_app.selectors import buscar_operacion_pendiente_cobro
+        from sales_app.selectors import buscar_operacion_pendiente_cobro, obtener_operacion_pendiente_por_id
         from sales_app.services import registrar_cobro_operacion
         from django.core.exceptions import ObjectDoesNotExist
 
         input_query = BuscarOperacionCobroInputSerializer(data=request.query_params)
         input_query.is_valid(raise_exception=True)
 
+        serializer = CompletarPagoInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         # El identificador puede venir en la URL, query params o en el body
-        ident = identificador or input_query.validated_data.get('identificador') or request.data.get('identificador')
-        if not ident:
+        ident = (
+            identificador
+            or input_query.validated_data.get('identificador')
+            or serializer.validated_data.get('identificador')
+            or serializer.validated_data.get('codigo_seguridad')
+            or request.data.get('identificador')
+            or request.data.get('codigo_seguridad')
+            or request.data.get('codigo_sec')
+            or request.data.get('email')
+        )
+        id_operacion = (
+            serializer.validated_data.get('id_operacion')
+            or input_query.validated_data.get('id_operacion')
+            or request.data.get('id_operacion')
+        )
+        tipo_operacion = (
+            serializer.validated_data.get('tipo_operacion')
+            or input_query.validated_data.get('tipo_operacion')
+            or request.data.get('tipo_operacion')
+        )
+
+        if not ident and not id_operacion:
             return Response(
                 {"error": "Debe especificar el código de seguridad o correo del cliente para localizar la operación."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        serializer = CompletarPagoInputSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        operacion = None
+        if ident:
+            try:
+                operacion = buscar_operacion_pendiente_cobro(identificador=ident)
+            except ObjectDoesNotExist:
+                operacion = None
 
-        try:
-            operacion = buscar_operacion_pendiente_cobro(identificador=ident)
-        except ObjectDoesNotExist as e:
+        if not operacion and id_operacion:
+            try:
+                operacion = obtener_operacion_pendiente_por_id(tipo_operacion=tipo_operacion, id_operacion=id_operacion)
+            except ObjectDoesNotExist:
+                operacion = None
+
+        if not operacion:
             return Response(
-                {"error": str(e)},
+                {"error": "No se encontraron operaciones pendientes para cobrar con los datos provistos."},
                 status=status.HTTP_404_NOT_FOUND
             )
 

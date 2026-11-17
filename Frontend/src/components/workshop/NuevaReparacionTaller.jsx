@@ -499,7 +499,7 @@ export default function NuevaReparacionTaller({ onAlerta }) {
                         </div>
                         <div className="text-xs text-slate-400 truncate mt-0.5 flex items-center gap-2">
                           <span className="font-mono text-cyan-400">
-                            SN: {disp.numero_serie || 'S/N'}
+                            N. Serie: {disp.numero_serie || 'Sin registrar'}
                           </span>
                           <span>•</span>
                           <span className="text-slate-300 truncate">

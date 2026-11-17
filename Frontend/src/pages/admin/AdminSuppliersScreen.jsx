@@ -231,50 +231,56 @@ export default function AdminSuppliersScreen() {
               <span>Registrar Nuevo Proveedor</span>
             </button>
           </div>
-          {/* Alertas de Éxito y Error */}
-          <AnimatePresence>
-            {successMsg && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm flex items-center justify-between shadow-lg"
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-emerald-400 font-bold">✓</span>
-                  <span>{successMsg}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSuccessMsg('')}
-                  className="text-emerald-400 hover:text-emerald-200 font-bold"
+          {/* Alertas Flotantes Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
+          <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-md">
+            <AnimatePresence>
+              {successMsg && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                  transition={{ duration: 0.25 }}
+                  className="pointer-events-auto p-4 rounded-2xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xl backdrop-blur-md"
                 >
-                  ✕
-                </button>
-              </motion.div>
-            )}
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-emerald-400 font-bold text-base">⚡</span>
+                    <span className="leading-relaxed">{successMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSuccessMsg('')}
+                    className="text-emerald-400 hover:text-emerald-200 font-bold ml-2 p-1 text-xs"
+                    aria-label="Cerrar éxito"
+                  >
+                    ✕
+                  </button>
+                </motion.div>
+              )}
 
-            {errorMsg && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-center justify-between shadow-lg"
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-rose-400 font-bold">⚠</span>
-                  <span>{errorMsg}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setErrorMsg('')}
-                  className="text-rose-400 hover:text-rose-200 font-bold"
+              {errorMsg && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                  transition={{ duration: 0.25 }}
+                  className="pointer-events-auto p-4 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-200 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xl backdrop-blur-md"
                 >
-                  ✕
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-rose-400 font-bold text-base">⚠️</span>
+                    <span className="leading-relaxed">{errorMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorMsg('')}
+                    className="text-rose-400 hover:text-rose-200 font-bold ml-2 p-1 text-xs"
+                    aria-label="Cerrar error"
+                  >
+                    ✕
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Barra de Filtrado del Padrón de Proveedores */}
           <form

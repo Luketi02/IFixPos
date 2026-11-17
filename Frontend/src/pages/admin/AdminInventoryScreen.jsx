@@ -41,27 +41,19 @@ export default function AdminInventoryScreen() {
   const [toastMensaje, setToastMensaje] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Auto-ocultar alerta de error temporal tras 15 segundos (Regla 6)
+  // Auto-ocultar alerta de error temporal tras 6 segundos (Regla 6)
   useEffect(() => {
     if (!errorMessage) return undefined;
-    const t = setTimeout(() => setErrorMessage(''), 15000);
+    const t = setTimeout(() => setErrorMessage(''), 6000);
     return () => clearTimeout(t);
   }, [errorMessage]);
 
-  // Auto-ocultar Toast de éxito tras 15 segundos
+  // Auto-ocultar Toast de éxito tras 6 segundos (Regla 6)
   useEffect(() => {
     if (!toastMensaje) return undefined;
-    const t = setTimeout(() => setToastMensaje(null), 15000);
+    const t = setTimeout(() => setToastMensaje(null), 6000);
     return () => clearTimeout(t);
   }, [toastMensaje]);
-
-  // Debounce de 500ms para el campo de búsqueda de texto
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedBusqueda(textoBusqueda);
-    }, 500);
-    return () => clearTimeout(handler);
-  }, [textoBusqueda]);
 
   // Cargar categorías activas para el filtro
   useEffect(() => {
@@ -86,8 +78,8 @@ export default function AdminInventoryScreen() {
     setCargando(true);
     try {
       const params = {};
-      if (debouncedBusqueda.trim()) {
-        params.buscar = debouncedBusqueda.trim();
+      if (textoBusqueda.trim()) {
+        params.buscar = textoBusqueda.trim();
       }
       if (categoriaFiltro) {
         params.id_categoria = categoriaFiltro;
@@ -116,11 +108,13 @@ export default function AdminInventoryScreen() {
     } finally {
       setCargando(false);
     }
-  }, [token, debouncedBusqueda, categoriaFiltro, nivelStockFiltro, propositoFiltro, compatibilidadFiltro]);
+  }, [token, textoBusqueda, categoriaFiltro, nivelStockFiltro, propositoFiltro, compatibilidadFiltro]);
 
+  // Carga inicial al montar pantalla
   useEffect(() => {
     cargarInventario();
-  }, [cargarInventario]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // Limpiar todos los filtros
   const handleLimpiarFiltros = () => {
@@ -149,35 +143,7 @@ export default function AdminInventoryScreen() {
         />
 
 
-        {/* Alerta de Error Temporal (6 segundos) */}
-        <AnimatePresence>
-          {errorMessage && (
-            <motion.div
-              initial={{ opacity: 0, y: -16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-4"
-            >
-              <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-sm flex items-center justify-between gap-3 shadow-lg shadow-rose-950/20 backdrop-blur-md">
-                <div className="flex items-center gap-3">
-                  <svg className="w-5 h-5 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <span>{errorMessage}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setErrorMessage('')}
-                  className="text-rose-400 hover:text-rose-200 p-1"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
 
         {/* Contenido Principal */}
         <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
@@ -202,7 +168,7 @@ export default function AdminInventoryScreen() {
 
           {/* Barra de Filtros Cyber-Tech (Azul Pizarra #1E293B) */}
           <section className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-4 sm:p-5 shadow-xl">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 sm:gap-4 items-center">
+            <form onSubmit={(e) => { e.preventDefault(); cargarInventario(); }} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 sm:gap-4 items-center">
               
               {/* Buscador de Texto (Nombre o Código) */}
               <div className="lg:col-span-3 relative">
@@ -275,36 +241,43 @@ export default function AdminInventoryScreen() {
               </div>
 
               {/* Selector de Ámbito de Compatibilidad Técnica */}
-              <div className="lg:col-span-2">
+              <div className="lg:col-span-1">
                 <select
                   value={compatibilidadFiltro}
                   onChange={(e) => setCompatibilidadFiltro(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer font-medium"
+                  className="w-full px-2 py-2.5 rounded-xl bg-[#0F172A] border border-slate-700 text-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:border-[#8B5CF6] transition-all cursor-pointer font-medium"
                 >
-                  <option value="">Todos los ámbitos</option>
-                  <option value="UNIVERSAL">🌐 Universal</option>
-                  <option value="MULTI_MODELO">📑 Multi-modelo</option>
-                  <option value="MARCAS">🏷️ Por Marca(s)</option>
-                  <option value="TIPO_DISPOSITIVO">💻 Por Formato</option>
-                  <option value="MONO_MODELO">📱 Modelo Único</option>
+                  <option value="">Ámbito</option>
+                  <option value="UNIVERSAL">Universal</option>
+                  <option value="MULTI_MODELO">Multi</option>
+                  <option value="MARCAS">Marcas</option>
+                  <option value="TIPO_DISPOSITIVO">Formato</option>
+                  <option value="MONO_MODELO">Único</option>
                 </select>
               </div>
 
               {/* Acciones de Filtro / Limpiar */}
-              <div className="lg:col-span-1 flex items-center justify-end">
+              <div className="lg:col-span-2 flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={cargando}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 font-mono"
+                >
+                  {cargando ? '...' : '⚡ Filtrar'}
+                </button>
                 {hayFiltrosActivos && (
                   <button
                     type="button"
                     onClick={handleLimpiarFiltros}
-                    className="w-full py-2.5 px-3 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition-all text-center"
+                    className="py-2.5 px-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition-all text-center"
                     title="Restablecer filtros"
                   >
-                    Limpiar
+                    ✕
                   </button>
                 )}
               </div>
 
-            </div>
+            </form>
           </section>
 
           {/* Tabla de Resultados de Inventario */}
@@ -726,37 +699,52 @@ export default function AdminInventoryScreen() {
         )}
       </AnimatePresence>
 
-      {/* Toast Flotante de Notificación Exitosa */}
-      <AnimatePresence>
-        {toastMensaje && (
-          <motion.div
-            initial={{ opacity: 0, y: 30, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            className="fixed bottom-6 right-6 z-50 max-w-sm"
-          >
-            <div className="bg-[#1E293B] border border-cyan-500/40 rounded-2xl p-4 shadow-2xl shadow-cyan-950/40 backdrop-blur-md flex items-center gap-3 text-left">
-              <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <p className="text-white text-xs sm:text-sm font-semibold flex-1">
-                {toastMensaje}
-              </p>
+      {/* Notificaciones y Alertas Flotantes Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
+      <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-md">
+        <AnimatePresence>
+          {errorMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              className="pointer-events-auto bg-rose-950/90 text-rose-200 border border-rose-500/50 px-4 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs sm:text-sm font-medium"
+            >
+              <span className="text-base shrink-0">⚠️</span>
+              <p className="flex-1 leading-relaxed">{errorMessage}</p>
+              <button
+                type="button"
+                onClick={() => setErrorMessage('')}
+                className="text-rose-400 hover:text-rose-100 p-1 ml-1"
+                aria-label="Cerrar error"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+
+          {toastMensaje && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              className="pointer-events-auto bg-emerald-950/90 text-emerald-200 border border-emerald-500/50 px-4 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs sm:text-sm font-medium"
+            >
+              <span className="text-base shrink-0">⚡</span>
+              <p className="flex-1 leading-relaxed">{toastMensaje}</p>
               <button
                 type="button"
                 onClick={() => setToastMensaje(null)}
-                className="text-slate-400 hover:text-slate-200 p-1"
+                className="text-emerald-400 hover:text-emerald-100 p-1 ml-1"
+                aria-label="Cerrar notificación"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                ✕
               </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
     </div>
   );

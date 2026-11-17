@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -48,13 +48,11 @@ export default function MisDispositivos() {
   const [dispositivos, setDispositivos] = useState([]);
   const [paginaActual, setPaginaActual] = useState(1);
   const TAMANO_PAGINA = 12;
-  // Clave de la última consulta resuelta: mientras difiera de la actual, se muestra el estado de carga
-  const [claveCargada, setClaveCargada] = useState(null);
   const [recarga, setRecarga] = useState(0);
 
   // Filtros (CU-34)
   const [busqueda, setBusqueda] = useState('');
-  const [busquedaAplicada, setBusquedaAplicada] = useState('');
+  const [filtrosAplicados, setFiltrosAplicados] = useState(false);
   const [marcaFiltro, setMarcaFiltro] = useState('');
   const [modeloFiltro, setModeloFiltro] = useState('');
   const [marcas, setMarcas] = useState([]);
@@ -85,12 +83,6 @@ export default function MisDispositivos() {
     return () => clearTimeout(t);
   }, [successMessage]);
 
-  // Debounce de la búsqueda por texto
-  useEffect(() => {
-    const t = setTimeout(() => setBusquedaAplicada(busqueda.trim()), 350);
-    return () => clearTimeout(t);
-  }, [busqueda]);
-
   // Catálogo de marcas para el filtro
   useEffect(() => {
     axios
@@ -112,20 +104,58 @@ export default function MisDispositivos() {
       .catch(() => setErrorMessage('No fue posible cargar los modelos de la marca.'));
   };
 
-  // GET /api/workshop/mis-dispositivos/ con los filtros activos
-  const claveActual = `${busquedaAplicada}|${marcaFiltro}|${modeloFiltro}|${recarga}`;
-  const isLoading = claveCargada !== claveActual;
+  // Función manual de consulta de dispositivos (CU-34)
+  const [cargandoDispositivos, setCargandoDispositivos] = useState(false);
 
+  const consultarDispositivos = useCallback(
+    async (paramsOverride = null) => {
+      if (!token) return;
+      setCargandoDispositivos(true);
+      const bVal = paramsOverride ? paramsOverride.buscar : busqueda.trim();
+      const mVal = paramsOverride ? paramsOverride.marca : marcaFiltro;
+      const modVal = paramsOverride ? paramsOverride.modelo : modeloFiltro;
+
+      const params = {};
+      if (bVal) params.buscar = bVal;
+      if (mVal) params.marca = mVal;
+      if (modVal) params.modelo = modVal;
+
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/workshop/mis-dispositivos/`, {
+          params,
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const lista = Array.isArray(res.data)
+          ? res.data
+          : res.data?.results || res.data?.resultados || [];
+        setDispositivos(lista);
+        setFiltrosAplicados(Boolean(bVal || mVal || modVal));
+        setPaginaActual(1);
+      } catch (err) {
+        console.error('Error al cargar dispositivos:', err);
+        const data = err.response?.data;
+        const detalle = Array.isArray(data) ? data.join(' ') : data?.detail || data?.error;
+        setErrorMessage(
+          typeof detalle === 'string' ? detalle : 'No fue posible cargar tus dispositivos. Intenta nuevamente.'
+        );
+      } finally {
+        setCargandoDispositivos(false);
+      }
+    },
+    [token, busqueda, marcaFiltro, modeloFiltro]
+  );
+
+  // Carga inicial al montar o tras guardar un dispositivo
   useEffect(() => {
+    if (!token) return undefined;
     let activo = true;
-    const params = {};
-    if (busquedaAplicada) params.buscar = busquedaAplicada;
-    if (marcaFiltro) params.marca = marcaFiltro;
-    if (modeloFiltro) params.modelo = modeloFiltro;
+
+    Promise.resolve().then(() => {
+      if (activo) setCargandoDispositivos(true);
+    });
 
     axios
       .get(`${API_BASE_URL}/api/workshop/mis-dispositivos/`, {
-        params,
         headers: { Authorization: `Bearer ${token}` }
       })
       .then((res) => {
@@ -134,6 +164,7 @@ export default function MisDispositivos() {
           ? res.data
           : res.data?.results || res.data?.resultados || [];
         setDispositivos(lista);
+        setFiltrosAplicados(false);
         setPaginaActual(1);
       })
       .catch((err) => {
@@ -146,13 +177,13 @@ export default function MisDispositivos() {
         );
       })
       .finally(() => {
-        if (activo) setClaveCargada(`${busquedaAplicada}|${marcaFiltro}|${modeloFiltro}|${recarga}`);
+        if (activo) setCargandoDispositivos(false);
       });
 
     return () => {
       activo = false;
     };
-  }, [busquedaAplicada, marcaFiltro, modeloFiltro, recarga, token]);
+  }, [token, recarga]);
 
   const abrirCreacion = () => {
     setDispositivoEnEdicion(null);
@@ -182,7 +213,7 @@ export default function MisDispositivos() {
     setErrorMessage('La eliminación de dispositivos aún no está disponible.');
   };
 
-  const hayFiltros = Boolean(busquedaAplicada || marcaFiltro || modeloFiltro);
+  const hayFiltros = filtrosAplicados;
 
   return (
     <div className="min-h-screen bg-[#0F172A] text-[#F8FAFC] font-sans flex flex-col md:flex-row selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -237,45 +268,68 @@ export default function MisDispositivos() {
               </button>
             </div>
 
-            {/* Alertas */}
-            <AnimatePresence>
-              {errorMessage && (
-                <motion.div
-                  key="error"
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.25 }}
-                  role="alert"
-                  className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-start gap-3"
-                >
-                  <span className="flex-1">{errorMessage}</span>
-                  <button
-                    type="button"
-                    onClick={() => setErrorMessage('')}
-                    className="text-rose-400 hover:text-rose-200 text-xs font-mono"
+            {/* Alertas Flotantes Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
+            <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-md">
+              <AnimatePresence>
+                {errorMessage && (
+                  <motion.div
+                    key="error"
+                    initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                    transition={{ duration: 0.25 }}
+                    role="alert"
+                    className="pointer-events-auto p-4 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-200 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xl backdrop-blur-md"
                   >
-                    ✕
-                  </button>
-                </motion.div>
-              )}
-              {successMessage && (
-                <motion.div
-                  key="success"
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.25 }}
-                  className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm"
-                >
-                  {successMessage}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-rose-400 text-base">⚠️</span>
+                      <span className="leading-relaxed">{errorMessage}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setErrorMessage('')}
+                      className="text-rose-400 hover:text-rose-200 p-1 ml-2 text-xs font-mono"
+                      aria-label="Cerrar error"
+                    >
+                      ✕
+                    </button>
+                  </motion.div>
+                )}
+                {successMessage && (
+                  <motion.div
+                    key="success"
+                    initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                    transition={{ duration: 0.25 }}
+                    className="pointer-events-auto p-4 rounded-2xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xl backdrop-blur-md"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-emerald-400 text-base">⚡</span>
+                      <span className="leading-relaxed">{successMessage}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSuccessMessage('')}
+                      className="text-emerald-400 hover:text-emerald-200 p-1 ml-2 text-xs font-mono"
+                      aria-label="Cerrar éxito"
+                    >
+                      ✕
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
-            {/* Barra de filtros (CU-34) */}
-            <div className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="relative">
+            {/* Barra de filtros (CU-34) con envío manual */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                consultarDispositivos();
+              }}
+              className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3 items-center"
+            >
+              <div className="relative md:col-span-4">
                 <svg
                   className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
                   fill="none"
@@ -295,37 +349,50 @@ export default function MisDispositivos() {
                   className={`${FILTER_CLASS} pl-10`}
                 />
               </div>
-              <select
-                value={marcaFiltro}
-                onChange={handleMarcaFiltroChange}
-                aria-label="Filtrar por marca"
-                className={FILTER_CLASS}
-              >
-                <option value="">Todas las marcas</option>
-                {marcas.map((m) => (
-                  <option key={m.id_marca} value={m.id_marca}>
-                    {m.nombre}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={modeloFiltro}
-                onChange={(e) => setModeloFiltro(e.target.value)}
-                disabled={!marcaFiltro}
-                aria-label="Filtrar por modelo"
-                className={FILTER_CLASS}
-              >
-                <option value="">{marcaFiltro ? 'Todos los modelos' : 'Elige una marca primero'}</option>
-                {modelos.map((m) => (
-                  <option key={m.id_modelo} value={m.id_modelo}>
-                    {m.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
+              <div className="md:col-span-3">
+                <select
+                  value={marcaFiltro}
+                  onChange={handleMarcaFiltroChange}
+                  aria-label="Filtrar por marca"
+                  className={FILTER_CLASS}
+                >
+                  <option value="">Todas las marcas</option>
+                  {marcas.map((m) => (
+                    <option key={m.id_marca} value={m.id_marca}>
+                      {m.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-3">
+                <select
+                  value={modeloFiltro}
+                  onChange={(e) => setModeloFiltro(e.target.value)}
+                  disabled={!marcaFiltro}
+                  aria-label="Filtrar por modelo"
+                  className={FILTER_CLASS}
+                >
+                  <option value="">{marcaFiltro ? 'Todos los modelos' : 'Elige una marca primero'}</option>
+                  {modelos.map((m) => (
+                    <option key={m.id_modelo} value={m.id_modelo}>
+                      {m.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <button
+                  type="submit"
+                  disabled={cargandoDispositivos}
+                  className="w-full py-2.5 px-4 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 font-mono"
+                >
+                  {cargandoDispositivos ? '...' : '⚡ Filtrar'}
+                </button>
+              </div>
+            </form>
 
             {/* Grilla */}
-            {isLoading ? (
+            {cargandoDispositivos ? (
               <EsqueletoTarjetas cantidad={6} />
             ) : dispositivos.length === 0 ? (
               <motion.div
@@ -406,7 +473,7 @@ export default function MisDispositivos() {
                             {d.marca} <span className="text-slate-300 font-semibold">{d.modelo}</span>
                           </h2>
                           <p className="text-[11px] font-mono text-slate-400">
-                            Serie: <span className="text-slate-200">{d.numero_serie || 'S/N'}</span>
+                            N. Serie: <span className="text-slate-200">{d.numero_serie || 'Sin registrar'}</span>
                           </p>
 
                           <div className="flex items-center justify-between gap-2 mt-auto pt-3 border-t border-slate-700/60">

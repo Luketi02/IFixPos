@@ -254,10 +254,10 @@ export default function DispositivoDetalle() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-700/60 text-xs">
                       <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
                         <span className="text-slate-400 block text-[11px] font-mono uppercase tracking-wider">
-                          Número de Serie / IMEI
+                          N. Serie / IMEI
                         </span>
                         <span className="font-mono text-slate-100 font-semibold text-xs">
-                          {dispositivo.numero_serie || 'No registrado (S/N)'}
+                          {dispositivo.numero_serie || 'Sin registrar'}
                         </span>
                       </div>
                       <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">

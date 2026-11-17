@@ -1922,8 +1922,10 @@ class IniciarReparacionCU26Tests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('credencial_acceso', response.data)
 
-    def test_validacion_al_menos_una_categoria_requerida(self):
-        """Lista de categorías vacía levanta 400 Bad Request."""
+    def test_iniciar_reparacion_categorias_opcional_vacia(self):
+        """Lista de categorías vacía es permitida (opcional al iniciar reparación) y crea la orden con 201 Created."""
+        from workshop_app.models import Reparacion
+
         self.client.force_authenticate(user=self.cliente)
         payload = {
             'id_dispositivo': self.disp_cliente.id_dispositivo,
@@ -1932,8 +1934,9 @@ class IniciarReparacionCU26Tests(TestCase):
             'ids_categorias': []
         }
         response = self.client.post('/api/workshop/reparaciones/iniciar/', payload, format='json')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('ids_categorias', response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        rep = Reparacion.objects.get(pk=response.data['id_reparacion'])
+        self.assertEqual(rep.categorias.count(), 0)
 
     def test_cliente_inicia_reparacion_genera_deuda_diagnostico_pendiente(self):
         """
@@ -5682,6 +5685,371 @@ class ReporteSatisfaccionTestCase(TestCase):
         }
         response = self.client.get(self.url_satisfaccion, data=params)
         self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+
+class FiltroSoloMisAsignacionesTests(TestCase):
+    """
+    Pruebas automatizadas para el filtro 'solo_mis_asignaciones' en el panel y módulos técnicos.
+    Valida que el personal técnico pueda alternar entre sus propias reparaciones asignadas
+    y la vista global del taller.
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.url = '/api/workshop/reparaciones/'
+        self.hoy = timezone.now().date()
+
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(
+            codigo='TECNICO',
+            defaults={'nombre_rol': 'Técnico de Taller'}
+        )
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(
+            codigo='CLIENTE',
+            defaults={'nombre_rol': 'Cliente Regular'}
+        )
+
+        self.tecnico_1 = Usuario.objects.create(
+            email='tecnico1.asignaciones@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_1, nombre='Carlos', apellido='Gómez')
+
+        self.tecnico_2 = Usuario.objects.create(
+            email='tecnico2.asignaciones@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_tecnico
+        )
+        PerfilUsuario.objects.create(id_usuario=self.tecnico_2, nombre='Mariana', apellido='López')
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.asignaciones@test.com',
+            fecha_registro=self.hoy,
+            is_active=True,
+            id_rol=self.rol_cliente
+        )
+        PerfilUsuario.objects.create(id_usuario=self.cliente, nombre='Pedro', apellido='Suárez')
+
+        self.tipo_disp = TipoDispositivo.objects.create(nombre='Smartphone Test', estado_activo=True)
+        self.marca = Marca.objects.create(nombre='Samsung Test', estado_activo=True)
+        self.modelo = ModeloDispositivo.objects.create(
+            nombre='Galaxy S22 Test',
+            id_tipo_dispositivo=self.tipo_disp,
+            id_marca=self.marca,
+            estado_activo=True
+        )
+        self.dispositivo_1 = Dispositivo.objects.create(
+            numero_serie='IMEI-ASIGN-001',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+        self.dispositivo_2 = Dispositivo.objects.create(
+            numero_serie='IMEI-ASIGN-002',
+            fecha_registro=self.hoy,
+            id_modelo=self.modelo,
+            id_usuario=self.cliente
+        )
+
+        # Reparación 1 asignada a Técnico 1
+        self.rep_1 = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='EN_REPARACION',
+            codigo_sec='SEC-ASIGN-1',
+            desc_cliente='Falla de módulo',
+            id_dispositivo=self.dispositivo_1,
+            id_usuario=self.tecnico_1
+        )
+
+        # Reparación 2 asignada a Técnico 2
+        self.rep_2 = Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ESPERANDO_DISPOSITIVO',
+            codigo_sec='SEC-ASIGN-2',
+            desc_cliente='Falla de batería',
+            id_dispositivo=self.dispositivo_2,
+            id_usuario=self.tecnico_2
+        )
+
+    def test_tecnico_con_solo_mis_asignaciones_activo_recibe_unicamente_sus_ordenes(self):
+        """Si el técnico envía solo_mis_asignaciones=true, el selector debe acotar a sus propias asignaciones."""
+        self.client.force_authenticate(user=self.tecnico_1)
+        response = self.client.get(self.url, data={'solo_mis_asignaciones': 'true'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids_reparaciones = [r['id_reparacion'] for r in response.data]
+        self.assertIn(self.rep_1.id_reparacion, ids_reparaciones)
+        self.assertNotIn(self.rep_2.id_reparacion, ids_reparaciones)
+
+    def test_tecnico_con_solo_mis_asignaciones_desactivado_recibe_vista_global_taller(self):
+        """Si solo_mis_asignaciones=false (o no se envía), el personal ve todas las órdenes del taller."""
+        self.client.force_authenticate(user=self.tecnico_1)
+        response = self.client.get(self.url, data={'solo_mis_asignaciones': 'false'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids_reparaciones = [r['id_reparacion'] for r in response.data]
+        self.assertIn(self.rep_1.id_reparacion, ids_reparaciones)
+        self.assertIn(self.rep_2.id_reparacion, ids_reparaciones)
+
+    def test_tecnico_2_con_solo_mis_asignaciones_recibe_su_propia_reparacion(self):
+        """Técnico 2 con filtro activo recibe solo la reparación 2."""
+        self.client.force_authenticate(user=self.tecnico_2)
+        response = self.client.get(self.url, data={'solo_mis_asignaciones': 'true'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids_reparaciones = [r['id_reparacion'] for r in response.data]
+        self.assertNotIn(self.rep_1.id_reparacion, ids_reparaciones)
+        self.assertIn(self.rep_2.id_reparacion, ids_reparaciones)
+
+    def test_serializer_incluye_campo_id_tecnico(self):
+        """Verifica que la salida de la API incluya el campo id_tecnico para el personal de taller."""
+        self.client.force_authenticate(user=self.tecnico_1)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rep1_data = next((r for r in response.data if r['id_reparacion'] == self.rep_1.id_reparacion), None)
+        self.assertIsNotNone(rep1_data)
+        self.assertEqual(rep1_data['id_tecnico'], self.tecnico_1.id_usuario)
+
+
+class EstadosRecepcionYDiagnosticoTestCase(TestCase):
+    """
+    Suite de pruebas para validación de estados de recepción (ESPERANDO_PAGO_DIAGNOSTICO vs ESPERANDO_DIAGNOSTICO),
+    desbloqueo automático al pagar y cobro único de diagnóstico en reevaluaciones.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        from users_app.models import RolUsuario, Usuario, PerfilUsuario
+        from catalog_app.models import TipoDispositivo, Marca, ModeloDispositivo
+        from sales_app.models import Venta, MedioPago, Pago
+        from workshop_app.models import CategoriaReparacion, Dispositivo, Reparacion, BitacoraReparacion
+
+        self.rol_cliente, _ = RolUsuario.objects.get_or_create(codigo='CLIENTE', defaults={'nombre_rol': 'Cliente'})
+        self.rol_tecnico, _ = RolUsuario.objects.get_or_create(codigo='TECNICO', defaults={'nombre_rol': 'Técnico'})
+
+        self.cliente = Usuario.objects.create(
+            email='cliente.recep@test.com',
+            contrasena='Test1234!',
+            id_rol=self.rol_cliente,
+            fecha_registro=date.today(),
+            is_active=True
+        )
+        PerfilUsuario.objects.create(
+            id_usuario=self.cliente,
+            nombre='Carlos',
+            apellido='Recepción',
+            dni='33445566'
+        )
+
+        self.tecnico = Usuario.objects.create(
+            email='tecnico.recep@test.com',
+            contrasena='Test1234!',
+            id_rol=self.rol_tecnico,
+            fecha_registro=date.today(),
+            is_active=True
+        )
+
+        self.tipo_disp, _ = TipoDispositivo.objects.get_or_create(nombre='Smartphone', defaults={'estado_activo': True})
+        self.marca, _ = Marca.objects.get_or_create(nombre='Samsung', defaults={'estado_activo': True})
+        self.modelo, _ = ModeloDispositivo.objects.get_or_create(
+            nombre='Galaxy S24',
+            id_marca=self.marca,
+            id_tipo_dispositivo=self.tipo_disp,
+            defaults={'estado_activo': True}
+        )
+
+        self.dispositivo = Dispositivo.objects.create(
+            id_usuario=self.cliente,
+            id_modelo=self.modelo,
+            numero_serie='SN-S24-9988',
+            fecha_registro=date.today()
+        )
+
+        self.categoria, _ = CategoriaReparacion.objects.get_or_create(nombre='Pantalla y Display', defaults={'estado_activo': True})
+
+        self.medio_pago, _ = MedioPago.objects.get_or_create(
+            codigo='EFECTIVO',
+            defaults={'nombre_medio_pago': 'EFECTIVO', 'estado': True, 'recargo': Decimal('0.00')}
+        )
+
+    def test_recepcion_con_diagnostico_impago_transiciona_a_esperando_pago_diagnostico(self):
+        """Si el diagnóstico inicial no está abonado, al recepcionar transiciona a ESPERANDO_PAGO_DIAGNOSTICO."""
+        from sales_app.models import Venta
+        from workshop_app.models import Reparacion, BitacoraReparacion
+        from workshop_app.serializers import ReparacionListOutputSerializer
+
+        venta_pendiente = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='PRESENCIAL',
+            fecha_venta=date.today(),
+            estado_venta='PENDIENTE',
+            codigo_sec='SEC-DIAG-01',
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('0.00')
+        )
+
+        rep = Reparacion.objects.create(
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.cliente,
+            fecha_inicio=date.today(),
+            etapa='ESPERANDO_DISPOSITIVO',
+            codigo_sec='SEC-DIAG-01',
+            desc_cliente='No enciende tras golpe.',
+            id_venta=venta_pendiente
+        )
+        rep.categorias.set([self.categoria])
+
+        self.client.force_authenticate(user=self.tecnico)
+        url = f'/api/workshop/reparaciones/{rep.id_reparacion}/recepcionar/'
+        payload = {
+            'descripcion_problema': 'No enciende tras golpe fuerte en borde.',
+            'credencial_acceso': 'Ninguna',
+            'ids_categorias': [self.categoria.id_categoria],
+            'observaciones_fisicas': 'Bisel abollado y pantalla intacta.'
+        }
+        res = self.client.post(url, payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        rep.refresh_from_db()
+        self.assertEqual(rep.etapa, 'ESPERANDO_PAGO_DIAGNOSTICO')
+
+        # Verificar bitácora
+        ult_bit = rep.bitacorareparacion_set.order_by('-id_bitacora').first()
+        self.assertEqual(ult_bit.estado_alcanzado, 10)
+
+        # Serializador debe indicar que adeuda diagnóstico
+        serializer_data = ReparacionListOutputSerializer(rep).data
+        self.assertTrue(serializer_data['debe_diagnostico'])
+        self.assertFalse(serializer_data['diagnostico_abonado'])
+
+    def test_recepcion_con_diagnostico_pagado_transiciona_a_esperando_diagnostico(self):
+        """Si el diagnóstico inicial ya está pagado, al recepcionar transiciona a ESPERANDO_DIAGNOSTICO."""
+        from sales_app.models import Venta
+        from workshop_app.models import Reparacion
+        from workshop_app.serializers import ReparacionListOutputSerializer
+
+        venta_pagada = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='PRESENCIAL',
+            fecha_venta=date.today(),
+            estado_venta='PAGADO',
+            codigo_sec='SEC-DIAG-02',
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('0.00')
+        )
+
+        rep = Reparacion.objects.create(
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.cliente,
+            fecha_inicio=date.today(),
+            etapa='ESPERANDO_DISPOSITIVO',
+            codigo_sec='SEC-DIAG-02',
+            desc_cliente='Batería agotada.',
+            id_venta=venta_pagada
+        )
+        rep.categorias.set([self.categoria])
+
+        self.client.force_authenticate(user=self.tecnico)
+        url = f'/api/workshop/reparaciones/{rep.id_reparacion}/recepcionar/'
+        payload = {
+            'descripcion_problema': 'Batería inflada y agotada.',
+            'credencial_acceso': 'Ninguna',
+            'ids_categorias': [self.categoria.id_categoria],
+            'observaciones_fisicas': 'Tapa trasera ligeramente levantada.'
+        }
+        res = self.client.post(url, payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        rep.refresh_from_db()
+        self.assertEqual(rep.etapa, 'ESPERANDO_DIAGNOSTICO')
+
+        ult_bit = rep.bitacorareparacion_set.order_by('-id_bitacora').first()
+        self.assertEqual(ult_bit.estado_alcanzado, 2)
+
+        serializer_data = ReparacionListOutputSerializer(rep).data
+        self.assertFalse(serializer_data['debe_diagnostico'])
+        self.assertTrue(serializer_data['diagnostico_abonado'])
+
+    def test_pago_diagnostico_avanza_automaticamente_desde_esperando_pago(self):
+        """Al registrar el cobro de la orden en ESPERANDO_PAGO_DIAGNOSTICO, avanza a ESPERANDO_DIAGNOSTICO."""
+        from sales_app.models import Venta
+        from sales_app.services import registrar_cobro_operacion
+        from workshop_app.models import Reparacion
+
+        venta_diag = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='PRESENCIAL',
+            fecha_venta=date.today(),
+            estado_venta='PENDIENTE',
+            codigo_sec='SEC-DIAG-03',
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('0.00')
+        )
+        rep = Reparacion.objects.create(
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico,
+            fecha_inicio=date.today(),
+            etapa='ESPERANDO_PAGO_DIAGNOSTICO',
+            codigo_sec='SEC-DIAG-03',
+            desc_cliente='Puerto de carga sulfatado.',
+            id_venta=venta_diag
+        )
+
+        pago = registrar_cobro_operacion(
+            usuario_ejecutor=self.tecnico,
+            operacion=venta_diag,
+            datos_validados={
+                'monto_pagado': '15000.00',
+                'medio_pago': 'EFECTIVO',
+                'numero_operacion': 'EF-00123'
+            }
+        )
+        self.assertIsNotNone(pago)
+
+        rep.refresh_from_db()
+        self.assertEqual(rep.etapa, 'ESPERANDO_DIAGNOSTICO')
+        comentarios_bitacora = [b.comentario for b in rep.bitacorareparacion_set.all()]
+        self.assertTrue(any("avanza automáticamente a 'Esperando Diagnóstico'" in c for c in comentarios_bitacora))
+        self.assertTrue(any("Comprobante fiscal emitido" in c for c in comentarios_bitacora))
+
+    def test_re_diagnostico_en_taller_no_exige_pago_nuevamente(self):
+        """Al solicitar un re-diagnóstico sobre una reparación avanzada, debe_diagnostico es False."""
+        from sales_app.models import Venta
+        from workshop_app.models import Reparacion
+        from workshop_app.services import cambiar_estado_reparacion
+        from workshop_app.serializers import ReparacionListOutputSerializer
+
+        venta_presupuesto = Venta.objects.create(
+            id_usuario=self.cliente,
+            metodo_entrega='PRESENCIAL',
+            fecha_venta=date.today(),
+            estado_venta='PENDIENTE',
+            codigo_sec='SEC-PRESUP-01',
+            monto_subtotal=Decimal('45000.00'),
+            costo_envio=Decimal('0.00')
+        )
+        rep = Reparacion.objects.create(
+            id_dispositivo=self.dispositivo,
+            id_usuario=self.tecnico,
+            fecha_inicio=date.today(),
+            etapa='EN_REPARACION',
+            codigo_sec='SEC-DIAG-04',
+            desc_cliente='Falla intermitente en placa.',
+            id_venta=venta_presupuesto
+        )
+
+        rep_cambiada = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=rep.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'ESPERANDO_DIAGNOSTICO',
+                'comentario': 'Se detecta componente recalentado, se requiere nueva evaluación profunda.'
+            }
+        )
+        self.assertEqual(rep_cambiada.etapa, 'ESPERANDO_DIAGNOSTICO')
+
+        serializer_data = ReparacionListOutputSerializer(rep_cambiada).data
+        self.assertFalse(serializer_data['debe_diagnostico'])
+        self.assertTrue(serializer_data['diagnostico_abonado'])
+
 
 
 

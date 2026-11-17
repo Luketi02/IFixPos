@@ -273,7 +273,7 @@ export default function EntregarDispositivo({ onAlerta }) {
     const disp = typeof rep.dispositivo === 'string'
       ? rep.dispositivo
       : `${rep.dispositivo?.marca || ''} ${rep.dispositivo?.modelo || 'Dispositivo'}`.trim();
-    const serie = rep.dispositivo?.numero_serie || rep.numero_serie || 'S/N';
+    const serie = rep.dispositivo?.numero_serie || rep.numero_serie || 'Sin registrar';
     const idRep = rep.id_reparacion || rep.idReparacion || '';
     const fecha = new Date().toLocaleDateString('es-AR');
 
@@ -318,7 +318,7 @@ export default function EntregarDispositivo({ onAlerta }) {
         <div class="title">Acta de Conformidad de Entrega y Términos de Garantía</div>
 
         <div class="statement-box">
-          El cliente <strong>${nombre}</strong> con DNI <strong>${dni}</strong> acepta que recibe a su entera conformidad y satisfacción el dispositivo <strong>${disp}</strong> (N° Serie / IMEI: <strong>${serie}</strong>), habiendo verificado el encendido, funcionamiento de las intervenciones contratadas e integridad física del equipo frente al técnico, declarando conocer y aceptar los términos y condiciones de la garantía técnica legal de IFixPos.
+          El cliente <strong>${nombre}</strong> con DNI <strong>${dni}</strong> acepta que recibe a su entera conformidad y satisfacción el dispositivo <strong>${disp}</strong> (N. Serie: <strong>${serie}</strong>), habiendo verificado el encendido, funcionamiento de las intervenciones contratadas e integridad física del equipo frente al técnico, declarando conocer y aceptar los términos y condiciones de la garantía técnica legal de IFixPos.
         </div>
 
         <table class="table-info">
@@ -331,7 +331,7 @@ export default function EntregarDispositivo({ onAlerta }) {
           <tr>
             <th>Equipo Restituido:</th>
             <td>${disp}</td>
-            <th>N° Serie / IMEI:</th>
+            <th>N. Serie:</th>
             <td>${serie}</td>
           </tr>
           <tr>
@@ -649,7 +649,7 @@ export default function EntregarDispositivo({ onAlerta }) {
                           {reparacion.dispositivo?.marca} {reparacion.dispositivo?.modelo}
                         </h3>
                         <p className="text-xs text-slate-400 font-mono mt-1">
-                          Nro. Serie / IMEI: <span className="text-slate-200">{reparacion.dispositivo?.serie || 'S/N'}</span>
+                          N. Serie: <span className="text-slate-200">{reparacion.dispositivo?.numero_serie || reparacion.dispositivo?.serie || 'Sin registrar'}</span>
                         </p>
                         <p className="text-xs text-slate-400 font-mono">
                           Titular: <span className="text-cyan-400 font-semibold">{reparacion.cliente?.nombre}</span>{' '}

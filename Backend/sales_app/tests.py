@@ -984,6 +984,36 @@ class SalesAppCU38TestCase(TestCase):
         self.assertEqual(log.modulo_origen, 'sales_app')
         self.assertIn('estado_pago=PAGADO', log.detalle)
 
+    def test_filtrar_venta_diagnostico_pendiente_por_codigo_y_email(self):
+        """CU-38: Una venta de diagnóstico pendiente vinculada a reparación es visible por código y email."""
+        from workshop_app.models import Reparacion, Dispositivo
+        from catalog_app.models import ModeloDispositivo
+        mod = ModeloDispositivo.objects.first()
+        disp = Dispositivo.objects.create(
+            numero_serie='SN-DIAG-1122',
+            fecha_registro=self.hoy,
+            id_usuario=self.cliente1,
+            id_modelo=mod
+        )
+        Reparacion.objects.create(
+            fecha_inicio=self.hoy,
+            etapa='ESPERANDO_DISPOSITIVO',
+            codigo_sec='DIAG-9988',
+            desc_cliente='Equipo no enciende',
+            credencial_acceso='Ninguna',
+            id_dispositivo=disp,
+            id_usuario=self.tecnico,
+            id_venta=self.venta_pendiente_hoy
+        )
+        self.client.force_authenticate(user=self.tecnico)
+        res_code = self.client.get('/api/sales/pagos/filtrar/', {'codigo_seguridad': 'DIAG-9988', 'estado_pago': 'PENDIENTE'})
+        self.assertEqual(res_code.status_code, 200)
+        self.assertGreaterEqual(res_code.data['total_transacciones'], 1)
+
+        res_email = self.client.get('/api/sales/pagos/filtrar/', {'email_cliente': self.cliente1.email, 'estado_pago': 'PENDIENTE'})
+        self.assertEqual(res_email.status_code, 200)
+        self.assertGreaterEqual(res_email.data['total_transacciones'], 1)
+
     def test_control_acceso_bloquea_clientes(self):
         """Precondición: Solo Administrador o Técnico pueden consultar el flujo de caja."""
         self.client.force_authenticate(user=self.cliente1)

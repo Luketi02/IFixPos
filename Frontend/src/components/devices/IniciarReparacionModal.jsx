@@ -66,7 +66,6 @@ export default function IniciarReparacionModal({
   // Estados de control (useMensajeTemporal aplica auto-descarte a los 6 segundos - Regla Global 6)
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useMensajeTemporal();
-  const [formTocado, setFormTocado] = useState(false);
   const [copiado, setCopiado] = useState(false);
 
   // Estados para el buscador desplegable de categorías
@@ -91,7 +90,6 @@ export default function IniciarReparacionModal({
       setPagoAcreditadoOnline(false);
       setSubmitting(false);
       setErrorMessage('');
-      setFormTocado(false);
       setCopiado(false);
       setResultado(null);
       setBusquedaCategoria('');
@@ -196,12 +194,6 @@ export default function IniciarReparacionModal({
   // Validación para avanzar de 'FORM' a 'CONFIRM'
   const handleAvanzarAConfirmacion = (e) => {
     e.preventDefault();
-    setFormTocado(true);
-
-    if (selectedCategorias.length === 0) {
-      setErrorMessage('Debes seleccionar al menos una categoría de reparación.');
-      return;
-    }
 
     const descLimpia = descripcion.trim();
     if (descLimpia.length < 10) {
@@ -368,7 +360,7 @@ export default function IniciarReparacionModal({
                   Iniciar Orden de Reparación
                 </h3>
                 <p className="text-xs text-slate-300 font-medium">
-                  {dispositivo?.marca} {dispositivo?.modelo} • N/S: {dispositivo?.numero_serie || 'S/N'}
+                  {dispositivo?.marca} {dispositivo?.modelo} • N. Serie: {dispositivo?.numero_serie || 'Sin registrar'}
                 </p>
               </div>
             </div>
@@ -452,12 +444,13 @@ export default function IniciarReparacionModal({
               </div>
 
               <form onSubmit={handleAvanzarAConfirmacion} className="space-y-5">
-                {/* 1. Selector Multicategoría */}
+                {/* 1. Selector Multicategoría (Opcional) */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
                       Categorías de Falla
+                      <span className="text-[10px] font-normal lowercase tracking-normal text-slate-400">(opcional)</span>
                     </label>
                     <span className="text-[11px] font-mono text-cyan-400 font-semibold">
                       {selectedCategorias.length} seleccionada(s)
@@ -485,7 +478,7 @@ export default function IniciarReparacionModal({
                           <span className="text-slate-400 text-xs">
                             {cargandoCategorias
                               ? 'Cargando categorías activas...'
-                              : 'Selecciona una o más categorías de falla...'}
+                              : 'Opcional: selecciona una o más categorías de falla...'}
                           </span>
                         ) : (
                           categoriasSeleccionadasInfo.map((cat) => (
@@ -552,11 +545,6 @@ export default function IniciarReparacionModal({
                       </div>
                     )}
                   </div>
-                  {formTocado && selectedCategorias.length === 0 && (
-                    <p className="text-[11px] text-amber-400 font-medium">
-                      Debes seleccionar al menos una categoría de reparación.
-                    </p>
-                  )}
                 </div>
 
                 {/* 2. Descripción del Problema */}
@@ -816,7 +804,9 @@ export default function IniciarReparacionModal({
                 <div className="flex justify-between text-slate-400">
                   <span>Categorías:</span>
                   <span className="text-cyan-300 font-medium">
-                    {categoriasSeleccionadasInfo.map((c) => c.nombre).join(', ')}
+                    {categoriasSeleccionadasInfo.length > 0
+                      ? categoriasSeleccionadasInfo.map((c) => c.nombre).join(', ')
+                      : 'Sin especificar (a definir en diagnóstico)'}
                   </span>
                 </div>
                 <div className="flex justify-between text-slate-400 border-t border-slate-800/80 pt-2 font-bold">
@@ -854,7 +844,7 @@ export default function IniciarReparacionModal({
                       <span>
                         {medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO
                           ? 'Continuar y Abrir Mercado Pago'
-                          : 'Confirmar y Abrir Modal de Pago'}
+                          : 'Confirmar y Continuar'}
                       </span>
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
@@ -953,7 +943,7 @@ export default function IniciarReparacionModal({
                   </div>
                 ) : (
                   <div className="mt-3 p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-200">
-                    ⚠️ Debe asistir con su DNI y abonar el costo del diagnóstico (${costoDiagnostico.toLocaleString('es-AR')} ARS) para iniciar el proceso.
+                    ⚠️ Debe asistir con su DNI o Código generado y abonar el costo del diagnóstico (${costoDiagnostico.toLocaleString('es-AR')} ARS) para iniciar el proceso.
                   </div>
                 )}
               </div>
@@ -993,7 +983,7 @@ export default function IniciarReparacionModal({
           codigoSeguridad={resultado?.codigo_seguridad || null}
           permitirContinuarPendiente={true}
           textoBotonPendiente="Continuar y abonar al entregar el equipo"
-          textoConfirmar="Confirmar compromiso de pago y ver Token"
+          textoConfirmar="Confirmar"
           onPagoConfirmado={handlePagoModalConfirmado}
           onContinuarPendiente={handlePagoModalPendiente}
         />

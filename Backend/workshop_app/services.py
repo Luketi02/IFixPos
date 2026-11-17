@@ -4,6 +4,7 @@ import os
 import logging
 import secrets
 import string
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +300,7 @@ def registrar_dispositivo(*, usuario_ejecutor: Usuario, datos_validados: dict) -
     LogSistema.objects.create(
         fecha_hora=hora_actual,
         accion=f"Alta de dispositivo {dispositivo.id_dispositivo}",
-        detalle=f"Dispositivo registrado para cliente ID {cliente.id_usuario} (Modelo: {modelo.nombre}, Serie: {nro_serie or 'S/N'}).",
+        detalle=f"Dispositivo registrado para cliente ID {cliente.id_usuario} (Modelo: {modelo.nombre}, Serie: {nro_serie or 'Sin registrar'}).",
         tipo="INFO",
         modulo_origen="workshop_app",
         tabla_afectada="dispositivo",
@@ -547,7 +548,7 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             f"Se ha iniciado formalmente la Orden de Servicio para su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles del Ingreso:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
-            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- N. Serie: {dispositivo.numero_serie or 'Sin registrar'}\n"
             f"- Estado Inicial: {reparacion.etapa}\n"
             f"- Código de Seguridad / Token: {reparacion.codigo_sec}\n"
             f"- Problema Informado: {reparacion.desc_cliente}\n"
@@ -565,7 +566,7 @@ def generar_y_enviar_remito_ingreso(reparacion: Reparacion) -> None:
             f"<p>Confirmamos la apertura del servicio técnico para su dispositivo:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>N. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'Sin registrar'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.etapa}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Código de Seguridad:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>{reparacion.codigo_sec}</span></td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Descripción:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
@@ -653,7 +654,7 @@ def iniciar_reparacion(
     ids_categorias = datos_validados.get('ids_categorias', [])
     reparacion.categorias.set(ids_categorias)
 
-    # Paso 6.1: Algoritmo Inteligente de Asignación a Técnico
+    # Paso 6.1: Algoritmo Inteligente de Asignación a Técnico (Asignación única al inicio)
     auto_asignar = obtener_configuracion_bool('autoAsignacionTecnicosActiva')
     tecnico_asignado = None
     detalle_asignacion = None
@@ -664,10 +665,14 @@ def iniciar_reparacion(
             reparacion.id_usuario = tecnico_asignado
             reparacion.save(update_fields=['id_usuario'])
 
-    # Paso 7: Registro en Bitácora Técnica con trazabilidad rica
-    comentario_apertura = f"Proceso inicializado: Apertura de orden de servicio. El equipo ingresó al sistema en etapa '{reparacion.etapa}'."
+    # Paso 7: Registro en Bitácora Técnica estructurado por ítems
+    lineas_apertura = [
+        f"Proceso inicializado: Apertura de orden de servicio.",
+        f"Estado inicial: '{reparacion.etapa}'."
+    ]
     if tecnico_asignado:
-        comentario_apertura += f" Asignado automáticamente al técnico {tecnico_asignado.email} (Score: {detalle_asignacion.get('score_final', 100)} pts)."
+        lineas_apertura.append(f"Técnico asignado: {tecnico_asignado.email}.")
+    comentario_apertura = "\n".join(lineas_apertura)
 
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
@@ -766,14 +771,6 @@ def iniciar_reparacion(
             detalle=f"Abono de diagnóstico inicial para reparación #{reparacion.id_reparacion}",
             cod_operacion=id_pago_online or f"MP-{codigo_seguridad}"
         )
-    else:
-        Pago.objects.create(
-            id_venta=venta_diag,
-            medio_pago=medio_obj,
-            monto_pagado=Decimal('0.00'),
-            fecha_pago=django_timezone.now().date(),
-            detalle=f"Diagnóstico inicial pendiente de acreditación ({medio_obj.nombre_medio_pago}) para Reparación #{reparacion.id_reparacion}"
-        )
 
     # Paso 8: Auditoría y Despacho de Remito de Ingreso
     email_ejecutor = getattr(usuario_ejecutor, 'email', str(usuario_ejecutor))
@@ -833,7 +830,7 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             f"Confirmamos la recepción física de su equipo ({nombre_marca} {nombre_modelo}) en nuestro mostrador.\n\n"
             f"Detalles de la Recepción:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
-            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- N. Serie: {dispositivo.numero_serie or 'Sin registrar'}\n"
             f"- Estado Actual: Esperando Diagnóstico\n"
             f"- Código de Servicio: {reparacion.codigo_sec}\n"
             f"- Problemas Reportados: {reparacion.desc_cliente}\n"
@@ -852,7 +849,7 @@ def generar_y_enviar_comprobante_recepcion(reparacion: Reparacion, observaciones
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Código de Servicio:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.codigo_sec}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>N. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'Sin registrar'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Estado Físico / Estético:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{obs_texto}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Falla Informada:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{reparacion.desc_cliente}</td></tr>"
             f"</table>"
@@ -900,24 +897,47 @@ def recepcionar_dispositivo_taller(
     # Paso 5: Actualizar datos de la reparación
     reparacion.desc_cliente = datos_validados['descripcion_problema']
     reparacion.credencial_acceso = datos_validados.get('credencial_acceso') or 'Ninguna'
-    reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
     reparacion.hora_recepcion = django_timezone.now().time()
+
+    # Determinar si el diagnóstico inicial adeuda pago
+    venta_diag = reparacion.id_venta
+    tiene_deuda_pendiente = bool(venta_diag and str(venta_diag.estado_venta).strip().upper() not in ('PAGADO', 'PAGADA'))
+
+    if not tiene_deuda_pendiente:
+        reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+        estado_alcanzado_bitacora = 2
+        rotulo_etapa = 'Esperando Diagnóstico'
+    else:
+        reparacion.etapa = 'ESPERANDO_PAGO_DIAGNOSTICO'
+        estado_alcanzado_bitacora = 10
+        rotulo_etapa = 'Esperando Pago de Diagnóstico'
 
     # Actualizar relación M2M de categorías si fueron especificadas
     if 'ids_categorias' in datos_validados:
         reparacion.categorias.set(datos_validados['ids_categorias'])
 
-    # Paso 5.1: Asignación de técnico responsable (Algoritmo Inteligente vs Recepcionista)
+    # Paso 5.1: Asignación de técnico responsable SOLO si la reparación aún no tiene un técnico asignado
+    rol_actual = getattr(
+        getattr(reparacion.id_usuario, 'id_rol', None) or getattr(reparacion.id_usuario, 'rol', None),
+        'codigo',
+        ''
+    ).upper()
+    ya_tiene_tecnico = bool(reparacion.id_usuario and rol_actual == 'TECNICO')
+
+    fue_asignado_en_recepcion = False
     auto_asignar = obtener_configuracion_bool('autoAsignacionTecnicosActiva')
-    tecnico_final = usuario_tecnico
-    detalle_auto = None
 
-    if auto_asignar:
-        tecnico_sel, detalle_auto = seleccionar_mejor_tecnico_para_reparacion(reparacion=reparacion)
-        if tecnico_sel:
-            tecnico_final = tecnico_sel
+    if ya_tiene_tecnico:
+        tecnico_final = reparacion.id_usuario
+    else:
+        tecnico_final = usuario_tecnico
+        if auto_asignar:
+            tecnico_sel, _ = seleccionar_mejor_tecnico_para_reparacion(reparacion=reparacion)
+            if tecnico_sel:
+                tecnico_final = tecnico_sel
+        reparacion.id_usuario = tecnico_final
+        fue_asignado_en_recepcion = True
 
-    reparacion.id_usuario = tecnico_final
     reparacion.save()
 
     # Paso 5.2: Persistencia del Respaldo Fotográfico (CU-45)
@@ -935,22 +955,33 @@ def recepcionar_dispositivo_taller(
             )
             fotos_guardadas += 1
 
-    # Paso 6: Registro en Bitácora de Reparación con narrativa rica y compatible
-    comentario_bitacora = f"Cambio de etapa: Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    # Paso 6: Registro en Bitácora de Reparación estructurado por ítems
+    lineas_recepcion = [
+        f"Cambio de etapa: Equipo recepcionado en mostrador. Estado físico: {datos_validados['observaciones_fisicas']}"
+    ]
     if fotos_guardadas > 0:
-        comentario_bitacora += f" | Respaldo fotográfico: {fotos_guardadas} foto(s) de constancia adjuntas."
-    if auto_asignar and tecnico_final != usuario_tecnico:
-        comentario_bitacora += f" | Asignado para diagnóstico a {tecnico_final.email} mediante distribución inteligente (Score: {detalle_auto.get('score_final', 100)} pts)."
+        lineas_recepcion.append(f"Respaldo fotográfico: {fotos_guardadas} foto(s) de constancia adjuntas.")
+    if tiene_deuda_pendiente:
+        lineas_recepcion.append(
+            "Estado de arancel: En espera del pago del primer diagnóstico para habilitar la revisión técnica (solo se abona el primer diagnóstico)."
+        )
+    else:
+        lineas_recepcion.append(
+            "Estado de arancel: Diagnóstico inicial cubierto — Equipo habilitado para evaluación técnica."
+        )
+    if fue_asignado_en_recepcion and tecnico_final:
+        lineas_recepcion.append(f"Técnico asignado: {tecnico_final.email}.")
+    comentario_bitacora = "\n".join(lineas_recepcion)
 
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
-        id_usuario=tecnico_final,
+        id_usuario=usuario_tecnico,
         fecha_hora=django_timezone.now(),
-        estado_alcanzado=2,  # 2: ESPERANDO_DIAGNOSTICO
+        estado_alcanzado=estado_alcanzado_bitacora,
         comentario=comentario_bitacora
     )
 
-    if auto_asignar and tecnico_final != usuario_tecnico:
+    if fue_asignado_en_recepcion and auto_asignar and tecnico_final != usuario_tecnico:
         try:
             nombre_equipo = reparacion.id_dispositivo.id_modelo.nombre if reparacion.id_dispositivo.id_modelo else "Dispositivo"
             Notificacion.objects.create(
@@ -971,7 +1002,7 @@ def recepcionar_dispositivo_taller(
         accion="Recepción física de dispositivo (CU-45)",
         detalle=(
             f"Reparación #{reparacion.id_reparacion} recepcionada físicamente en mostrador por {email_tecnico}. "
-            f"Transición a 'ESPERANDO_DIAGNOSTICO'. Estado físico: {datos_validados['observaciones_fisicas']}."
+            f"\nTransición a '{reparacion.etapa}'. \nEstado físico: {datos_validados['observaciones_fisicas']}."
         ),
         tipo="AUDITORIA_TALLER",
         modulo_origen="workshop_app",
@@ -1053,7 +1084,7 @@ def generar_y_enviar_notificacion_diagnostico(
             f"y el presupuesto ya se encuentra disponible para su revisión y confirmación.\n\n"
             f"Detalles del Diagnóstico:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
-            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- N. Serie: {dispositivo.numero_serie or 'Sin registrar'}\n"
             f"- Diagnóstico de la Falla: {diagnostico.descripcion_falla}\n"
             f"- Mano de Obra Estimada: {mano_obra_str}\n"
             f"{insumos_texto}\n"
@@ -1069,7 +1100,7 @@ def generar_y_enviar_notificacion_diagnostico(
             f"<p>El equipo técnico ha completado la revisión de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>. El presupuesto ya se encuentra disponible para su aprobación:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 15px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>N. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'Sin registrar'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Diagnóstico Técnico:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{diagnostico.descripcion_falla}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Mano de Obra:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>{mano_obra_str}</strong></td></tr>"
             f"</table>"
@@ -1147,16 +1178,31 @@ def cargar_diagnostico_tecnico(
             precio_unitario=producto.precio_venta
         )
 
-    # Paso 4: Transición de Estado de Reparación y asignación de técnico responsable
+    # Paso 4: Transición de Estado de Reparación preservando al técnico titular asignado
     reparacion.etapa = 'ESPERANDO_CONFIRMACION'
-    reparacion.id_usuario = usuario_tecnico
+    rol_actual_rep = getattr(
+        getattr(reparacion.id_usuario, 'id_rol', None) or getattr(reparacion.id_usuario, 'rol', None),
+        'codigo',
+        ''
+    ).upper()
+    if not reparacion.id_usuario or rol_actual_rep != 'TECNICO':
+        reparacion.id_usuario = usuario_tecnico
     reparacion.save()
 
-    # Paso 5: Registro inmutable en BitacoraReparacion
+    # Paso 5: Registro inmutable en BitacoraReparacion estructurado por ítems
     # Nota: estado_alcanzado se almacena numéricamente en BD (4: ESPERANDO_CONFIRMACION)
     es_primer_diagnostico = (reparacion.diagnostico_set.count() <= 1)
     accion_diag = "Carga de nuevo diagnóstico" if not es_primer_diagnostico else "Carga de diagnóstico"
-    comentario_bitacora = f"Proceso: {accion_diag}. Cambio de etapa: El equipo pasó a 'Esperando Confirmación'. Falla constatada: {diagnostico.descripcion_falla[:200]}."
+    lineas_diag = [
+        f"Proceso: {accion_diag}.",
+        "Cambio de etapa: El equipo pasó a 'Esperando Confirmación'."
+    ]
+    if not es_primer_diagnostico:
+        lineas_diag.append(
+            "Cobertura de diagnóstico: Emitido sin costo adicional (solo se abona el primer diagnóstico)."
+        )
+    lineas_diag.append(f"Falla constatada: {diagnostico.descripcion_falla[:200]}.")
+    comentario_bitacora = "\n".join(lineas_diag)
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
@@ -1268,12 +1314,24 @@ def procesar_decision_reparacion(
     if decision == 'RECHAZAR':
         reparacion.etapa = 'CANCELADO'
         estado_alcanzado_int = 8  # 8: CANCELADO / RECHAZADO
-        comentario_bitacora = "Diagnóstico rechazado. Resolución del cliente: Presupuesto rechazado. El equipo pasó a 'Cancelado'" + (f". Motivo: {comentarios}" if comentarios else ".")
+        lineas_rechazo = [
+            "Resolución del cliente: Diagnóstico rechazado (Presupuesto rechazado).",
+            "Cambio de etapa: El equipo pasó a 'Cancelado'."
+        ]
+        if comentarios:
+            lineas_rechazo.append(f"Motivo: {comentarios}")
+        comentario_bitacora = "\n".join(lineas_rechazo)
 
     elif decision == 'ACEPTAR':
         reparacion.etapa = 'EN_REPARACION'
         estado_alcanzado_int = 5  # 5: EN_REPARACION
-        comentario_bitacora = "Diagnóstico aceptado. Resolución del cliente: Presupuesto aprobado. El equipo pasó a 'En Reparación' para ejecución técnica" + (f". Comentarios: {comentarios}" if comentarios else ".")
+        lineas_aceptacion = [
+            "Resolución del cliente: Diagnóstico aceptado (Presupuesto aprobado).",
+            "Cambio de etapa: El equipo pasó a 'En Reparación' para ejecución técnica."
+        ]
+        if comentarios:
+            lineas_aceptacion.append(f"Comentarios: {comentarios}")
+        comentario_bitacora = "\n".join(lineas_aceptacion)
 
         # Recuperar insumos presupuestados en el diagnóstico
         insumos_presupuestados = list(
@@ -1506,7 +1564,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
             f"Confirmamos el registro de su decisión para la reparación de su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
-            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- N. Serie: {dispositivo.numero_serie or 'Sin registrar'}\n"
             f"- Decisión Registrada: Presupuesto {decision_humana}\n"
             f"- Estado Actual de la Orden: {reparacion.etapa}\n"
             f"- Nota: {detalle_decision}\n\n"
@@ -1525,7 +1583,7 @@ def generar_y_enviar_confirmacion_decision_cliente(
             f"<p>Confirmamos la recepción de su decisión para la reparación de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>N. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'Sin registrar'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Decisión:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: {badge_bg}; color: {badge_fg}; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>Presupuesto {decision_humana}</span></td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Detalle:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{detalle_decision}</td></tr>"
             f"</table>"
@@ -1604,7 +1662,7 @@ def generar_y_enviar_notificacion_cambio_estado(
             f"Le informamos que se ha registrado una actualización en el estado de la reparación de su equipo ({nombre_marca} {nombre_modelo}).\n\n"
             f"Detalles de la Actualización:\n"
             f"- Dispositivo: {nombre_tipo} {nombre_marca} {nombre_modelo}\n"
-            f"- Nro. de Serie: {dispositivo.numero_serie or 'S/N'}\n"
+            f"- N. Serie: {dispositivo.numero_serie or 'Sin registrar'}\n"
             f"- Nuevo Estado: {estado_humano}\n"
             f"- Observaciones del Técnico: {comentario}\n\n"
             f"Puede acceder a los detalles y a la bitácora completa de cambios en el siguiente enlace:\n"
@@ -1619,7 +1677,7 @@ def generar_y_enviar_notificacion_cambio_estado(
             f"<p>Se ha registrado un nuevo avance en la reparación de su dispositivo <strong>{nombre_marca} {nombre_modelo}</strong>:</p>"
             f"<table style='width: 100%; border-collapse: collapse; margin-bottom: 20px;'>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Equipo:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{nombre_tipo} {nombre_marca} {nombre_modelo}</td></tr>"
-            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nro. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'S/N'}</td></tr>"
+            f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>N. Serie:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{dispositivo.numero_serie or 'Sin registrar'}</td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Nuevo Estado:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'><span style='background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold;'>{estado_humano}</span></td></tr>"
             f"<tr><td style='padding: 8px; border-bottom: 1px solid #eee;'><strong>Comentarios Técnicos:</strong></td><td style='padding: 8px; border-bottom: 1px solid #eee;'>{comentario}</td></tr>"
             f"</table>"
@@ -1683,7 +1741,8 @@ def cambiar_estado_reparacion(
         'FINALIZADO': 6,
         'ENTREGADO': 7,
         'CANCELADO': 8,
-        'ESPERANDO_REPUESTOS': 9
+        'ESPERANDO_REPUESTOS': 9,
+        'ESPERANDO_PAGO_DIAGNOSTICO': 10
     }
 
     nuevo_estado = (datos_validados.get('nuevo_estado') or '').strip().upper().replace(' ', '_')
@@ -1740,9 +1799,17 @@ def cambiar_estado_reparacion(
     reparacion.etapa = nuevo_estado
     reparacion.save(update_fields=['etapa'])
 
-    # Paso 8: Registro inmutable en BitacoraReparacion
+    # Paso 8: Registro inmutable en BitacoraReparacion estructurado por ítems
     estado_int = MAPA_ESTADOS_NUMERICOS.get(nuevo_estado, 5)
-    comentario_enriquecido = f"Cambio de etapa: El equipo pasó de '{etapa_actual}' a '{nuevo_estado}'. Detalle técnico: {comentario}"
+    lineas_cambio = [
+        f"Cambio de etapa: El equipo pasó de '{etapa_actual}' a '{nuevo_estado}'."
+    ]
+    if nuevo_estado in ('ESPERANDO_DIAGNOSTICO', 'EN_DIAGNOSTICO'):
+        lineas_cambio.append(
+            "Cobertura de diagnóstico: Reevaluación técnica sin cargo adicional (solo se abona el primer diagnóstico)."
+        )
+    lineas_cambio.append(f"Detalle técnico: {comentario}")
+    comentario_enriquecido = "\n".join(lineas_cambio)
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
@@ -1913,9 +1980,12 @@ def entregar_dispositivo_cliente(
     reparacion.fecha_entrega = django_timezone.now().date()
     reparacion.save(update_fields=['etapa', 'fecha_entrega'])
 
-    # Paso 6: Asentar en BitacoraReparacion (estado 7 = ENTREGADO)
+    # Paso 6: Asentar en BitacoraReparacion (estado 7 = ENTREGADO) estructurado por ítems
     comentarios_adicionales = (datos_validados.get('comentarios_entrega') or '').strip()
-    texto_bitacora = f"Cierre de orden: El equipo fue entregado físicamente al cliente finalizando formalmente el servicio técnico. Observaciones de entrega: {comentarios_adicionales or 'Conformidad de entrega sin observaciones adicionales.'}"
+    texto_bitacora = (
+        f"Cierre de orden: El equipo fue entregado físicamente al cliente finalizando formalmente el servicio técnico.\n"
+        f"Observaciones de entrega: {comentarios_adicionales or 'Conformidad de entrega sin observaciones adicionales.'}"
+    )
     BitacoraReparacion.objects.create(
         id_reparacion=reparacion,
         id_usuario=usuario_tecnico,
@@ -1944,6 +2014,206 @@ def entregar_dispositivo_cliente(
     generar_y_enviar_comprobante_entrega(reparacion)
 
     return reparacion
+
+
+@transaction.atomic
+def abonar_diagnostico_reparacion_cliente(
+    *,
+    usuario_ejecutor: Usuario,
+    id_reparacion: int,
+    datos_validados: dict
+) -> dict:
+    """
+    Permite al cliente (o personal autorizado) abonar desde la plataforma el costo del
+    diagnóstico inicial pendiente cuando la reparación se encuentra en 'ESPERANDO_PAGO_DIAGNOSTICO'
+    o 'ESPERANDO_DISPOSITIVO'.
+    - Regla de negocio innegociable: SOLO el primer diagnóstico se paga; si ya fue abonado
+      o ya posee diagnósticos emitidos, rechaza la operación.
+    - Si la reparación estaba en 'ESPERANDO_PAGO_DIAGNOSTICO', transiciona automáticamente
+      a 'ESPERANDO_DIAGNOSTICO'.
+    - Genera el comprobante fiscal PDF y registra los eventos en BitacoraReparacion.
+    """
+    from rest_framework.exceptions import PermissionDenied, NotFound
+    from core_app.selectors import obtener_costo_diagnostico_base
+    from core_app.constantes import CodigoMedioPago, deducir_codigo_medio_pago
+    from sales_app.models import Venta, Pago, MedioPago
+    from sales_app.services import generar_comprobante_fiscal, enviar_correo_confirmacion_diagnostico
+
+    try:
+        reparacion = Reparacion.objects.select_for_update(of=('self',)).select_related(
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_modelo',
+            'id_dispositivo__id_modelo__id_marca',
+        ).get(id_reparacion=id_reparacion)
+    except Reparacion.DoesNotExist:
+        raise NotFound("La orden de reparación especificada no existe.")
+
+    # Seguridad horizontal: propietario del dispositivo o personal del taller
+    rol_obj = getattr(usuario_ejecutor, 'id_rol', None) or getattr(usuario_ejecutor, 'rol', None)
+    rol_cod = (getattr(rol_obj, 'codigo', '') or '').upper()
+    es_personal = rol_cod in ('ADMIN', 'TECNICO')
+    cliente_titular = getattr(reparacion.id_dispositivo, 'id_usuario', None)
+    if not es_personal and (not cliente_titular or cliente_titular.id_usuario != usuario_ejecutor.id_usuario):
+        raise PermissionDenied("No posee permisos para gestionar pagos sobre esta reparación.")
+
+    etapa_actual = (reparacion.etapa or '').strip().upper().replace(' ', '_')
+    if etapa_actual not in ('ESPERANDO_PAGO_DIAGNOSTICO', 'ESPERANDO_DISPOSITIVO'):
+        raise ValidationError(
+            "Esta reparación ya no requiere pago de diagnóstico inicial (solo se abona el primer diagnóstico)."
+        )
+
+    # Verificar que no haya tenido diagnósticos previos
+    if reparacion.diagnostico_set.exists():
+        raise ValidationError(
+            "El primer diagnóstico ya fue realizado previamente. Los nuevos diagnósticos o reevaluaciones no tienen costo."
+        )
+
+    costo_base = obtener_costo_diagnostico_base()
+    venta = reparacion.id_venta
+
+    if not venta:
+        venta = Venta.objects.create(
+            id_usuario=cliente_titular or usuario_ejecutor,
+            metodo_entrega='PRESENCIAL',
+            fecha_venta=django_timezone.now().date(),
+            estado_venta='PENDIENTE',
+            codigo_sec=reparacion.codigo_sec or uuid.uuid4().hex[:8].upper(),
+            monto_subtotal=costo_base,
+            costo_envio=Decimal('0.00'),
+            id_direccion_envio=None
+        )
+        reparacion.id_venta = venta
+        reparacion.save(update_fields=['id_venta'])
+    elif not venta.monto_subtotal or venta.monto_subtotal <= Decimal('0.00'):
+        venta.monto_subtotal = costo_base
+        venta.save(update_fields=['monto_subtotal'])
+
+    estado_venta_actual = str(venta.estado_venta or '').strip().upper()
+    if estado_venta_actual in ('PAGADO', 'PAGADA'):
+        if etapa_actual == 'ESPERANDO_PAGO_DIAGNOSTICO':
+            reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+            reparacion.save(update_fields=['etapa'])
+        raise ValidationError("El diagnóstico inicial de esta reparación ya se encuentra abonado.")
+    elif estado_venta_actual in ('CANCELADO', 'CANCELADA'):
+        venta.estado_venta = 'PENDIENTE'
+        venta.save(update_fields=['estado_venta'])
+
+    accion = str(datos_validados.get('accion') or 'CONFIRMAR').strip().upper()
+    if accion == 'PREPARAR':
+        return {
+            'id_reparacion': reparacion.id_reparacion,
+            'id_venta': venta.id_venta,
+            'monto_total': float(venta.monto_subtotal),
+            'etapa': reparacion.etapa,
+            'estado_pago': venta.estado_venta
+        }
+
+    # Resolver medio de pago elegido
+    medio_raw = str(datos_validados.get('medio_pago') or 'MERCADO PAGO').strip()
+    medio_obj = None
+    if medio_raw.isdigit():
+        medio_obj = MedioPago.objects.filter(id_mediopago=int(medio_raw)).first()
+    if not medio_obj:
+        medio_obj = (
+            MedioPago.objects.filter(nombre_medio_pago__iexact=medio_raw).first()
+            or MedioPago.objects.filter(codigo__iexact=medio_raw).first()
+        )
+    if not medio_obj:
+        cod_ded = deducir_codigo_medio_pago(medio_raw)
+        medio_obj = MedioPago.objects.filter(codigo=cod_ded).first()
+    if not medio_obj:
+        medio_obj = MedioPago.objects.filter(estado=True).first() or MedioPago.objects.create(
+            codigo=CodigoMedioPago.MERCADO_PAGO,
+            nombre_medio_pago=medio_raw.upper()[:50],
+            estado=True,
+            recargo=Decimal('0.00')
+        )
+
+    monto_abonado = Decimal(str(venta.monto_subtotal or costo_base))
+    cod_op = str(datos_validados.get('cod_operacion') or f"PLAT-{reparacion.codigo_sec or reparacion.id_reparacion}").strip()
+
+    pago = Pago.objects.create(
+        id_venta=venta,
+        medio_pago=medio_obj,
+        monto_pagado=monto_abonado,
+        fecha_pago=django_timezone.now().date(),
+        cod_operacion=cod_op,
+        detalle=f"Abono de diagnóstico inicial desde la plataforma para Reparación #{reparacion.id_reparacion}"
+    )
+
+    venta.estado_venta = 'PAGADA'
+    venta.save(update_fields=['estado_venta'])
+
+    if etapa_actual == 'ESPERANDO_PAGO_DIAGNOSTICO':
+        reparacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+        reparacion.save(update_fields=['etapa'])
+        estado_alc = 2
+        comentario_bitacora = (
+            f"Transacción en plataforma: Abono de costo de diagnóstico (${monto_abonado:,.2f}) acreditado mediante {medio_obj.nombre_medio_pago}.\n"
+            f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+            f"Cambio de etapa: El equipo avanza automáticamente a 'Esperando Diagnóstico'."
+        )
+    else:
+        estado_alc = 1
+        comentario_bitacora = (
+            f"Transacción en plataforma: Abono de costo de diagnóstico (${monto_abonado:,.2f}) acreditado mediante {medio_obj.nombre_medio_pago}.\n"
+            f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+            f"Estado actual: Pendiente de recepción física del equipo en mostrador."
+        )
+
+    BitacoraReparacion.objects.create(
+        id_reparacion=reparacion,
+        id_usuario=usuario_ejecutor,
+        fecha_hora=django_timezone.now(),
+        estado_alcanzado=estado_alc,
+        comentario=comentario_bitacora
+    )
+
+    ruta_factura = None
+    try:
+        ruta_factura = generar_comprobante_fiscal(pago, venta)
+        BitacoraReparacion.objects.create(
+            id_reparacion=reparacion,
+            id_usuario=usuario_ejecutor,
+            fecha_hora=django_timezone.now(),
+            estado_alcanzado=estado_alc,
+            comentario=(
+                f"Comprobante fiscal emitido: N° 0001-{pago.id_pago:08d} por concepto de 'Pago de Diagnóstico' (${monto_abonado:,.2f}).\n"
+                f"Archivo: Factura archivada en el sistema."
+            )
+        )
+        enviar_correo_confirmacion_diagnostico(
+            reparacion=reparacion,
+            pago=pago,
+            ruta_pdf=ruta_factura
+        )
+    except Exception as exc_fact:
+        logger.warning("[Abono Diagnóstico Plataforma] Advertencia al emitir factura/correo: %s", exc_fact)
+
+    LogSistema.objects.create(
+        fecha_hora=django_timezone.now(),
+        accion="Abono de Diagnóstico Inicial en Plataforma",
+        detalle=(
+            f"El usuario {usuario_ejecutor.email} abonó el diagnóstico inicial (${monto_abonado:,.2f}) "
+            f"de la Reparación #{reparacion.id_reparacion} mediante {medio_obj.nombre_medio_pago}. "
+            f"Etapa resultante: '{reparacion.etapa}'."
+        )[:1000],
+        tipo="AUDITORIA_TALLER",
+        modulo_origen="workshop_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
+        id_usuario=usuario_ejecutor
+    )
+
+    return {
+        'id_reparacion': reparacion.id_reparacion,
+        'id_venta': venta.id_venta,
+        'monto_total': float(monto_abonado),
+        'etapa': reparacion.etapa,
+        'estado_pago': venta.estado_venta,
+        'ruta_comprobante': ruta_factura
+    }
 
 
 # ==============================================================================

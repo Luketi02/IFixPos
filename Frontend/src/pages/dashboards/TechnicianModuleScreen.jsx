@@ -71,12 +71,12 @@ export default function TechnicianModuleScreen({ forcedModule }) {
     { id: 'OC-2026-090', proveedor: 'MicroElectronica Corp', insumo: 'Conector de Carga USB-C Flexible', cantidad: 12, estado: 'En Tránsito' }
   ]);
 
-  // Alerta Cyber-Tech con auto-cierre de 15 segundos
+  // Alerta Cyber-Tech con auto-cierre de 6 segundos (Regla Global 6)
   const dispararAlerta = (tipo, mensaje) => {
     setAlerta({ tipo, mensaje });
     setTimeout(() => {
       setAlerta(null);
-    }, 15000);
+    }, 6000);
   };
 
   return (
@@ -104,29 +104,34 @@ export default function TechnicianModuleScreen({ forcedModule }) {
           }
         />
 
-        {/* Notificación Cyber-Tech flotante con fade-out a los 6s */}
+        {/* Notificación Cyber-Tech flotante en esquina inferior izquierda (Fixed, Zero CLS) */}
         <AnimatePresence>
           {alerta && (
             <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-              className={`mx-6 mt-4 p-4 rounded-xl border flex items-center justify-between text-sm shadow-xl ${
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              className={`fixed bottom-6 left-6 z-50 max-w-md px-4 py-3 rounded-2xl border shadow-2xl backdrop-blur-md flex items-center gap-3 text-sm pointer-events-auto ${
                 alerta.tipo === 'success'
-                  ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200 shadow-emerald-950/40'
-                  : 'bg-rose-950/80 border-rose-500/40 text-rose-200 shadow-rose-950/40'
+                  ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/50'
+                  : alerta.tipo === 'warning'
+                  ? 'bg-amber-950/90 border-amber-500/50 text-amber-200 shadow-amber-950/50'
+                  : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/50'
               }`}
             >
               <div className="flex items-center gap-3">
-                <span className="text-lg">{alerta.tipo === 'success' ? '⚡' : '⚠️'}</span>
-                <span>{alerta.mensaje}</span>
+                <span className="text-lg flex-shrink-0">
+                  {alerta.tipo === 'success' ? '⚡' : alerta.tipo === 'warning' ? '🔔' : '⚠️'}
+                </span>
+                <span className="font-medium text-xs leading-relaxed">{alerta.mensaje}</span>
               </div>
               <button
                 onClick={() => setAlerta(null)}
-                className="text-xs px-2 py-1 rounded hover:bg-white/10 transition-colors"
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-white/10 transition-colors ml-2"
+                aria-label="Cerrar notificación"
               >
-                Cerrar
+                ✕
               </button>
             </motion.div>
           )}

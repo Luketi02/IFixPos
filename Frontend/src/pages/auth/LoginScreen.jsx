@@ -28,17 +28,21 @@ const LoginScreen = () => {
 
   // Obtener el correo de soporte dinámico desde la BD de Django
   useEffect(() => {
+    let cancelado = false;
     const fetchSupportEmail = async () => {
       try {
-        const response = await axios.get('http://localhost:8000/api/core/config/email-soporte/');
-        if (response.data && response.data.email) {
+        const response = await axios.get(`${API_BASE_URL}/api/core/config/email-soporte/`);
+        if (!cancelado && response.data && response.data.email) {
           setSupportEmail(response.data.email);
         }
       } catch (error) {
-        console.error('No se pudo cargar el correo de soporte desde la BD:', error);
+        // En caso de indisponibilidad temporal del servidor, se preserva el correo de soporte por defecto
       }
     };
     fetchSupportEmail();
+    return () => {
+      cancelado = true;
+    };
   }, []);
 
   // Auto-Ocultar Errores (Timeout)

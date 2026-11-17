@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
@@ -63,7 +63,7 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
     return () => clearTimeout(timer);
   }, [errorMessage]);
 
-  const cargarModelos = async (idMarca) => {
+  const cargarModelos = useCallback(async (idMarca) => {
     if (!idMarca || idMarca === 'OTRO') {
       setModelos([]);
       return [];
@@ -81,7 +81,7 @@ export default function DispositivoModal({ isOpen, onClose, dispositivoData = nu
     } finally {
       setIsLoadingModelos(false);
     }
-  };
+  }, []);
 
   // Al abrir: carga catálogos y, en edición, precarga los modelos de la marca del equipo
   useEffect(() => {

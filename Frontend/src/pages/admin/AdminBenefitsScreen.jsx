@@ -111,7 +111,8 @@ export default function AdminBenefitsScreen() {
   // Carga inicial al montar la pantalla
   useEffect(() => {
     consultarBeneficios();
-  }, [consultarBeneficios]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // Manejador del botón "Filtrar"
   const handleAplicarFiltros = (e) => {
@@ -210,29 +211,30 @@ export default function AdminBenefitsScreen() {
           title="Auditoría de Beneficios Otorgados"
         />
 
-        {/* Notificación Cyber-Tech Flotante */}
+        {/* Notificación Cyber-Tech Flotante en esquina inferior izquierda (Fixed, Zero CLS) */}
         <AnimatePresence>
           {alerta && (
             <motion.div
-              initial={{ opacity: 0, y: -16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.95 }}
               transition={{ duration: 0.25 }}
-              className={`mx-6 mt-4 p-4 rounded-xl border flex items-center justify-between text-sm shadow-xl z-20 ${
+              className={`fixed bottom-6 left-6 z-50 max-w-md p-4 rounded-2xl border flex items-center justify-between text-xs sm:text-sm shadow-2xl backdrop-blur-md pointer-events-auto ${
                 alerta.tipo === 'success'
                   ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/50'
                   : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/50'
               }`}
             >
-              <div className="flex items-center gap-3">
-                <span className="text-lg">{alerta.tipo === 'success' ? '✓' : '⚠'}</span>
-                <span className="font-medium">{alerta.mensaje}</span>
+              <div className="flex items-center gap-2.5">
+                <span className="text-base">{alerta.tipo === 'success' ? '⚡' : '⚠️'}</span>
+                <span className="font-medium leading-relaxed">{alerta.mensaje}</span>
               </div>
               <button
                 onClick={() => setAlerta(null)}
-                className="text-xs px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors"
+                className="text-xs px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors ml-2"
+                aria-label="Cerrar notificación"
               >
-                Cerrar
+                ✕
               </button>
             </motion.div>
           )}

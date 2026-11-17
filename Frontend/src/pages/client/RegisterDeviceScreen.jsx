@@ -292,7 +292,7 @@ export default function RegisterDeviceScreen() {
         const serieFinal = numeroSerie.trim();
         const descripcionEquipo = [
           [nombreMarca, nombreModelo].filter(Boolean).join(' '),
-          serieFinal ? `N/S: ${serieFinal}` : null
+          serieFinal ? `N. Serie: ${serieFinal}` : null
         ]
           .filter(Boolean)
           .join(' • ');

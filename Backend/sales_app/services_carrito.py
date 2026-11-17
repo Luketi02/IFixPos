@@ -16,6 +16,45 @@ TIPOS_INGRESO = ['ingreso', 'compra', 'devolucion', 'alta', 'entrada']
 TIPOS_EGRESO = ['egreso', 'venta', 'taller', 'baja', 'salida', 'consumo']
 
 
+def _obtener_o_crear_carrito_activo(usuario: Usuario) -> CarritoCompra:
+    """
+    Recupera el carrito activo del usuario garantizando unicidad estricta.
+    Si existen múltiples carritos activos residuales, consolida los ítems
+    en el más reciente y marca los duplicados como 'abandonado'.
+    Si no existe ninguno, crea un carrito activo nuevo.
+    """
+    carritos_activos = CarritoCompra.objects.filter(
+        id_usuario=usuario,
+        estado='activo'
+    ).order_by('-id_carrito')
+
+    if carritos_activos.exists():
+        carrito_principal = carritos_activos.first()
+        duplicados = carritos_activos.exclude(id_carrito=carrito_principal.id_carrito)
+        if duplicados.exists():
+            for dup in duplicados:
+                for item_dup in dup.carritoproducto_set.all():
+                    item_existente = CarritoProducto.objects.filter(
+                        id_carrito=carrito_principal,
+                        id_producto=item_dup.id_producto
+                    ).first()
+                    if item_existente:
+                        item_existente.cantidad += item_dup.cantidad
+                        item_existente.save(update_fields=['cantidad'])
+                    else:
+                        item_dup.id_carrito = carrito_principal
+                        item_dup.save(update_fields=['id_carrito'])
+                dup.estado = 'abandonado'
+                dup.save(update_fields=['estado'])
+        return carrito_principal
+
+    return CarritoCompra.objects.create(
+        id_usuario=usuario,
+        estado='activo',
+        fecha_creacion=timezone.now().date()
+    )
+
+
 @transaction.atomic
 def agregar_producto_a_carrito(
     *,
@@ -56,11 +95,7 @@ def agregar_producto_a_carrito(
     if stock_disponible <= 0:
         raise ValidationError(f"El producto '{producto.nombre}' se encuentra agotado.")
 
-    carrito, _ = CarritoCompra.objects.get_or_create(
-        id_usuario=usuario,
-        estado='activo',
-        defaults={'fecha_creacion': timezone.now().date()}
-    )
+    carrito = _obtener_o_crear_carrito_activo(usuario)
 
     item = CarritoProducto.objects.select_for_update().filter(
         id_carrito=carrito,
@@ -118,13 +153,7 @@ def quitar_producto_de_carrito(
     except Producto.DoesNotExist:
         raise ValidationError("El producto especificado no existe.")
 
-    carrito = CarritoCompra.objects.filter(
-        id_usuario=usuario,
-        estado='activo'
-    ).order_by('-id_carrito').first()
-
-    if not carrito:
-        raise ValidationError("El usuario no posee un carrito de compras activo.")
+    carrito = _obtener_o_crear_carrito_activo(usuario)
 
     item = CarritoProducto.objects.select_for_update().filter(
         id_carrito=carrito,
@@ -177,11 +206,7 @@ def actualizar_cantidad_producto_carrito(
     except Producto.DoesNotExist:
         raise ValidationError("El producto especificado no existe.")
 
-    carrito, _ = CarritoCompra.objects.get_or_create(
-        id_usuario=usuario,
-        estado='activo',
-        defaults={'fecha_creacion': timezone.now().date()}
-    )
+    carrito = _obtener_o_crear_carrito_activo(usuario)
 
     item = CarritoProducto.objects.select_for_update().filter(
         id_carrito=carrito,

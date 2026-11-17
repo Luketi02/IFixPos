@@ -124,6 +124,43 @@ class CompletarPagoInputSerializer(serializers.Serializer):
         allow_null=True,
         max_length=500
     )
+    identificador = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=150
+    )
+    codigo_seguridad = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=100
+    )
+    id_operacion = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
+    tipo_operacion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=50
+    )
+
+    def to_internal_value(self, data):
+        data = data.copy() if hasattr(data, 'copy') else dict(data)
+        # Soportar cod_operacion como alias de numero_operacion
+        if 'cod_operacion' in data and not data.get('numero_operacion'):
+            data['numero_operacion'] = data.get('cod_operacion')
+        # Soportar codigo_seguridad o codigo_sec como identificador
+        if not data.get('identificador'):
+            if data.get('codigo_seguridad'):
+                data['identificador'] = data.get('codigo_seguridad')
+            elif data.get('codigo_sec'):
+                data['identificador'] = data.get('codigo_sec')
+            elif data.get('email'):
+                data['identificador'] = data.get('email')
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         medio_raw = str(attrs.get('medio_pago') or '').strip().upper()
@@ -390,15 +427,9 @@ class FiltroCobrosPagosInputSerializer(serializers.Serializer):
         from django.core.validators import validate_email
         from django.core.exceptions import ValidationError as DjangoValidationError
 
-        # Validación de búsqueda exacta: si parece o contiene un email, verificar sintaxis
+        # Validación de búsqueda exacta: se normaliza texto y no se bloquea con 400 para permitir búsquedas libres
         busqueda_exacta = (attrs.get('busqueda_exacta') or '').strip()
-        if busqueda_exacta and '@' in busqueda_exacta:
-            try:
-                validate_email(busqueda_exacta)
-            except DjangoValidationError:
-                raise serializers.ValidationError({
-                    'busqueda_exacta': 'El correo electrónico ingresado en la búsqueda exacta posee un formato inválido (debe contener arroba y dominio).'
-                })
+        attrs['busqueda_exacta'] = busqueda_exacta if busqueda_exacta else None
 
         # Validación del estado del pago
         estado_raw = (attrs.get('estado_pago') or '').strip().upper()
@@ -791,6 +822,8 @@ class FiltrarHistorialBeneficiosInputSerializer(serializers.Serializer):
 class BuscarOperacionCobroInputSerializer(serializers.Serializer):
     """Aduana para búsqueda de operación pendiente de cobro (CU-21)."""
     identificador = serializers.CharField(required=False, allow_blank=True)
+    id_operacion = serializers.IntegerField(required=False, allow_null=True)
+    tipo_operacion = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
 # ==============================================================================

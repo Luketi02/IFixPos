@@ -662,9 +662,9 @@ export default function NotificationBell() {
                         </div>
 
                         <div>
-                          <span className="text-slate-400 block text-[11px]">Nro. de Serie:</span>
+                          <span className="text-slate-400 block text-[11px]">N. Serie:</span>
                           <span className="font-mono text-slate-300">
-                            {notificacionSeleccionada.datos_dispositivo.numero_serie || 'S/N'}
+                            {notificacionSeleccionada.datos_dispositivo.numero_serie || 'Sin registrar'}
                           </span>
                         </div>
 

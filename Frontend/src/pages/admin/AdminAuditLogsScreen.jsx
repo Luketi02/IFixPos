@@ -270,9 +270,11 @@ export default function AdminAuditLogsScreen() {
     [token, buscarTexto, fechaDesde, fechaHasta, horaDesde, horaHasta, moduloOrigen, tipoAccion, usuarioQuery, dispararAlerta]
   );
 
+  // Carga inicial al montar la pantalla
   useEffect(() => {
     consultarLogs();
-  }, [consultarLogs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // ============================================================================
   // ACCIONES DE FILTRADO
@@ -385,30 +387,31 @@ export default function AdminAuditLogsScreen() {
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <AdminHeader breadcrumb="Auditoría › Logs del Sistema" />
 
-        {/* Alerta flotante Cyber-Tech */}
+        {/* Alerta flotante Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
         <AnimatePresence>
           {alerta && (
             <motion.div
-              initial={{ opacity: 0, y: -16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.95 }}
               transition={{ duration: 0.25 }}
-              className={`mx-6 mt-4 p-4 rounded-xl border flex items-center justify-between text-sm shadow-xl z-20 ${
+              className={`fixed bottom-6 left-6 z-50 max-w-md p-4 rounded-2xl border flex items-center justify-between text-xs sm:text-sm shadow-2xl backdrop-blur-md pointer-events-auto ${
                 alerta.tipo === 'success'
                   ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
                   : 'bg-rose-950/90 border-rose-500/50 text-rose-200'
               }`}
             >
               <div className="flex items-center gap-3">
-                <span className="text-lg">{alerta.tipo === 'success' ? '✓' : '⚠'}</span>
-                <span className="font-medium">{alerta.mensaje}</span>
+                <span className="text-base">{alerta.tipo === 'success' ? '⚡' : '⚠️'}</span>
+                <span className="font-medium leading-relaxed">{alerta.mensaje}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setAlerta(null)}
-                className="text-xs px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors"
+                className="text-xs px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors ml-2"
+                aria-label="Cerrar notificación"
               >
-                Cerrar
+                ✕
               </button>
             </motion.div>
           )}
@@ -657,7 +660,7 @@ export default function AdminAuditLogsScreen() {
                   disabled={cargando}
                   className="px-6 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 text-xs font-bold font-mono uppercase tracking-wider shadow-lg shadow-cyan-500/25 active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  {cargando ? 'Filtrando...' : 'Aplicar Filtros'}
+                  {cargando ? 'Filtrando...' : '⚡ Filtrar'}
                 </button>
               </div>
             </form>

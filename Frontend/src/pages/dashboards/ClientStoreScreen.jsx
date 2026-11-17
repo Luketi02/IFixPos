@@ -527,7 +527,14 @@ export default function ClientStoreScreen() {
       } catch (err) {
         console.error('Error al sincronizar cantidad en carrito:', err);
         const dataErr = err.response?.data;
-        const msg = typeof dataErr === 'string' ? dataErr : dataErr?.error || dataErr?.detail;
+        let msg = dataErr?.error || dataErr?.detail || dataErr?.mensaje;
+        if (!msg && typeof dataErr === 'string') {
+          if (dataErr.includes('<!DOCTYPE html>') || dataErr.includes('<html')) {
+            msg = 'No fue posible actualizar el carrito en este momento. Por favor, reintente.';
+          } else {
+            msg = dataErr.slice(0, 180);
+          }
+        }
         setErrorMessage(msg || 'No pudimos sincronizar la cantidad solicitada. Verificando disponibilidad...');
         await refrescarCarrito();
         throw err;

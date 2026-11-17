@@ -427,6 +427,8 @@ class BitacoraOutputSerializer(serializers.Serializer):
     comentario = serializers.CharField(read_only=True)
     tecnico = serializers.SerializerMethodField()
     rol_usuario = serializers.SerializerMethodField()
+    imagenes = serializers.SerializerMethodField()
+    pago = serializers.SerializerMethodField()
 
     def get_fecha_hora(self, obj):
         if not obj.fecha_hora:
@@ -471,7 +473,8 @@ class BitacoraOutputSerializer(serializers.Serializer):
             6: 'Finalizada',
             7: 'Entregada',
             8: 'Cancelada',
-            9: 'Esperando Repuestos'
+            9: 'Esperando Repuestos',
+            10: 'Esperando Pago de Diagnóstico'
         }
         return MAPA.get(obj.estado_alcanzado, f"Estado {obj.estado_alcanzado}")
 
@@ -492,6 +495,73 @@ class BitacoraOutputSerializer(serializers.Serializer):
         if rol:
             return getattr(rol, 'nombre_rol', getattr(rol, 'codigo', ''))
         return ""
+
+    def get_imagenes(self, obj):
+        comentario_norm = (obj.comentario or '').lower()
+        es_evento_recepcion = (
+            obj.estado_alcanzado in (2, 10)
+            or 'recepcionado en mostrador' in comentario_norm
+            or 'estado físico' in comentario_norm
+            or 'físico:' in comentario_norm
+        )
+        if not es_evento_recepcion:
+            return []
+
+        rep = getattr(obj, 'id_reparacion', None)
+        if not rep:
+            return []
+
+        imgs = rep.imagenes_recepcion.all()
+        resultado = []
+        for im in imgs:
+            resultado.append({
+                'id_imagen_recepcion': im.id_imagen_recepcion,
+                'imagen': im.imagen,
+                'descripcion': im.descripcion or 'Respaldo visual de recepción',
+                'fecha_subida': im.fecha_subida.strftime('%d/%m/%Y %H:%M') if im.fecha_subida else None
+            })
+        return resultado
+
+    def get_pago(self, obj):
+        comentario = str(obj.comentario or '')
+        es_evento_pago = any(
+            palabra in comentario.lower()
+            for palabra in ['abono', 'liquidación', 'liquidacion', 'comprobante fiscal emitido', 'pago de $', 'confirmado en caja', 'saldado']
+        )
+        if not es_evento_pago:
+            return None
+
+        rep = getattr(obj, 'id_reparacion', None)
+        if not rep:
+            return None
+
+        from sales_app.models import Pago
+        from django.db.models import Q
+        pagos_qs = Pago.objects.filter(
+            Q(id_venta=rep.id_venta) | Q(id_venta__reparacion=rep)
+        ).select_related('medio_pago').order_by('-id_pago')
+
+        if 'diagnóstico' in comentario.lower() or 'diagnostico' in comentario.lower():
+            pago_diag = pagos_qs.filter(id_venta__reparacion=rep).first() or pagos_qs.first()
+            if pago_diag:
+                return self._formatear_pago(pago_diag)
+
+        pago_final = pagos_qs.filter(id_venta=rep.id_venta).first() or pagos_qs.first()
+        if pago_final:
+            return self._formatear_pago(pago_final)
+
+        return None
+
+    def _formatear_pago(self, pago):
+        return {
+            'id_pago': pago.id_pago,
+            'monto_pagado': float(pago.monto_pagado),
+            'medio_pago': pago.medio_pago.nombre_medio_pago if pago.medio_pago else 'Efectivo',
+            'cod_operacion': pago.cod_operacion or 'N/A',
+            'fecha_pago': pago.fecha_pago.strftime('%d/%m/%Y') if pago.fecha_pago else '',
+            'detalle': pago.detalle or '',
+            'ruta_comprobante': pago.ruta_comprobante or ''
+        }
 
 
 class DetalleInsumoOutputSerializer(serializers.Serializer):
@@ -646,6 +716,14 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
     # Seguridad Vertical: Condicional por rol
     credencial_acceso = serializers.SerializerMethodField()
     codigo_sec = serializers.SerializerMethodField()
+    codigo_seguridad = serializers.CharField(source='codigo_sec', read_only=True, allow_null=True)
+
+    # Información Financiera de Diagnóstico
+    id_venta = serializers.IntegerField(source='id_venta_id', read_only=True, allow_null=True)
+    estado_pago = serializers.SerializerMethodField()
+    costo_diagnostico = serializers.SerializerMethodField()
+    diagnostico_abonado = serializers.SerializerMethodField()
+    debe_diagnostico = serializers.SerializerMethodField()
 
     # Secciones anidadas
     dispositivo = DispositivoCabeceraOutputSerializer(source='id_dispositivo', read_only=True)
@@ -656,6 +734,8 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
     insumos = serializers.SerializerMethodField()
     calificacion = serializers.SerializerMethodField()
     historial_reparaciones = serializers.SerializerMethodField()
+    imagenes_recepcion = serializers.SerializerMethodField()
+    pagos = serializers.SerializerMethodField()
 
     def _es_personal_autorizado(self):
         usuario = self.context.get('usuario') or (self.context.get('request').user if self.context.get('request') else None)
@@ -678,6 +758,35 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         if self._es_personal_autorizado():
             return obj.codigo_sec
         return None
+
+    def get_estado_pago(self, obj):
+        etapa_norm = str(getattr(obj, 'etapa', '') or '').strip().upper().replace(' ', '_')
+        if obj.id_venta and obj.id_venta.estado_venta:
+            est_v = str(obj.id_venta.estado_venta).strip().upper()
+            if etapa_norm in ('ESPERANDO_DISPOSITIVO', 'ESPERANDO_PAGO_DIAGNOSTICO') and est_v in ('CANCELADA', 'CANCELADO'):
+                return 'PENDIENTE'
+            return est_v
+        return 'PENDIENTE'
+
+    def get_costo_diagnostico(self, obj):
+        if obj.id_venta and obj.id_venta.monto_subtotal is not None and float(obj.id_venta.monto_subtotal) > 0:
+            return float(obj.id_venta.monto_subtotal)
+        from core_app.selectors import obtener_costo_diagnostico_base
+        return float(obtener_costo_diagnostico_base())
+
+    def get_diagnostico_abonado(self, obj):
+        return not self.get_debe_diagnostico(obj)
+
+    def get_debe_diagnostico(self, obj):
+        etapa_norm = str(getattr(obj, 'etapa', '') or '').strip().upper().replace(' ', '_')
+        # El costo de diagnóstico solo puede adeudarse en las etapas iniciales de ingreso o custodia
+        if etapa_norm not in ('ESPERANDO_DISPOSITIVO', 'ESPERANDO_PAGO_DIAGNOSTICO'):
+            return False
+
+        if obj.id_venta and obj.id_venta.estado_venta:
+            return str(obj.id_venta.estado_venta).strip().upper() not in ('PAGADO', 'PAGADA')
+        # Si está explícitamente en ESPERANDO_PAGO_DIAGNOSTICO y aún no tiene venta saldada, adeuda el diagnóstico
+        return etapa_norm == 'ESPERANDO_PAGO_DIAGNOSTICO'
 
     def get_cliente(self, obj):
         cliente = getattr(obj.id_dispositivo, 'id_usuario', None)
@@ -766,12 +875,44 @@ class ReparacionDetalleOutputSerializer(serializers.Serializer):
         return resultado
 
     def get_observaciones_fisicas(self, obj):
-        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado=2).order_by('-id_bitacora').first()
+        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado__in=(2, 10)).order_by('-id_bitacora').first()
         if bitacora and bitacora.comentario:
             if "Estado físico: " in bitacora.comentario:
-                return bitacora.comentario.split("Estado físico: ", 1)[1]
-            return bitacora.comentario
+                return bitacora.comentario.split("Estado físico: ", 1)[1].split("\n")[0].split(" | ")[0].strip()
+            return bitacora.comentario.split("\n")[0].strip()
         return None
+
+    def get_imagenes_recepcion(self, obj):
+        imgs = obj.imagenes_recepcion.all()
+        return [
+            {
+                'id_imagen_recepcion': im.id_imagen_recepcion,
+                'imagen': im.imagen,
+                'descripcion': im.descripcion or 'Respaldo visual de recepción',
+                'fecha_subida': im.fecha_subida.strftime('%d/%m/%Y %H:%M') if im.fecha_subida else None
+            }
+            for im in imgs
+        ]
+
+    def get_pagos(self, obj):
+        from sales_app.models import Pago
+        from django.db.models import Q
+        pagos_qs = Pago.objects.filter(
+            Q(id_venta=obj.id_venta) | Q(id_venta__reparacion=obj)
+        ).select_related('medio_pago', 'id_venta').order_by('id_pago').distinct()
+
+        return [
+            {
+                'id_pago': p.id_pago,
+                'monto_pagado': float(p.monto_pagado),
+                'medio_pago': p.medio_pago.nombre_medio_pago if p.medio_pago else 'Efectivo',
+                'cod_operacion': p.cod_operacion or 'N/A',
+                'fecha_pago': p.fecha_pago.strftime('%d/%m/%Y') if p.fecha_pago else '',
+                'detalle': p.detalle or '',
+                'ruta_comprobante': p.ruta_comprobante or ''
+            }
+            for p in pagos_qs
+        ]
 
 
 # ==============================================================================
@@ -845,12 +986,9 @@ class IniciarReparacionInputSerializer(serializers.Serializer):
     )
     ids_categorias = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
-        required=True,
-        allow_empty=False,
-        error_messages={
-            'required': 'Debe seleccionar al menos una categoría de reparación.',
-            'empty': 'Debe seleccionar al menos una categoría de reparación.'
-        }
+        required=False,
+        allow_empty=True,
+        default=list
     )
     medio_pago = serializers.CharField(
         required=False,
@@ -884,9 +1022,7 @@ class IniciarReparacionInputSerializer(serializers.Serializer):
         return val
 
     def validate_ids_categorias(self, value):
-        if not value or len(value) == 0:
-            raise serializers.ValidationError("Debe seleccionar al menos una categoría de reparación.")
-        return value
+        return value if value else []
 
     def validate(self, attrs):
         from workshop_app.models import CategoriaReparacion
@@ -897,20 +1033,16 @@ class IniciarReparacionInputSerializer(serializers.Serializer):
                 "descripcion_problema": "La descripción es muy corta, por favor brinde más detalles"
             })
 
-        cats = attrs.get('ids_categorias')
-        if not cats or len(cats) == 0:
-            raise serializers.ValidationError({
-                "ids_categorias": "Debe seleccionar al menos una categoría de reparación."
-            })
-
-        existentes = set(
-            CategoriaReparacion.objects.filter(id_categoria__in=cats).values_list('id_categoria', flat=True)
-        )
-        inexistentes = set(cats) - existentes
-        if inexistentes:
-            raise serializers.ValidationError({
-                "ids_categorias": f"Las siguientes categorías de reparación no existen: {sorted(list(inexistentes))}."
-            })
+        cats = attrs.get('ids_categorias') or []
+        if cats:
+            existentes = set(
+                CategoriaReparacion.objects.filter(id_categoria__in=cats).values_list('id_categoria', flat=True)
+            )
+            inexistentes = set(cats) - existentes
+            if inexistentes:
+                raise serializers.ValidationError({
+                    "ids_categorias": f"Las siguientes categorías de reparación no existen: {sorted(list(inexistentes))}."
+                })
 
         medio_raw = str(attrs.get('medio_pago') or 'PRESENCIAL').strip()
         if medio_raw:
@@ -988,12 +1120,9 @@ class RecepcionarDispositivoInputSerializer(serializers.Serializer):
     )
     ids_categorias = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
-        required=True,
-        allow_empty=False,
-        error_messages={
-            'required': 'Debe seleccionar al menos una categoría de reparación.',
-            'empty': 'Debe seleccionar al menos una categoría de reparación.'
-        }
+        required=False,
+        allow_empty=True,
+        default=list
     )
     observaciones_fisicas = serializers.CharField(
         required=True,
@@ -1084,11 +1213,11 @@ class ReparacionRecepcionadaOutputSerializer(serializers.Serializer):
     id_dispositivo = serializers.IntegerField(source='id_dispositivo_id', read_only=True)
 
     def get_observaciones_fisicas(self, obj):
-        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado=2).order_by('-id_bitacora').first()
+        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado__in=(2, 10)).order_by('-id_bitacora').first()
         if bitacora and bitacora.comentario:
             if "Estado físico: " in bitacora.comentario:
-                return bitacora.comentario.split("Estado físico: ", 1)[1]
-            return bitacora.comentario
+                return bitacora.comentario.split("Estado físico: ", 1)[1].split("\n")[0].split(" | ")[0].strip()
+            return bitacora.comentario.split("\n")[0].strip()
         return None
 
 
@@ -1109,12 +1238,34 @@ class FiltroReparacionesInputSerializer(serializers.Serializer):
 
     # Campos exclusivos para personal autorizado (ADMIN / TECNICO)
     cliente_query = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    q = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    tipo_criterio = serializers.ChoiceField(
+        choices=['TODOS', 'REPARACION', 'VENTA', 'EMAIL'],
+        required=False,
+        default='TODOS'
+    )
     id_tecnico = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    solo_mis_asignaciones = serializers.BooleanField(required=False, default=False)
     codigo_seguridad = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
     def to_internal_value(self, data):
         mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
         # Soporte de aliases comunes en query params
+        if 'criterio_busqueda' in mutable_data and 'tipo_criterio' not in mutable_data:
+            mutable_data['tipo_criterio'] = mutable_data.get('criterio_busqueda')
+        if 'criterio' in mutable_data and 'tipo_criterio' not in mutable_data:
+            mutable_data['tipo_criterio'] = mutable_data.get('criterio')
+        if 'tipo_criterio' in mutable_data:
+            val_crit = str(mutable_data['tipo_criterio'] or 'TODOS').strip().upper()
+            mutable_data['tipo_criterio'] = val_crit if val_crit in ('TODOS', 'REPARACION', 'VENTA', 'EMAIL') else 'TODOS'
+        if 'solo_mis_reparaciones' in mutable_data and 'solo_mis_asignaciones' not in mutable_data:
+            mutable_data['solo_mis_asignaciones'] = mutable_data.get('solo_mis_reparaciones')
+        if 'solo_asignadas' in mutable_data and 'solo_mis_asignaciones' not in mutable_data:
+            mutable_data['solo_mis_asignaciones'] = mutable_data.get('solo_asignadas')
+        if 'solo_mis_asignaciones' in mutable_data:
+            val = mutable_data['solo_mis_asignaciones']
+            if isinstance(val, str):
+                mutable_data['solo_mis_asignaciones'] = val.strip().lower() in ('true', '1', 't', 'yes', 'si')
         if 'codigo_sec' in mutable_data and not mutable_data.get('codigo_seguridad'):
             mutable_data['codigo_seguridad'] = mutable_data.get('codigo_sec')
         if 'id_categoria_reparacion' in mutable_data and not mutable_data.get('id_categoria'):
@@ -1132,6 +1283,8 @@ class FiltroReparacionesInputSerializer(serializers.Serializer):
             mutable_data['cliente_query'] = mutable_data.get('buscar')
         if 'q' in mutable_data and not mutable_data.get('cliente_query'):
             mutable_data['cliente_query'] = mutable_data.get('q')
+        if 'cliente_query' in mutable_data and not mutable_data.get('q'):
+            mutable_data['q'] = mutable_data.get('cliente_query')
 
         # Limpiar vacíos
         for clave in ['id_dispositivo', 'id_categoria', 'id_tecnico', 'fecha_desde', 'fecha_hasta']:
@@ -1168,10 +1321,18 @@ class ReparacionListOutputSerializer(serializers.Serializer):
     codigo_sec = serializers.SerializerMethodField()
     credencial_acceso = serializers.SerializerMethodField()
 
+    # Información Financiera de Diagnóstico
+    id_venta = serializers.IntegerField(source='id_venta_id', read_only=True, allow_null=True)
+    estado_pago = serializers.SerializerMethodField()
+    costo_diagnostico = serializers.SerializerMethodField()
+    diagnostico_abonado = serializers.SerializerMethodField()
+    debe_diagnostico = serializers.SerializerMethodField()
+
     # Datos básicos relacionados
     dispositivo = serializers.SerializerMethodField()
     cliente = serializers.SerializerMethodField()
     tecnico = serializers.SerializerMethodField()
+    id_tecnico = serializers.IntegerField(source='id_usuario_id', read_only=True, allow_null=True)
     categorias = serializers.SerializerMethodField()
 
     def _es_personal_autorizado(self):
@@ -1200,12 +1361,41 @@ class ReparacionListOutputSerializer(serializers.Serializer):
             return obj.codigo_sec
         return None
 
+    def get_estado_pago(self, obj):
+        etapa_norm = str(getattr(obj, 'etapa', '') or '').strip().upper().replace(' ', '_')
+        if obj.id_venta and obj.id_venta.estado_venta:
+            est_v = str(obj.id_venta.estado_venta).strip().upper()
+            if etapa_norm in ('ESPERANDO_DISPOSITIVO', 'ESPERANDO_PAGO_DIAGNOSTICO') and est_v in ('CANCELADA', 'CANCELADO'):
+                return 'PENDIENTE'
+            return est_v
+        return 'PENDIENTE'
+
+    def get_costo_diagnostico(self, obj):
+        if obj.id_venta and obj.id_venta.monto_subtotal is not None and float(obj.id_venta.monto_subtotal) > 0:
+            return float(obj.id_venta.monto_subtotal)
+        from core_app.selectors import obtener_costo_diagnostico_base
+        return float(obtener_costo_diagnostico_base())
+
+    def get_diagnostico_abonado(self, obj):
+        return not self.get_debe_diagnostico(obj)
+
+    def get_debe_diagnostico(self, obj):
+        etapa_norm = str(getattr(obj, 'etapa', '') or '').strip().upper().replace(' ', '_')
+        # El costo de diagnóstico solo puede adeudarse en las etapas iniciales de ingreso o custodia
+        if etapa_norm not in ('ESPERANDO_DISPOSITIVO', 'ESPERANDO_PAGO_DIAGNOSTICO'):
+            return False
+
+        if obj.id_venta and obj.id_venta.estado_venta:
+            return str(obj.id_venta.estado_venta).strip().upper() not in ('PAGADO', 'PAGADA')
+        # Si está explícitamente en ESPERANDO_PAGO_DIAGNOSTICO y aún no tiene venta saldada, adeuda el diagnóstico
+        return etapa_norm == 'ESPERANDO_PAGO_DIAGNOSTICO'
+
     def get_observaciones_fisicas(self, obj):
-        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado=2).order_by('-id_bitacora').first()
+        bitacora = obj.bitacorareparacion_set.filter(estado_alcanzado__in=(2, 10)).order_by('-id_bitacora').first()
         if bitacora and bitacora.comentario:
             if "Estado físico: " in bitacora.comentario:
-                return bitacora.comentario.split("Estado físico: ", 1)[1]
-            return bitacora.comentario
+                return bitacora.comentario.split("Estado físico: ", 1)[1].split("\n")[0].split(" | ")[0].strip()
+            return bitacora.comentario.split("\n")[0].strip()
         return None
 
     def get_dispositivo(self, obj):
@@ -2092,4 +2282,25 @@ class BuscarReparacionEntregaInputSerializer(serializers.Serializer):
             'codigo_seguridad': codigo,
             'dni_cliente': dni
         }
+
+
+class AbonarDiagnosticoClienteInputSerializer(serializers.Serializer):
+    """La Aduana: Validación de entrada para abono del diagnóstico inicial por el cliente desde la plataforma."""
+    accion = serializers.ChoiceField(
+        choices=['PREPARAR', 'CONFIRMAR'],
+        required=False,
+        default='CONFIRMAR'
+    )
+    medio_pago = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=100,
+        default='MERCADO PAGO'
+    )
+    cod_operacion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=100
+    )
+
 

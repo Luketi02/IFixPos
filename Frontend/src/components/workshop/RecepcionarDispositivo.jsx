@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,10 +8,16 @@ import { formatearEstadoReparacion } from '../../utils/repairStatus';
 
 import { API_BASE_URL } from '../../config/api';
 export default function RecepcionarDispositivo({ onAlerta }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Estados de Fase 1: Búsqueda
-  const [terminoBusqueda, setTerminoBusqueda] = useState('');
+  const [terminoBusqueda, setTerminoBusqueda] = useState(
+    location.state?.terminoBusqueda || location.state?.codigo_sec || ''
+  );
+  const [criterioBusqueda, setCriterioBusqueda] = useState('TODOS');
+  const [soloMisAsignaciones, setSoloMisAsignaciones] = useState(false);
   const [reparacionesPendientes, setReparacionesPendientes] = useState([]);
   const [cargandoBusqueda, setCargandoBusqueda] = useState(false);
   const [busquedaRealizada, setBusquedaRealizada] = useState(false);
@@ -37,7 +44,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
   const [enviando, setEnviando] = useState(false);
   const [ticketExito, setTicketExito] = useState(null);
 
-  // Alerta local de respaldo si no viene onAlerta
+  // Alerta local de respaldo si no viene onAlerta (con auto-cierre de 6s - Regla 6)
   const [alertaLocal, setAlertaLocal] = useState(null);
 
   const dispararMensaje = useCallback(
@@ -46,7 +53,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
         onAlerta(tipo, mensaje);
       } else {
         setAlertaLocal({ tipo, mensaje });
-        setTimeout(() => setAlertaLocal(null), 15000);
+        setTimeout(() => setAlertaLocal(null), 6000);
       }
     },
     [onAlerta]
@@ -94,19 +101,27 @@ export default function RecepcionarDispositivo({ onAlerta }) {
     return categoriasDisponibles.filter((c) => (c.nombre || '').toLowerCase().includes(q));
   }, [categoriasDisponibles, busquedaCategoria]);
 
-  // 2. Búsqueda de Reparaciones en 'ESPERANDO_DISPOSITIVO' (Optimizada con endpoint unificado 'q')
+  // 2. Búsqueda de Reparaciones en 'ESPERANDO_DISPOSITIVO' (Optimizada con endpoint unificado 'q' y filtro híbrido)
   const buscarReparaciones = useCallback(
-    async (queryManual = null) => {
+    async (queryManual = null, forzarSoloMias = null, criterioManual = null) => {
       setCargandoBusqueda(true);
       setBusquedaRealizada(true);
       const query = queryManual !== null ? queryManual : terminoBusqueda;
       const queryLimpia = query.trim();
+      const soloMias = forzarSoloMias !== null ? forzarSoloMias : soloMisAsignaciones;
+      const criterio = criterioManual !== null ? criterioManual : criterioBusqueda;
 
       try {
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
         const params = { etapa: 'ESPERANDO_DISPOSITIVO' };
+        if (soloMias) {
+          params.solo_mis_asignaciones = true;
+        }
         if (queryLimpia) {
           params.q = queryLimpia;
+          if (criterio && criterio !== 'TODOS') {
+            params.tipo_criterio = criterio;
+          }
         }
 
         const res = await axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
@@ -118,19 +133,41 @@ export default function RecepcionarDispositivo({ onAlerta }) {
         setReparacionesPendientes(lista);
       } catch (err) {
         console.error('Error al consultar reparaciones pendientes:', err);
-        dispararMensaje('error', 'Ocurrió un error al consultar las órdenes pendientes de recepción.');
+        const status = err.response?.status;
+        let mensajeError = 'Ocurrió un error al consultar las órdenes pendientes de recepción.';
+        if (!err.response) {
+          mensajeError = 'No se pudo conectar con el servidor backend (Error de red). Verifique su conexión.';
+        } else if (status === 401 || status === 403) {
+          mensajeError = 'Tu sesión ha expirado o no tienes permisos para consultar estas órdenes. Por favor vuelve a iniciar sesión.';
+        } else if (err.response?.data?.error) {
+          mensajeError = typeof err.response.data.error === 'object' ? JSON.stringify(err.response.data.error) : err.response.data.error;
+        }
+        dispararMensaje('error', mensajeError);
         setReparacionesPendientes([]);
       } finally {
         setCargandoBusqueda(false);
       }
     },
-    [terminoBusqueda, token, dispararMensaje]
+    [terminoBusqueda, token, dispararMensaje, soloMisAsignaciones, criterioBusqueda]
   );
 
-  // Carga inicial automática de órdenes pendientes
+  const handleToggleSoloMias = (checked) => {
+    setSoloMisAsignaciones(checked);
+    buscarReparaciones(terminoBusqueda, checked);
+  };
+
+  // Carga inicial automática de órdenes pendientes o recepción de búsqueda externa
   useEffect(() => {
-    buscarReparaciones('');
-  }, [buscarReparaciones]);
+    const busquedaExterna = location.state?.terminoBusqueda || location.state?.codigo_sec || '';
+    if (busquedaExterna) {
+      setTerminoBusqueda(busquedaExterna);
+      setSoloMisAsignaciones(false);
+      buscarReparaciones(busquedaExterna, false);
+    } else {
+      buscarReparaciones('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, location.state]);
 
   // 3. Manejo de Selección de una Reparación para la Fase 2
   const handleSeleccionarReparacion = (rep) => {
@@ -284,7 +321,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
         dispositivo: reparacionSeleccionada.dispositivo,
         fecha_recepcion: new Date().toLocaleDateString('es-AR'),
         hora_recepcion: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
-        nuevo_estado: 'Esperando Diagnóstico',
+        nuevo_estado: formatearEstadoReparacion(repActualizada.etapa || (reparacionSeleccionada.debe_diagnostico ? 'ESPERANDO_PAGO_DIAGNOSTICO' : 'ESPERANDO_DIAGNOSTICO')),
         observaciones_fisicas: obsFisicas,
         datosBackend: repActualizada
       });
@@ -335,26 +372,28 @@ export default function RecepcionarDispositivo({ onAlerta }) {
 
   return (
     <div className="space-y-6">
-      {/* Alerta local flotante en caso de no estar conectada por prop */}
+      {/* Alerta local flotante Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
       <AnimatePresence>
         {alertaLocal && (
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className={`p-4 rounded-xl border flex items-center justify-between text-xs font-medium shadow-xl ${
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ duration: 0.25 }}
+            className={`fixed bottom-6 left-6 z-50 max-w-md px-4 py-3 rounded-2xl border shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs font-medium pointer-events-auto ${
               alertaLocal.tipo === 'success'
-                ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200'
-                : 'bg-rose-950/80 border-rose-500/40 text-rose-200'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/50'
+                : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/50'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <span className="text-base">{alertaLocal.tipo === 'success' ? '⚡' : '⚠️'}</span>
-              <span>{alertaLocal.mensaje}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="text-base flex-shrink-0">{alertaLocal.tipo === 'success' ? '⚡' : '⚠️'}</span>
+              <span className="leading-relaxed">{alertaLocal.mensaje}</span>
             </div>
             <button
               onClick={() => setAlertaLocal(null)}
-              className="text-slate-400 hover:text-white ml-3 text-sm"
+              className="text-slate-400 hover:text-white ml-2 text-xs px-1.5 py-1 rounded hover:bg-white/10"
+              aria-label="Cerrar notificación"
             >
               ✕
             </button>
@@ -455,7 +494,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                       {ticketExito.dispositivo?.marca} {ticketExito.dispositivo?.modelo}
                     </span>
                     <span className="text-cyan-400 font-mono block text-[11px] mt-0.5">
-                      SN: {ticketExito.dispositivo?.numero_serie || 'Sin número de serie'}
+                      N. Serie: {ticketExito.dispositivo?.numero_serie || 'Sin registrar'}
                     </span>
                   </div>
 
@@ -532,9 +571,68 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                 Localiza la orden del cliente para verificar los datos cargados previamente de forma virtual.
               </p>
             </div>
-            <span className="text-xs font-mono font-bold text-cyan-400 bg-cyan-500/10 px-3 py-1 rounded-full border border-cyan-500/30 self-start sm:self-auto">
-              {reparacionesPendientes.length} órdenes en espera
+            <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+              {/* Switch Cyber-Tech: Solo mis asignaciones */}
+              <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700/80 px-3 py-1.5 rounded-xl">
+                <label htmlFor="toggle-recep-dispositivo" className="flex items-center gap-2 cursor-pointer select-none">
+                  <div className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      id="toggle-recep-dispositivo"
+                      type="checkbox"
+                      checked={soloMisAsignaciones}
+                      onChange={(e) => handleToggleSoloMias(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-200">
+                    {soloMisAsignaciones ? 'Solo mis asignaciones' : 'Todas las órdenes'}
+                  </span>
+                </label>
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${soloMisAsignaciones ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' : 'bg-slate-700/50 text-slate-400 border-slate-600'}`}>
+                  {soloMisAsignaciones ? 'Mis Asignadas' : 'Mostrador General'}
+                </span>
+              </div>
+
+              <span className="text-xs font-mono font-bold text-cyan-400 bg-cyan-500/10 px-3 py-1.5 rounded-xl border border-cyan-500/30">
+                {reparacionesPendientes.length} en espera
+              </span>
+            </div>
+          </div>
+
+          {/* Selector de Ámbito / Criterio de Búsqueda (Enfoque Híbrido) */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <span className="text-[11px] font-semibold text-slate-400 mr-1 uppercase tracking-wider">
+              Buscar por:
             </span>
+            {[
+              { id: 'TODOS', label: '⚡ Todos (Auto)', desc: 'Búsqueda inteligente por código, email o cliente' },
+              { id: 'REPARACION', label: '🔧 Cód. Reparación', desc: 'Búsqueda directa por código de orden' },
+              { id: 'VENTA', label: '💳 Cód. Operación', desc: 'Búsqueda por código de comprobante o venta' },
+              { id: 'EMAIL', label: '✉️ Correo Electrónico', desc: 'Búsqueda directa por email del titular' }
+            ].map((chip) => {
+              const activo = criterioBusqueda === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => {
+                    setCriterioBusqueda(chip.id);
+                    if (terminoBusqueda.trim()) {
+                      buscarReparaciones(terminoBusqueda, null, chip.id);
+                    }
+                  }}
+                  title={chip.desc}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                    activo
+                      ? 'bg-cyan-500/20 border-[#06B6D4] text-cyan-300 shadow-sm shadow-cyan-500/30 ring-1 ring-[#06B6D4]/50'
+                      : 'bg-slate-800/80 border-slate-700/80 text-slate-400 hover:text-slate-200 hover:border-slate-600'
+                  }`}
+                >
+                  <span>{chip.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Formulario del Buscador */}
@@ -548,7 +646,15 @@ export default function RecepcionarDispositivo({ onAlerta }) {
             <div className="relative flex-1">
               <input
                 type="text"
-                placeholder="Ingrese DNI, Correo o Código de Seguridad del cliente..."
+                placeholder={
+                  criterioBusqueda === 'REPARACION'
+                    ? 'Ingrese código de reparación (ej. SEC-1234)...'
+                    : criterioBusqueda === 'VENTA'
+                    ? 'Ingrese código de operación o venta de diagnóstico...'
+                    : criterioBusqueda === 'EMAIL'
+                    ? 'Ingrese correo electrónico del cliente...'
+                    : 'Ingrese código de reparación, operación, correo, DNI...'
+                }
                 value={terminoBusqueda}
                 onChange={(e) => setTerminoBusqueda(e.target.value)}
                 className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-3.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#8B5CF6] focus:ring-1 focus:ring-[#8B5CF6] transition-all duration-200 font-sans pr-10"
@@ -573,7 +679,7 @@ export default function RecepcionarDispositivo({ onAlerta }) {
               disabled={cargandoBusqueda}
               className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
-              <span>{cargandoBusqueda ? 'Buscando...' : 'Buscar Orden'}</span>
+              <span>{cargandoBusqueda ? 'Filtrando...' : 'Filtrar'}</span>
               <span>🔍</span>
             </button>
           </form>
@@ -651,12 +757,27 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                             {disp.marca || 'Equipo'} {disp.modelo || ''}
                           </h4>
                           <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                            <span className="font-mono text-cyan-300">
-                              SN: {disp.numero_serie || 'S/N'}
-                            </span>
+                            {(() => {
+                              const nroSerieLimpio = String(disp.numero_serie || '')
+                                .replace(/^(s\/?n|serie|nro\.?\s*serie):?\s*/i, '')
+                                .trim();
+                              return (
+                                <span className="font-mono text-cyan-300">
+                                  N. Serie: {nroSerieLimpio || 'Sin registrar'}
+                                </span>
+                              );
+                            })()}
                             <span>•</span>
                             <span>{disp.tipo || 'Dispositivo'}</span>
                           </div>
+                          {(rep.debe_diagnostico === true ||
+                            String(rep.estado_pago || '').toUpperCase() === 'PENDIENTE') && (
+                            <div className="mt-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                <span>⚠️</span> Deuda diagn.: ${Number(rep.costo_diagnostico || 5000).toLocaleString('es-AR')}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         {/* Datos del Cliente */}
@@ -665,6 +786,14 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                             <span>👤</span>
                             <span>{clienteNombre}</span>
                           </div>
+                          {!soloMisAsignaciones && (
+                            <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                              <span>👨‍🔧 Técnico:</span>
+                              <span className="text-cyan-400 font-semibold">
+                                {rep.id_tecnico === user?.id_usuario ? 'Asignada a ti' : (rep.tecnico || 'Sin pre-asignar')}
+                              </span>
+                            </div>
+                          )}
                           <div className="text-[11px] text-slate-400 mt-0.5 flex items-center justify-between">
                             <span>DNI: {rep.cliente?.dni || 'No declarado'}</span>
                             <span className="font-mono text-slate-400">
@@ -776,9 +905,18 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                   <span className="font-bold text-white text-sm">
                     {reparacionSeleccionada.dispositivo?.marca} {reparacionSeleccionada.dispositivo?.modelo}
                   </span>
-                  <span className="text-cyan-400 font-mono block text-[11px]">
-                    Serie: {reparacionSeleccionada.dispositivo?.numero_serie || 'Sin número de serie'}
-                  </span>
+                  {(() => {
+                    const nroSerieLimpio = String(
+                      reparacionSeleccionada.dispositivo?.numero_serie || ''
+                    )
+                      .replace(/^(s\/?n|serie|nro\.?\s*serie):?\s*/i, '')
+                      .trim();
+                    return (
+                      <span className="text-cyan-400 font-mono block text-[11px]">
+                        N. Serie: {nroSerieLimpio || 'Sin registrar'}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div>
@@ -802,6 +940,56 @@ export default function RecepcionarDispositivo({ onAlerta }) {
                   </span>
                 </div>
               </div>
+
+              {/* Alerta de Deuda de Diagnóstico Pendiente con acceso directo a Cobrar Operación */}
+              {(() => {
+                const tieneDeuda =
+                  reparacionSeleccionada.debe_diagnostico === true ||
+                  String(reparacionSeleccionada.estado_pago || '').toUpperCase() === 'PENDIENTE' ||
+                  (reparacionSeleccionada.diagnostico_abonado === false && reparacionSeleccionada.id_venta);
+
+                if (!tieneDeuda) return null;
+
+                const montoDeuda = reparacionSeleccionada.costo_diagnostico || 5000;
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-4 rounded-xl bg-amber-500/10 border-2 border-amber-500/40 text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg shadow-amber-950/20"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="text-2xl mt-0.5">⚠️</span>
+                      <div>
+                        <h4 className="text-sm font-bold text-amber-300 font-sans">
+                          Costo de Diagnóstico Inicial Pendiente de Cobro
+                        </h4>
+                        <p className="text-xs text-amber-200/90 mt-1 leading-relaxed">
+                          El cliente está ingresando el equipo al taller pero registra el costo de diagnóstico pendiente (
+                          <strong className="text-white font-mono">${Number(montoDeuda).toLocaleString('es-AR')} ARS</strong>).
+                          Debes cobrarle este valor en mostrador para regularizar el cobro de la orden.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate('/tecnico/caja/cobros', {
+                          state: {
+                            busquedaExacta:
+                              reparacionSeleccionada.codigo_sec ||
+                              reparacionSeleccionada.codigo_seguridad ||
+                              ''
+                          }
+                        });
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(245,158,11,0.35)] flex items-center justify-center gap-2 whitespace-nowrap self-start sm:self-center"
+                    >
+                      <span>💳</span>
+                      <span>Cobrar Diagnóstico Ahora</span>
+                    </button>
+                  </motion.div>
+                );
+              })()}
 
               {/* Formulario Principal de Edición y Auditoría Física */}
               <form onSubmit={handleConfirmarRecepcion} className="space-y-5">

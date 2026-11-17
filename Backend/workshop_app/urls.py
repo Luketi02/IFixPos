@@ -25,7 +25,8 @@ from .apis import (
     ReporteConversionApi,
     ReporteEficienciaApi,
     ReporteProductividadApi,
-    ReporteSatisfaccionApi
+    ReporteSatisfaccionApi,
+    AbonarDiagnosticoReparacionApi
 )
 
 app_name = 'workshop_app'
@@ -51,6 +52,7 @@ urlpatterns = [
 
     # CU-61: Consultar Detalle de Reparación
     path('reparaciones/<int:id_reparacion>/detalles/', ReparacionDetalleApi.as_view(), name='reparacion-detalles'),
+    path('reparaciones/<int:id_reparacion>/pagar-diagnostico/', AbonarDiagnosticoReparacionApi.as_view(), name='pagar-diagnostico-reparacion'),
 
     # CU-26: Iniciar Reparación
     path('reparaciones/iniciar/', IniciarReparacionApi.as_view(), name='iniciar-reparacion'),

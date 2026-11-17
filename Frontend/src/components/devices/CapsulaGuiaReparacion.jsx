@@ -24,6 +24,21 @@ export function obtenerGuiaPorEstado(etapa) {
     };
   }
 
+  // 1️⃣.b Esperando Pago de Diagnóstico
+  if (clave.includes('pago') && (clave.includes('diagnostico') || clave.includes('diagnóstico'))) {
+    return {
+      fase: 'Habilitación de Diagnóstico Técnico',
+      estadoTitulo: 'Esperando Pago de Diagnóstico',
+      icono: '💳',
+      badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+      contenedorClass: 'from-amber-500/15 via-[#1E293B] to-slate-900 border-amber-500/40',
+      acentoColor: '#F59E0B',
+      descripcion:
+        'Tu dispositivo ya fue recepcionado físicamente en nuestro taller, pero registra pendiente el abono del diagnóstico inicial. Una vez acreditado este pago, el técnico especialista comenzará la revisión de tu equipo.',
+      tip: 'Recuerda que solo el primer diagnóstico se abona; cualquier reevaluación o nuevo diagnóstico posterior es sin cargo. Puedes pagarlo desde esta misma pantalla o por caja en nuestra sucursal.'
+    };
+  }
+
   // 1️⃣ / 2️⃣ Esperando Diagnóstico o En Diagnóstico
   if (clave.includes('diagnostico') || clave.includes('diagnóstico')) {
     const enEvaluacion = clave.includes('en_');

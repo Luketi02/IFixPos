@@ -5,8 +5,11 @@ import useAuth from '../../context/useAuth';
 import {
   EVENTO_SESION_EXPIRADA,
   notificarSesionExpirada,
+  obtenerAccessToken,
   reiniciarNotificacionSesion,
-  tokenEstaExpirado
+  renovarTokenSesion,
+  tokenEstaExpirado,
+  tokenProximoAExpirar
 } from '../../utils/sesionExpirada';
 import { useIntervaloVisible } from '../../utils/polling';
 
@@ -27,10 +30,18 @@ export default function SessionExpiredModal() {
     return () => window.removeEventListener(EVENTO_SESION_EXPIRADA, abrir);
   }, []);
 
-  // Verificación proactiva de la expiración del JWT (pausa cuando la pestaña está oculta y sincroniza al volver)
-  const verificarExpiracion = useCallback(() => {
-    if (token && tokenEstaExpirado(token)) {
-      notificarSesionExpirada();
+  // Verificación proactiva del JWT: si está próximo a vencer o vencido mientras el usuario está activo,
+  // renueva silenciosamente con el refresh_token; solo notifica sesión expirada si el refresco falla.
+  const verificarExpiracion = useCallback(async () => {
+    const tokenActual = obtenerAccessToken() || token;
+    if (!tokenActual) return;
+
+    if (tokenEstaExpirado(tokenActual) || tokenProximoAExpirar(tokenActual, 90)) {
+      try {
+        await renovarTokenSesion();
+      } catch {
+        notificarSesionExpirada();
+      }
     }
   }, [token]);
 

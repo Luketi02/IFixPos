@@ -714,50 +714,56 @@ export default function AdminQuotationsScreen() {
               <span>Nueva Solicitud de Cotización</span>
             </button>
           </div>
-          {/* Alertas de Feedback (Regla 6: Auto-cierre en 6 segundos) */}
-          <AnimatePresence>
-            {errorBanner && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="bg-rose-500/10 border border-rose-500/40 text-rose-200 px-5 py-3.5 rounded-xl flex items-center justify-between gap-4 shadow-lg"
-              >
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="text-rose-400 text-lg">⚠</span>
-                  <span>{errorBanner}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setErrorBanner('')}
-                  className="text-rose-300 hover:text-white text-xs font-mono cursor-pointer"
+          {/* Alertas Flotantes Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
+          <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-md">
+            <AnimatePresence>
+              {errorBanner && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                  transition={{ duration: 0.25 }}
+                  className="pointer-events-auto bg-rose-950/90 border border-rose-500/50 text-rose-200 px-4 py-3 rounded-2xl flex items-center justify-between gap-3 shadow-2xl backdrop-blur-md text-xs sm:text-sm font-medium"
                 >
-                  CERRAR
-                </button>
-              </motion.div>
-            )}
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-rose-400 text-base">⚠️</span>
+                    <span className="leading-relaxed">{errorBanner}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorBanner('')}
+                    className="text-rose-300 hover:text-white p-1 ml-2 text-xs font-mono cursor-pointer"
+                    aria-label="Cerrar error"
+                  >
+                    ✕
+                  </button>
+                </motion.div>
+              )}
 
-            {exitoBanner && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="bg-emerald-500/10 border border-emerald-500/40 text-emerald-200 px-5 py-3.5 rounded-xl flex items-center justify-between gap-4 shadow-lg"
-              >
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="text-emerald-400 text-lg">✓</span>
-                  <span>{exitoBanner}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setExitoBanner('')}
-                  className="text-emerald-300 hover:text-white text-xs font-mono cursor-pointer"
+              {exitoBanner && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                  transition={{ duration: 0.25 }}
+                  className="pointer-events-auto bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 px-4 py-3 rounded-2xl flex items-center justify-between gap-3 shadow-2xl backdrop-blur-md text-xs sm:text-sm font-medium"
                 >
-                  CERRAR
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-emerald-400 text-base">⚡</span>
+                    <span className="leading-relaxed">{exitoBanner}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setExitoBanner('')}
+                    className="text-emerald-300 hover:text-white p-1 ml-2 text-xs font-mono cursor-pointer"
+                    aria-label="Cerrar éxito"
+                  >
+                    ✕
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Tarjetas de Resumen (KPIs) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -901,9 +907,10 @@ export default function AdminQuotationsScreen() {
               )}
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer font-mono"
               >
-                <span>Filtrar Solicitudes</span>
+                <span>⚡</span>
+                <span>Filtrar</span>
               </button>
             </div>
           </form>

@@ -7,9 +7,15 @@ import AdminSidebar from '../../components/navigation/AdminSidebar';
 import UserProfileDropdown from '../../components/navigation/UserProfileDropdown';
 import { resolverUrlImagen } from '../../utils/imagenes';
 import { formatearFecha } from '../../utils/fechas';
-import { formatearEstadoReparacion } from '../../utils/repairStatus';
+import {
+  formatearEstadoReparacion,
+  obtenerColorBadgeEstado,
+  obtenerResumenCortoBitacora
+} from '../../utils/repairStatus';
 import CapsulaGuiaReparacion from '../../components/devices/CapsulaGuiaReparacion';
 import CalificarServicioModal from '../../components/workshop/CalificarServicioModal';
+import DetalleBitacoraModal from '../../components/workshop/DetalleBitacoraModal';
+import CheckoutDiagnosticoModal from '../../components/workshop/CheckoutDiagnosticoModal';
 import PaymentMethodModalDispatcher from '../../components/payments/PaymentMethodModalDispatcher';
 import { useMediosPagoActivos } from '../../hooks/useMediosPagoActivos';
 import { TIPOS_MODAL_PAGO } from '../../utils/mediosPago';
@@ -43,8 +49,8 @@ export default function ReparacionDetalle() {
     errorMediosPago
   } = useMediosPagoActivos({
     habilitado: true,
-    metodoEntrega,
-    tipoPreferidoInicial: TIPOS_MODAL_PAGO.EFECTIVO
+    metodoEntrega: 'ENVIO', // Excluye/deshabilita Efectivo en toda la pantalla de detalles de la reparación
+    tipoPreferidoInicial: TIPOS_MODAL_PAGO.MERCADOPAGO
   });
 
   // Estado para abrir el modal reutilizable de pasarela/instrucciones tras aceptar el presupuesto
@@ -55,8 +61,21 @@ export default function ReparacionDetalle() {
     montoTotal: 0
   });
 
+  // Estados para el pago del Diagnóstico Inicial desde ReparacionDetalle (CU-26 / CU-45)
+  const [idMedioDiagSeleccionado, setIdMedioDiagSeleccionado] = useState('');
+  const [procesandoPagoDiag, setProcesandoPagoDiag] = useState(false);
+  const [modalPagoDiagnostico, setModalPagoDiagnostico] = useState({
+    abierto: false,
+    idVenta: null,
+    medioPago: null,
+    montoTotal: 0
+  });
+
   // Estado local para Modal de Calificación (CU-19)
   const [modalCalificarAbierto, setModalCalificarAbierto] = useState(false);
+
+  // Estado local para Modal de Inspección Detallada de Bitácora
+  const [registroInspeccion, setRegistroInspeccion] = useState(null);
 
   const isLoading = cargadoId !== id_reparacion;
 
@@ -156,8 +175,147 @@ export default function ReparacionDetalle() {
     .replace('Ú', 'U');
 
   const estaEsperandoConfirmacion = etapaNormalizada === 'ESPERANDO_CONFIRMACION';
+  const estaEsperandoPagoDiagnostico = etapaNormalizada === 'ESPERANDO_PAGO_DIAGNOSTICO';
+  const estaEsperandoDispositivo = etapaNormalizada === 'ESPERANDO_DISPOSITIVO';
+  const estadoPagoUpper = String(reparacion?.estado_pago || '').toUpperCase();
+  const tieneDiagnosticosPrevios =
+    Boolean(diagData) || (Array.isArray(reparacion?.diagnosticos) && reparacion.diagnosticos.length > 0);
+  const debeDiagnosticoInicial =
+    !tieneDiagnosticosPrevios &&
+    (estaEsperandoPagoDiagnostico || (estaEsperandoDispositivo && reparacion?.debe_diagnostico === true)) &&
+    estadoPagoUpper !== 'PAGADA' &&
+    estadoPagoUpper !== 'PAGADO';
+  const montoDiagnostico = Number(reparacion?.costo_diagnostico || 5000);
+
   const esClienteActivo = !esPersonalTecnico || rolCodigo === 'CLIENTE';
   const puedeTomarDecision = estaEsperandoConfirmacion && esClienteActivo && Boolean(diagData);
+
+  // Medios de pago permitidos para abonar diagnóstico desde la plataforma (excluyendo Efectivo)
+  const mediosPagoDiagnostico = mediosPago.filter(
+    (m) => m.tipoModal !== TIPOS_MODAL_PAGO.EFECTIVO
+  );
+
+  // Inicializar medio de pago para diagnóstico priorizando Mercado Pago o cualquier medio digital (nunca Efectivo)
+  useEffect(() => {
+    if (mediosPagoDiagnostico.length > 0) {
+      const existeEnLista = mediosPagoDiagnostico.some(
+        (m) => String(m.id_mediopago) === String(idMedioDiagSeleccionado)
+      );
+      if (!idMedioDiagSeleccionado || !existeEnLista) {
+        const preferido =
+          mediosPagoDiagnostico.find((m) => m.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO) ||
+          mediosPagoDiagnostico[0];
+        if (preferido) {
+          setIdMedioDiagSeleccionado(String(preferido.id_mediopago));
+        }
+      }
+    }
+  }, [mediosPagoDiagnostico, idMedioDiagSeleccionado]);
+
+  const medioDiagSeleccionado =
+    mediosPagoDiagnostico.find((m) => String(m.id_mediopago) === String(idMedioDiagSeleccionado)) ||
+    mediosPagoDiagnostico[0] ||
+    null;
+
+  // Abrir modal para abonar el diagnóstico inicial desde la plataforma
+  const handleIniciarPagoDiagnostico = async () => {
+    if (!medioDiagSeleccionado) {
+      setErrorMessage('Por favor selecciona un medio de pago digital habilitado para abonar el diagnóstico.');
+      return;
+    }
+
+    setProcesandoPagoDiag(true);
+    setErrorMessage('');
+    let idVentaDiag = reparacion?.id_venta || null;
+    let montoDiag = montoDiagnostico;
+
+    try {
+      const resPrep = await axios.post(
+        `${API_BASE_URL}/api/workshop/reparaciones/${id_reparacion}/pagar-diagnostico/`,
+        {
+          accion: 'PREPARAR',
+          medio_pago: String(
+            medioDiagSeleccionado.id_mediopago ||
+              medioDiagSeleccionado.codigo ||
+              medioDiagSeleccionado.nombre_medio_pago
+          )
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      idVentaDiag = resPrep.data?.id_venta || idVentaDiag;
+      montoDiag = Number(resPrep.data?.monto_total || montoDiag);
+    } catch (err) {
+      // Si la reparación aún no tenía id_venta y el backend devolvió un error explícito de negocio, informarlo
+      if (!idVentaDiag) {
+        const data = err.response?.data;
+        const msg = data?.error || data?.detail || 'No fue posible preparar la orden de pago del diagnóstico.';
+        setErrorMessage(msg);
+        setProcesandoPagoDiag(false);
+        return;
+      }
+    }
+
+    setProcesandoPagoDiag(false);
+    setModalPagoDiagnostico({
+      abierto: true,
+      idVenta: idVentaDiag,
+      medioPago: medioDiagSeleccionado,
+      montoTotal: montoDiag
+    });
+  };
+
+  // Confirmar acreditación del pago de diagnóstico desde el modal del medio elegido
+  const handleConfirmarPagoDiagnosticoModal = async (datosModal) => {
+    const tipoModal = datosModal?.tipoModal || medioDiagSeleccionado?.tipoModal;
+
+    // Si eligió Efectivo, es informativo para abonar presencialmente en caja
+    if (tipoModal === TIPOS_MODAL_PAGO.EFECTIVO) {
+      setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
+      setSuccessMessage(
+        'Recuerda presentar tu Código de Seguridad en la caja de nuestra sucursal para abonar el diagnóstico en efectivo.'
+      );
+      return;
+    }
+
+    // Si fue Mercado Pago, el webhook/simulador ya acreditó la venta y actualizó la reparación
+    if (tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO) {
+      setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
+      setSuccessMessage(
+        '¡Pago de diagnóstico acreditado con éxito! Tu dispositivo ya pasó a Esperando Diagnóstico y será evaluado por el técnico.'
+      );
+      await cargarDetalle();
+      return;
+    }
+
+    // Para Transferencia o Tarjeta, confirmar acreditación en el backend
+    setProcesandoPagoDiag(true);
+    try {
+      const medioUsado = datosModal?.medioPago || medioDiagSeleccionado;
+      const resConf = await axios.post(
+        `${API_BASE_URL}/api/workshop/reparaciones/${id_reparacion}/pagar-diagnostico/`,
+        {
+          accion: 'CONFIRMAR',
+          medio_pago: String(
+            medioUsado?.id_mediopago || medioUsado?.codigo || medioUsado?.nombre_medio_pago || 'ONLINE'
+          )
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
+      setSuccessMessage(
+        resConf.data?.mensaje ||
+          '¡Pago de diagnóstico acreditado con éxito! Tu dispositivo ya se encuentra listo para recibir el diagnóstico del técnico.'
+      );
+      await cargarDetalle();
+    } catch (err) {
+      const data = err.response?.data;
+      const msg = data?.error || data?.detail || 'No fue posible registrar el pago del diagnóstico.';
+      setErrorMessage(msg);
+    } finally {
+      setProcesandoPagoDiag(false);
+    }
+  };
 
   // Manejador del envío de la decisión del cliente
   const handleEnviarDecision = async (e) => {
@@ -402,7 +560,7 @@ export default function ReparacionDetalle() {
                       {reparacion.dispositivo?.marca} {reparacion.dispositivo?.modelo}
                     </h1>
                     <p className="text-xs text-slate-400 font-mono mt-0.5">
-                      Serie: <span className="text-slate-200">{reparacion.dispositivo?.numero_serie || 'S/N'}</span>
+                      N. Serie: <span className="text-slate-200">{reparacion.dispositivo?.numero_serie || 'Sin registrar'}</span>
                       {reparacion.tecnico && (
                         <> • Técnico: <span className="text-cyan-300 font-semibold">{reparacion.tecnico}</span></>
                       )}
@@ -456,6 +614,77 @@ export default function ReparacionDetalle() {
                 
                 {/* ================= COLUMNA IZQUIERDA ================= */}
                 <div className="space-y-6">
+
+                  {/* Tarjeta 0: Panel de Abono de Diagnóstico Inicial (Cuando está en ESPERANDO_PAGO_DIAGNOSTICO o adeuda el 1° diagnóstico) */}
+                  {debeDiagnosticoInicial && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-[#1E293B] border-2 border-amber-500/45 rounded-2xl p-6 sm:p-7 shadow-[0_0_30px_rgba(245,158,11,0.14)] space-y-5 relative overflow-hidden"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-700/70 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-300 text-xl shrink-0">
+                            💳
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h2 className="text-base font-bold text-white font-mono tracking-wide">
+                                Abono de Diagnóstico Inicial
+                              </h2>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                Pago único
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 font-mono mt-0.5">
+                              Requisito previo para iniciar la evaluación técnica del dispositivo
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block">
+                            Arancel de Diagnóstico
+                          </span>
+                          <span className="text-2xl font-black font-mono text-amber-300">
+                            ${montoDiagnostico.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-300 leading-relaxed space-y-1.5">
+                        <p>
+                          <strong className="text-amber-300">¿Por qué figura pendiente este pago?</strong> Si al iniciar la solicitud elegiste abonar en efectivo o dejaste el equipo en el local sin abonar en el momento, la orden aguarda la acreditación del diagnóstico para que el técnico comience a revisarlo.
+                        </p>
+                        <p className="text-slate-400">
+                          ℹ️ <strong className="text-slate-200">Regla de servicio:</strong> Solo se abona el <strong>primer diagnóstico</strong>. Si más adelante tu equipo requiere un nuevo diagnóstico o reevaluación técnica, no tendrá ningún costo adicional.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2 border-t border-slate-800/80">
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          Al acreditarse el pago, el equipo pasará automáticamente a <strong className="text-cyan-300">Esperando Diagnóstico</strong>.
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setModalPagoDiagnostico({
+                              abierto: true,
+                              idVenta: reparacion?.id_venta || null,
+                              medioPago: medioDiagSeleccionado,
+                              montoTotal: montoDiagnostico
+                            })
+                          }
+                          disabled={procesandoPagoDiag}
+                          className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs font-mono uppercase tracking-wider shadow-[0_0_20px_rgba(245,158,11,0.35)] transition-all cursor-pointer disabled:opacity-50 shrink-0 flex items-center justify-center gap-2"
+                        >
+                          <span>💳</span>
+                          <span>Abonar Diagnóstico Ahora</span>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
                   
                   {/* Tarjeta 1: Informe Técnico y Presupuesto (CU-56) */}
                   <div className="bg-[#1E293B] border-2 border-cyan-500/40 hover:border-cyan-400/60 transition-all rounded-2xl p-6 sm:p-7 shadow-[0_0_30px_rgba(6,182,212,0.12)] space-y-6 relative overflow-hidden">
@@ -484,19 +713,45 @@ export default function ReparacionDetalle() {
                     </div>
 
                     {!diagData ? (
-                      <div className="p-6 rounded-xl bg-slate-900/70 border border-slate-800 text-center space-y-2">
-                        <div className="w-10 h-10 mx-auto rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
+                      estaEsperandoPagoDiagnostico ? (
+                        <div className="p-6 rounded-xl bg-slate-900/70 border border-amber-500/30 text-center space-y-2.5">
+                          <div className="w-11 h-11 mx-auto rounded-full bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-amber-300 text-lg">
+                            💳
+                          </div>
+                          <p className="text-sm font-semibold text-slate-100">
+                            Evaluación técnica en espera del pago de diagnóstico
+                          </p>
+                          <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                            Tu dispositivo ya fue recepcionado en el taller. En cuanto se acredite el pago único del diagnóstico inicial (desde esta página o en caja del local), el técnico asignado comenzará la evaluación.
+                          </p>
                         </div>
-                        <p className="text-sm font-semibold text-slate-200">
-                          El equipo aún está siendo evaluado por nuestros técnicos.
-                        </p>
-                        <p className="text-xs text-slate-400">
-                          Le notificaremos en cuanto el informe técnico y el presupuesto se encuentren listos.
-                        </p>
-                      </div>
+                      ) : estaEsperandoDispositivo ? (
+                        <div className="p-6 rounded-xl bg-slate-900/70 border border-slate-800 text-center space-y-2.5">
+                          <div className="w-11 h-11 mx-auto rounded-full bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-300 text-lg">
+                            📦
+                          </div>
+                          <p className="text-sm font-semibold text-slate-100">
+                            Aguardando la entrega física del dispositivo en sucursal
+                          </p>
+                          <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                            Acércate a nuestro mostrador con tu dispositivo y tu código de seguridad para que podamos recepcionarlo físicamente e iniciar su revisión técnica.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-6 rounded-xl bg-slate-900/70 border border-slate-800 text-center space-y-2">
+                          <div className="w-10 h-10 mx-auto rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <p className="text-sm font-semibold text-slate-200">
+                            El equipo está siendo evaluado por nuestros técnicos.
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            Le notificaremos en cuanto el informe técnico y el presupuesto se encuentren listos.
+                          </p>
+                        </div>
+                      )
                     ) : (
                       <div className="space-y-5 text-xs">
                         {/* Técnico Asignado y Problema Reportado */}
@@ -702,26 +957,18 @@ export default function ReparacionDetalle() {
                                     >
                                       {cargandoMediosPago ? (
                                         <option value="">Cargando medios de pago...</option>
-                                      ) : mediosPago.length === 0 ? (
-                                        <option value="">Sin medios de pago habilitados</option>
+                                      ) : mediosPagoDiagnostico.length === 0 ? (
+                                        <option value="">Sin medios de pago digitales habilitados</option>
                                       ) : (
-                                        mediosPago.map((medio) => (
+                                        mediosPagoDiagnostico.map((medio) => (
                                           <option
                                             key={medio.id_mediopago}
                                             value={medio.id_mediopago}
-                                            disabled={medio.deshabilitado}
-                                            className={
-                                              medio.deshabilitado
-                                                ? 'text-slate-500 bg-slate-950'
-                                                : 'text-slate-100 bg-slate-900'
-                                            }
+                                            className="text-slate-100 bg-slate-900"
                                           >
                                             {medio.nombre_medio_pago}
                                             {Number(medio.recargo) > 0
                                               ? ` (+${Number(medio.recargo)}%)`
-                                              : ''}
-                                            {medio.deshabilitado
-                                              ? ' (No disponible para envíos)'
                                               : ''}
                                           </option>
                                         ))
@@ -933,42 +1180,61 @@ export default function ReparacionDetalle() {
                       Aún no hay actualizaciones asentadas en la bitácora de esta reparación.
                     </div>
                   ) : (
-                    <div className="relative pl-6 space-y-6 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-700">
-                      {bitacora.map((item, index) => {
-                        const esUltimo = index === bitacora.length - 1;
+                    <div className="relative pl-7 space-y-6 before:content-[''] before:absolute before:left-2 before:top-3 before:bottom-3 before:w-[2px] before:bg-gradient-to-b before:from-cyan-500/40 before:via-slate-700 before:to-slate-800">
+                      {(() => {
+                        const indiceActualBitacora = bitacora.reduce((ultimoIdx, itemActual, idxActual, arr) => {
+                          const idAct = Number(itemActual?.id_bitacora);
+                          const idUlt = Number(arr[ultimoIdx]?.id_bitacora);
+                          if (!Number.isNaN(idAct) && !Number.isNaN(idUlt) && idAct !== idUlt) {
+                            return idAct > idUlt ? idxActual : ultimoIdx;
+                          }
+                          return idxActual;
+                        }, 0);
+
+                        return bitacora.map((item, index) => {
+                          const esUltimo = index === indiceActualBitacora;
+                          const regAnterior = index > 0 ? bitacora[index - 1] : null;
+                          const estadoAnterior =
+                            regAnterior?.estado_nombre ||
+                            regAnterior?.estado_alcanzado_nombre ||
+                            regAnterior?.estado_alcanzado ||
+                            null;
+                          const estadoNombre =
+                            item.estado_nombre || item.estado_alcanzado_nombre || 'Actualización técnica';
+                          const resumenEjecutivo = obtenerResumenCortoBitacora(item, estadoAnterior);
+
                         return (
-                          <div key={item.id_bitacora} className="relative group">
+                          <div key={item.id_bitacora || index} className="relative group">
                             {/* Punto / Nodo en la línea */}
                             <div
-                              className={`absolute -left-[19px] top-1.5 w-3.5 h-3.5 rounded-full border-2 transition-all ${
+                              className={`absolute -left-[25px] top-2.5 w-3.5 h-3.5 rounded-full border-2 transition-all ${
                                 esUltimo
-                                  ? 'bg-[#8B5CF6] border-[#C4B5FD] shadow-[0_0_12px_rgba(139,92,246,0.6)] scale-110'
-                                  : 'bg-slate-700 border-slate-500'
+                                  ? 'bg-cyan-400 border-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.6)] scale-110 ring-4 ring-cyan-500/20'
+                                  : 'bg-slate-900 border-slate-600 group-hover:border-slate-400'
                               }`}
                             />
 
-                            {/* Contenido del evento */}
+                            {/* Contenido resumido del evento */}
                             <div
                               className={`p-4 rounded-xl border text-xs transition-all ${
                                 esUltimo
-                                  ? 'bg-slate-900/90 border-[#8B5CF6]/50 shadow-lg shadow-purple-950/20'
-                                  : 'bg-slate-900/60 border-slate-800'
+                                  ? 'bg-slate-900/90 border-cyan-500/35 shadow-md'
+                                  : 'bg-slate-900/50 border-slate-800/90 hover:border-slate-700'
                               }`}
                             >
-                              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                                 <div className="flex items-center gap-2">
                                   <span
-                                    className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                                    className={`text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-md border ${obtenerColorBadgeEstado(
+                                      estadoNombre,
                                       esUltimo
-                                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                                        : 'bg-slate-800 text-slate-400'
-                                    }`}
+                                    )}`}
                                   >
-                                    {esUltimo ? 'Última actualización' : 'Registro de avance'}
+                                    {formatearEstadoReparacion(estadoNombre)}
                                   </span>
-                                  {(item.estado_nombre || item.estado_alcanzado) && (
-                                    <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-[#06B6D4] border border-[#06B6D4]/30">
-                                      {item.estado_nombre || item.estado_alcanzado_nombre || 'Actualización técnica'}
+                                  {esUltimo && (
+                                    <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
+                                      Estado actual
                                     </span>
                                   )}
                                 </div>
@@ -977,24 +1243,39 @@ export default function ReparacionDetalle() {
                                 </span>
                               </div>
 
-                              <p className="text-slate-100 font-medium text-xs leading-relaxed">
-                                {item.comentario}
+                              <p className="text-slate-200 font-medium text-xs leading-relaxed">
+                                {resumenEjecutivo}
                               </p>
 
-                              {item.tecnico && (
-                                <p className="text-[10px] font-mono text-slate-400 mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                                  <span>Registrado por: <span className="text-slate-300 font-medium">{item.tecnico}</span></span>
-                                  {item.rol_usuario && (
-                                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                                      {item.rol_usuario}
-                                    </span>
-                                  )}
-                                </p>
-                              )}
+                              <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                                {item.tecnico ? (
+                                  <span className="text-[10px] font-mono text-slate-400">
+                                    Registrado por: <span className="text-slate-300 font-medium">{item.tecnico}</span>
+                                    {item.rol_usuario && (
+                                      <span className="ml-1.5 text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                        {item.rol_usuario}
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-mono text-slate-500">Evento de sistema</span>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => setRegistroInspeccion(item)}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-slate-800/90 hover:bg-cyan-500/15 text-cyan-400 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/40 transition-all cursor-pointer"
+                                  title="Inspeccionar análisis completo de este evento, evidencias fotográficas y pagos"
+                                >
+                                  <span>🔍</span>
+                                  <span>Inspeccionar análisis</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
-                      })}
+                        });
+                      })()}
                     </div>
                   )}
                 </div>
@@ -1038,6 +1319,33 @@ export default function ReparacionDetalle() {
         onContinuarPendiente={() => {
           setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
         }}
+      />
+
+      {/* Modal de Checkout Virtual para abonar el Diagnóstico Inicial (mismo flujo y diseño que el Carrito) */}
+      <CheckoutDiagnosticoModal
+        isOpen={modalPagoDiagnostico.abierto}
+        onClose={() =>
+          setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }))
+        }
+        reparacion={reparacion}
+        montoDiagnostico={modalPagoDiagnostico.montoTotal || montoDiagnostico}
+        medioPagoInicial={modalPagoDiagnostico.medioPago || medioDiagSeleccionado}
+        onPagoCompletado={async () => {
+          setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
+          setSuccessMessage(
+            '¡Pago de diagnóstico acreditado con éxito! Tu dispositivo ya se encuentra en fila para evaluación técnica.'
+          );
+          await cargarDetalle();
+        }}
+      />
+
+      {/* Modal Inspección Detallada de Bitácora y Evidencias */}
+      <DetalleBitacoraModal
+        isOpen={Boolean(registroInspeccion)}
+        onClose={() => setRegistroInspeccion(null)}
+        registro={registroInspeccion}
+        reparacion={reparacion}
+        imagenesRespaldo={reparacion?.imagenes_recepcion || []}
       />
     </div>
   );

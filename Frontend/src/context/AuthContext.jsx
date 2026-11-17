@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AuthContext } from './AuthContextDefinition';
-import { EVENTO_CUENTA_CAMBIADA } from '../utils/sesionExpirada';
+import { EVENTO_CUENTA_CAMBIADA, EVENTO_TOKEN_RENOVADO } from '../utils/sesionExpirada';
 
 const getInitialSession = () => {
   try {
@@ -76,11 +76,21 @@ export const AuthProvider = ({ children }) => {
           window.dispatchEvent(new CustomEvent(EVENTO_CUENTA_CAMBIADA, {
             detail: { anterior: session.user, nueva: storedUser }
           }));
-        } else if (!session.token && storedToken) {
+        } else if (session.token !== storedToken && storedToken) {
           setSession({ token: storedToken, user: storedUser });
         }
       } catch (err) {
         console.error('Error sincronizando sesión entre pestañas:', err);
+      }
+    };
+
+    const handleTokenRenovado = (e) => {
+      const nuevoAccess = e?.detail?.access || localStorage.getItem('access_token');
+      if (nuevoAccess && nuevoAccess !== session.token) {
+        setSession((prev) => ({
+          ...prev,
+          token: nuevoAccess
+        }));
       }
     };
 
@@ -102,6 +112,11 @@ export const AuthProvider = ({ children }) => {
           window.dispatchEvent(new CustomEvent(EVENTO_CUENTA_CAMBIADA, {
             detail: { anterior: session.user, nueva: storedUser }
           }));
+        } else if (storedToken !== session.token) {
+          setSession((prev) => ({
+            ...prev,
+            token: storedToken
+          }));
         }
       } catch (err) {
         console.error('Error verificando sesión en focus:', err);
@@ -110,10 +125,12 @@ export const AuthProvider = ({ children }) => {
 
     window.addEventListener('storage', sincronizarSesionStorage);
     window.addEventListener('focus', handleFocus);
+    window.addEventListener(EVENTO_TOKEN_RENOVADO, handleTokenRenovado);
 
     return () => {
       window.removeEventListener('storage', sincronizarSesionStorage);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener(EVENTO_TOKEN_RENOVADO, handleTokenRenovado);
     };
   }, [session]);
 

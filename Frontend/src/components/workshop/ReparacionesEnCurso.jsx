@@ -17,32 +17,40 @@ import { API_BASE_URL } from '../../config/api';
  */
 export default function ReparacionesEnCurso({ onAlerta }) {
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   const [reparaciones, setReparaciones] = useState([]);
+  const [soloMisReparaciones, setSoloMisReparaciones] = useState(true);
   const [cargando, setCargando] = useState(true);
   const [errorCarga, setErrorCarga] = useState('');
 
   // Filtros
   const [filtroEstado, setFiltroEstado] = useState('TODOS');
   const [busquedaTexto, setBusquedaTexto] = useState('');
+  const [busquedaAplicada, setBusquedaAplicada] = useState('');
 
   // Modal de Diagnóstico (CU-08)
   const [modalAbierto, setModalAbierto] = useState(false);
   const [reparacionSeleccionada, setReparacionSeleccionada] = useState(null);
+
+  // Alerta modal interactiva para bloqueo de diagnóstico (Deuda / Falta de recepción física)
+  const [alertaBloqueo, setAlertaBloqueo] = useState(null);
 
   // Modal de Actualizar Estado (CU-10)
   const [modalEstadoAbierto, setModalEstadoAbierto] = useState(false);
   const [reparacionParaEstado, setReparacionParaEstado] = useState(null);
 
   // Cargar reparaciones activas del taller
-  const cargarReparaciones = useCallback(async () => {
+  const cargarReparaciones = useCallback(async (forzarSoloMias = null) => {
     if (!token) return;
     setCargando(true);
     setErrorCarga('');
 
+    const soloMias = forzarSoloMias !== null ? forzarSoloMias : soloMisReparaciones;
     try {
+      const params = soloMias ? { solo_mis_asignaciones: true } : {};
       const res = await axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
+        params,
         headers: { Authorization: `Bearer ${token}` }
       });
       if (Array.isArray(res.data)) {
@@ -60,14 +68,72 @@ export default function ReparacionesEnCurso({ onAlerta }) {
     } finally {
       setCargando(false);
     }
-  }, [token, onAlerta]);
+  }, [token, onAlerta, soloMisReparaciones]);
 
   useEffect(() => {
     cargarReparaciones();
   }, [cargarReparaciones]);
 
-  // Manejador al abrir el modal de diagnóstico
+  const handleToggleSoloMias = (checked) => {
+    setSoloMisReparaciones(checked);
+    cargarReparaciones(checked);
+  };
+
+  // Manejador al abrir el modal de diagnóstico con validación estricta de deuda y recepción física
   const handleAbrirDiagnostico = (rep) => {
+    if (!rep) return;
+
+    const etapaNormalizada = String(rep.etapa || '')
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\s\-]+/g, '_');
+
+    // 1. Guard Rail: Dispositivo físico no recepcionado en el local
+    if (etapaNormalizada === 'ESPERANDO_DISPOSITIVO' || etapaNormalizada.includes('ESPERANDO_DISP')) {
+      setAlertaBloqueo({
+        tipo: 'SIN_RECEPCION',
+        icono: '📦',
+        titulo: 'Dispositivo No Recepcionado en el Local',
+        mensaje:
+          'El dispositivo físico no está en el local, no se registró su recepción física. Para continuar el proceso de diagnóstico, primero debes registrar la recepción del equipo.',
+        accionTexto: 'Registrar Recepción',
+        accionIcono: '📥',
+        onAccion: () => {
+          setAlertaBloqueo(null);
+          navigate('/tecnico/caja/recepcionar-dispositivo', {
+            state: { terminoBusqueda: rep.codigo_sec || rep.codigo_seguridad || '' }
+          });
+        }
+      });
+      return;
+    }
+
+    // 2. Guard Rail: Deuda del costo de diagnóstico pendiente de cobro
+    const costoDiag = rep.costo_diagnostico || 5000;
+    const debeDiagnostico =
+      rep.debe_diagnostico === true ||
+      String(rep.estado_pago || '').toUpperCase() === 'PENDIENTE' ||
+      (rep.diagnostico_abonado === false && rep.id_venta);
+
+    if (debeDiagnostico) {
+      setAlertaBloqueo({
+        tipo: 'DEUDA_DIAGNOSTICO',
+        icono: '💳',
+        titulo: 'Deuda de Diagnóstico Pendiente',
+        mensaje: `No puedes diagnosticar este dispositivo porque registra una deuda del costo de diagnóstico ($${Number(costoDiag).toLocaleString('es-AR')} ARS). Primero haz cobrar la deuda para habilitar la orden de trabajo.`,
+        accionTexto: 'Cobrar Deuda en Caja',
+        accionIcono: '💰',
+        onAccion: () => {
+          setAlertaBloqueo(null);
+          navigate('/tecnico/caja/cobros', {
+            state: { busquedaExacta: rep.codigo_sec || rep.codigo_seguridad || '' }
+          });
+        }
+      });
+      return;
+    }
+
     setReparacionSeleccionada(rep);
     setModalAbierto(true);
   };
@@ -113,9 +179,9 @@ export default function ReparacionesEnCurso({ onAlerta }) {
     }
   };
 
-  // Filtrado reactivo por pestañas y búsqueda
+  // Filtrado por pestañas y búsqueda manual
   const reparacionesFiltradas = useMemo(() => {
-    const q = busquedaTexto.trim().toLowerCase();
+    const q = busquedaAplicada.trim().toLowerCase();
 
     return reparaciones.filter((item) => {
       // 1. Filtro por etapa/estado
@@ -152,7 +218,7 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         descCliente.includes(q)
       );
     });
-  }, [reparaciones, filtroEstado, busquedaTexto]);
+  }, [reparaciones, filtroEstado, busquedaAplicada]);
 
   return (
     <div className="space-y-6">
@@ -173,22 +239,46 @@ export default function ReparacionesEnCurso({ onAlerta }) {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={cargarReparaciones}
-          disabled={cargando}
-          className="self-start md:self-auto px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-400 border border-slate-700 transition-colors flex items-center gap-2 disabled:opacity-50"
-        >
-          <svg
-            className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
+        <div className="flex flex-wrap items-center gap-3 self-start md:self-auto">
+          {/* Switch Cyber-Tech: Solo mis asignaciones */}
+          <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-700/80 px-3.5 py-1.5 rounded-xl">
+            <label htmlFor="toggle-rep-en-curso" className="flex items-center gap-2 cursor-pointer select-none">
+              <div className="relative inline-flex items-center cursor-pointer">
+                <input
+                  id="toggle-rep-en-curso"
+                  type="checkbox"
+                  checked={soloMisReparaciones}
+                  onChange={(e) => handleToggleSoloMias(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
+              </div>
+              <span className="text-xs font-semibold text-slate-200">
+                {soloMisReparaciones ? 'Solo mis asignaciones' : 'Todas las reparaciones'}
+              </span>
+            </label>
+            <span className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${soloMisReparaciones ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' : 'bg-slate-700/50 text-slate-400 border-slate-600'}`}>
+              {soloMisReparaciones ? 'Mis Órdenes' : 'Taller Global'}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => cargarReparaciones()}
+            disabled={cargando}
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-400 border border-slate-700 transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          <span>{cargando ? 'Actualizando...' : 'Refrescar'}</span>
-        </button>
+            <svg
+              className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>{cargando ? 'Actualizando...' : 'Refrescar'}</span>
+          </button>
+        </div>
       </div>
 
       {/* 2. Barra de Búsqueda y Pestañas de Estado */}
@@ -221,23 +311,37 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         </div>
 
         {/* Buscador de Órdenes */}
-        <div className="w-full lg:w-72 relative">
-          <input
-            type="text"
-            value={busquedaTexto}
-            onChange={(e) => setBusquedaTexto(e.target.value)}
-            placeholder="Buscar por cliente, modelo u orden..."
-            className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 outline-none focus:border-[#06B6D4] transition-colors"
-          />
-          <svg
-            className="w-4 h-4 text-slate-500 absolute left-3 top-2.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBusquedaAplicada(busquedaTexto);
+          }}
+          className="flex items-center gap-2 w-full lg:w-80"
+        >
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={busquedaTexto}
+              onChange={(e) => setBusquedaTexto(e.target.value)}
+              placeholder="Buscar por cliente, modelo u orden..."
+              className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 outline-none focus:border-[#06B6D4] transition-colors"
+            />
+            <svg
+              className="w-4 h-4 text-slate-500 absolute left-3 top-2.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <button
+            type="submit"
+            className="px-3.5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all active:scale-95 cursor-pointer whitespace-nowrap"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        </div>
+            Filtrar
+          </button>
+        </form>
       </div>
 
       {/* 3. Grilla de Tarjetas de Reparaciones */}
@@ -356,10 +460,32 @@ export default function ReparacionesEnCurso({ onAlerta }) {
                           {clienteDisplay}
                         </strong>
                       </p>
-                      {rep.dispositivo?.numero_serie && (
-                        <p className="text-[11px] font-mono text-slate-500">
-                          S/N: {rep.dispositivo.numero_serie}
+                      {!soloMisReparaciones && (
+                        <p className="text-xs text-slate-400 font-sans mt-0.5">
+                          Técnico:{' '}
+                          <span className="text-cyan-400 font-semibold">
+                            {rep.id_tecnico === user?.id_usuario ? 'Asignada a ti' : (rep.tecnico || 'Sin asignar')}
+                          </span>
                         </p>
+                      )}
+                      {(() => {
+                        const nroSerieLimpio = String(rep.dispositivo?.numero_serie || '')
+                          .replace(/^(s\/?n|serie|nro\.?\s*serie):?\s*/i, '')
+                          .trim();
+                        return nroSerieLimpio ? (
+                          <p className="text-[11px] font-mono text-slate-400 font-medium">
+                            N. Serie: {nroSerieLimpio}
+                          </p>
+                        ) : null;
+                      })()}
+                      {(rep.debe_diagnostico === true ||
+                        String(rep.estado_pago || '').toUpperCase() === 'PENDIENTE') && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                            <span>⚠️</span> Diagnóstico pendiente de cobro ($
+                            {Number(rep.costo_diagnostico || 5000).toLocaleString('es-AR')})
+                          </span>
+                        </div>
                       )}
                     </div>
 
@@ -380,6 +506,21 @@ export default function ReparacionesEnCurso({ onAlerta }) {
 
                   {/* 4. Botones de Acción de la Reparación */}
                   <div className="pt-3 border-t border-slate-700/60 space-y-2">
+                    {/* Botón de Diagnosticar si está esperando diagnóstico o dispositivo */}
+                    {(esDiagnosticoPendiente || etapaNormalizada === 'ESPERANDO_DISPOSITIVO') && (
+                      <button
+                        type="button"
+                        onClick={() => handleAbrirDiagnostico(rep)}
+                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
+                        title="Iniciar o cargar diagnóstico técnico"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span>Diagnosticar Dispositivo</span>
+                      </button>
+                    )}
+
                     {/* Boton unico de Transicion Operativa: Actualizar Estado */}
                     {puedeActualizarEstado && (
                       <button
@@ -434,6 +575,50 @@ export default function ReparacionesEnCurso({ onAlerta }) {
         reparacion={reparacionParaEstado}
         onSuccess={handleCambioEstadoExitoso}
       />
+
+      {/* 6. Modal Interactivo de Bloqueo Preventivo (Deuda o Sin Recepción Física) */}
+      <AnimatePresence>
+        {alertaBloqueo && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              transition={{ duration: 0.2 }}
+              className="bg-[#1E293B] border border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 text-center"
+            >
+              <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-3xl shadow-[0_0_20px_rgba(245,158,11,0.2)]">
+                {alertaBloqueo.icono || '⚠️'}
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-lg font-bold text-white tracking-wide">
+                  {alertaBloqueo.titulo}
+                </h3>
+                <p className="text-sm text-slate-300 leading-relaxed font-sans">
+                  {alertaBloqueo.mensaje}
+                </p>
+              </div>
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setAlertaBloqueo(null)}
+                  className="w-full sm:w-1/2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition-colors"
+                >
+                  Entendido / Volver
+                </button>
+                <button
+                  type="button"
+                  onClick={alertaBloqueo.onAccion}
+                  className="w-full sm:w-1/2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(245,158,11,0.35)] flex items-center justify-center gap-2"
+                >
+                  <span>{alertaBloqueo.accionIcono}</span>
+                  <span>{alertaBloqueo.accionTexto}</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

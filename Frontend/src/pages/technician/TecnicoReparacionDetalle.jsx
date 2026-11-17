@@ -9,9 +9,14 @@ import UserProfileDropdown from '../../components/navigation/UserProfileDropdown
 import NotificationBell from '../../components/navigation/NotificationBell';
 import { resolverUrlImagen } from '../../utils/imagenes';
 import { formatearFecha } from '../../utils/fechas';
-import { formatearEstadoReparacion, obtenerColorBadgeEstado } from '../../utils/repairStatus';
+import {
+  formatearEstadoReparacion,
+  obtenerColorBadgeEstado,
+  obtenerResumenCortoBitacora
+} from '../../utils/repairStatus';
 import CargarDiagnosticoModal from '../../components/workshop/CargarDiagnosticoModal';
 import CambiarEstadoModal from '../../components/workshop/CambiarEstadoModal';
+import DetalleBitacoraModal from '../../components/workshop/DetalleBitacoraModal';
 import logoEmpresa from '../../assets/img/itemLogoVentana.png';
 
 import { API_BASE_URL } from '../../config/api';
@@ -28,6 +33,8 @@ export default function TecnicoReparacionDetalle() {
   // Modales operativos
   const [modalDiagnosticoAbierto, setModalDiagnosticoAbierto] = useState(false);
   const [modalEstadoAbierto, setModalEstadoAbierto] = useState(false);
+  const [alertaBloqueo, setAlertaBloqueo] = useState(null);
+  const [registroInspeccion, setRegistroInspeccion] = useState(null);
 
   // Auto-limpieza de mensajes tras 15 segundos (Regla de UX)
   useEffect(() => {
@@ -75,6 +82,64 @@ export default function TecnicoReparacionDetalle() {
   const handleCambioEstadoExitoso = (msg) => {
     setSuccessMessage(msg || 'Estado operativo actualizado con éxito.');
     cargarDetalle();
+  };
+
+  // Manejador preventivo para abrir modal de diagnóstico con validación de recepción y deuda
+  const handleIntentarAbrirDiagnostico = () => {
+    if (!reparacion) return;
+
+    const etapaNormalizada = String(reparacion.etapa || '')
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\s\-]+/g, '_');
+
+    // 1. Guard Rail: Dispositivo físico no recepcionado en el local
+    if (etapaNormalizada === 'ESPERANDO_DISPOSITIVO' || etapaNormalizada.includes('ESPERANDO_DISP')) {
+      setAlertaBloqueo({
+        tipo: 'SIN_RECEPCION',
+        icono: '📦',
+        titulo: 'Dispositivo No Recepcionado en el Local',
+        mensaje:
+          'El dispositivo físico no está en el local, no se registró su recepción física. Para continuar el proceso de diagnóstico, primero debes registrar la recepción del equipo.',
+        accionTexto: 'Registrar Recepción',
+        accionIcono: '📥',
+        onAccion: () => {
+          setAlertaBloqueo(null);
+          navigate('/tecnico/caja/recepcionar-dispositivo', {
+            state: { terminoBusqueda: reparacion.codigo_sec || reparacion.codigo_seguridad || '' }
+          });
+        }
+      });
+      return;
+    }
+
+    // 2. Guard Rail: Deuda del costo de diagnóstico pendiente de cobro
+    const costoDiag = reparacion.costo_diagnostico || 5000;
+    const debeDiagnostico =
+      reparacion.debe_diagnostico === true ||
+      String(reparacion.estado_pago || '').toUpperCase() === 'PENDIENTE' ||
+      (reparacion.diagnostico_abonado === false && reparacion.id_venta);
+
+    if (debeDiagnostico) {
+      setAlertaBloqueo({
+        tipo: 'DEUDA_DIAGNOSTICO',
+        icono: '💳',
+        titulo: 'Deuda de Diagnóstico Pendiente',
+        mensaje: `No puedes diagnosticar este dispositivo porque registra una deuda del costo de diagnóstico ($${Number(costoDiag).toLocaleString('es-AR')} ARS). Primero haz cobrar la deuda para habilitar la orden de trabajo.`,
+        accionTexto: 'Cobrar Deuda en Caja',
+        accionIcono: '💰',
+        onAccion: () => {
+          setAlertaBloqueo(null);
+          navigate('/tecnico/caja/cobros', {
+            state: { busquedaExacta: reparacion.codigo_sec || reparacion.codigo_seguridad || '' }
+          });
+        }
+      });
+      return;
+    }
+
+    setModalDiagnosticoAbierto(true);
   };
 
   if (cargando) {
@@ -211,9 +276,14 @@ export default function TecnicoReparacionDetalle() {
                 </h2>
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-1">
                   <span>Tipo: <strong className="text-slate-200">{disp?.tipo || 'Dispositivo'}</strong></span>
-                  {disp?.numero_serie && (
-                    <span>&bull; S/N: <strong className="text-cyan-400 font-mono">{disp.numero_serie}</strong></span>
-                  )}
+                  {(() => {
+                    const nroSerieLimpio = String(disp?.numero_serie || '')
+                      .replace(/^s\/?n:?\s*/i, '')
+                      .trim();
+                    return nroSerieLimpio ? (
+                      <span>&bull; N. Serie: <strong className="text-cyan-400 font-mono">{nroSerieLimpio}</strong></span>
+                    ) : null;
+                  })()}
                   {reparacion?.codigo_sec && (
                     <span>&bull; Cód. Retiro: <strong className="text-purple-400 font-mono">{reparacion.codigo_sec}</strong></span>
                   )}
@@ -226,7 +296,7 @@ export default function TecnicoReparacionDetalle() {
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setModalDiagnosticoAbierto(true)}
+                  onClick={handleIntentarAbrirDiagnostico}
                   className="px-4 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -477,45 +547,97 @@ export default function TecnicoReparacionDetalle() {
                 <p className="text-xs text-slate-400">No hay eventos registrados en la bitácora aún.</p>
               </div>
             ) : (
-              <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-700">
-                {bitacora.map((item, idx) => {
-                  const estadoNombre = item.estado_nombre || item.estado_alcanzado_nombre || 'Evento registrado';
+              <div className="relative pl-7 space-y-6 before:content-[''] before:absolute before:left-2 before:top-3 before:bottom-3 before:w-[2px] before:bg-gradient-to-b before:from-cyan-500/40 before:via-slate-700 before:to-slate-800">
+                {(() => {
+                  const indiceActualBitacora = bitacora.reduce((ultimoIdx, itemActual, idxActual, arr) => {
+                    const idAct = Number(itemActual?.id_bitacora);
+                    const idUlt = Number(arr[ultimoIdx]?.id_bitacora);
+                    if (!Number.isNaN(idAct) && !Number.isNaN(idUlt) && idAct !== idUlt) {
+                      return idAct > idUlt ? idxActual : ultimoIdx;
+                    }
+                    return idxActual;
+                  }, 0);
+
+                  return bitacora.map((item, idx) => {
+                    const esUltimo = idx === indiceActualBitacora;
+                    const regAnterior = idx > 0 ? bitacora[idx - 1] : null;
+                    const estadoAnterior =
+                      regAnterior?.estado_nombre ||
+                      regAnterior?.estado_alcanzado_nombre ||
+                      regAnterior?.estado_alcanzado ||
+                      null;
+                    const estadoNombre = item.estado_nombre || item.estado_alcanzado_nombre || 'Evento registrado';
+                    const resumenEjecutivo = obtenerResumenCortoBitacora(item, estadoAnterior);
+
                   return (
                     <div key={item.id_bitacora || idx} className="relative group">
                       {/* Nodo del Timeline */}
-                      <span className="absolute -left-[27px] top-1.5 w-3.5 h-3.5 rounded-full bg-[#1E293B] border-2 border-cyan-400 group-hover:scale-125 transition-transform" />
+                      <span
+                        className={`absolute -left-[25px] top-2.5 w-3.5 h-3.5 rounded-full border-2 transition-all ${
+                          esUltimo
+                            ? 'bg-cyan-400 border-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.6)] scale-110 ring-4 ring-cyan-500/20'
+                            : 'bg-slate-900 border-slate-600 group-hover:border-slate-400'
+                        }`}
+                      />
 
-                      <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-2 hover:border-slate-700 transition-colors">
+                      <div
+                        className={`border rounded-xl p-4 space-y-2 transition-colors ${
+                          esUltimo
+                            ? 'bg-slate-900/90 border-cyan-500/35 shadow-md'
+                            : 'bg-slate-900/50 border-slate-800/90 hover:border-slate-700'
+                        }`}
+                      >
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold tracking-tight border ${obtenerColorBadgeEstado(
-                              estadoNombre
-                            )}`}
-                          >
-                            {formatearEstadoReparacion(estadoNombre)}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-md text-[11px] font-mono font-semibold tracking-tight border ${obtenerColorBadgeEstado(
+                                estadoNombre,
+                                esUltimo
+                              )}`}
+                            >
+                              {formatearEstadoReparacion(estadoNombre)}
+                            </span>
+                            {esUltimo && (
+                              <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
+                                Estado actual
+                              </span>
+                            )}
+                          </div>
 
                           <span className="text-[11px] font-mono text-slate-400">
                             {item.fecha_hora_display || item.fecha_hora || 'Fecha no registrada'}
                           </span>
                         </div>
 
-                        {item.comentario && (
-                          <p className="text-xs sm:text-sm text-slate-200 font-sans leading-relaxed">
-                            {item.comentario}
-                          </p>
-                        )}
+                        <p className="text-xs sm:text-sm text-slate-200 font-medium font-sans leading-relaxed">
+                          {resumenEjecutivo}
+                        </p>
 
-                        {item.usuario && (
-                          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
-                            <span>Registrado por:</span>
-                            <span className="text-cyan-400 font-semibold">{item.usuario}</span>
-                          </div>
-                        )}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                          {item.usuario || item.tecnico ? (
+                            <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
+                              <span>Registrado por:</span>
+                              <span className="text-slate-200 font-semibold">{item.usuario || item.tecnico}</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] font-mono text-slate-500">Evento de sistema</span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setRegistroInspeccion(item)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-slate-800/90 hover:bg-cyan-500/15 text-cyan-400 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/40 transition-all cursor-pointer"
+                            title="Inspeccionar análisis completo de este evento, evidencias fotográficas y pagos"
+                          >
+                            <span>🔍</span>
+                            <span>Inspeccionar análisis</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
-                })}
+                  });
+                })()}
               </div>
             )}
           </div>
@@ -534,6 +656,59 @@ export default function TecnicoReparacionDetalle() {
           onClose={() => setModalEstadoAbierto(false)}
           reparacion={reparacion}
           onSuccess={handleCambioEstadoExitoso}
+        />
+
+        {/* Modal Interactivo de Bloqueo Preventivo (Deuda o Sin Recepción Física) */}
+        <AnimatePresence>
+          {alertaBloqueo && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                transition={{ duration: 0.2 }}
+                className="bg-[#1E293B] border border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 text-center"
+              >
+                <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-3xl shadow-[0_0_20px_rgba(245,158,11,0.2)]">
+                  {alertaBloqueo.icono || '⚠️'}
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg font-bold text-white tracking-wide">
+                    {alertaBloqueo.titulo}
+                  </h3>
+                  <p className="text-sm text-slate-300 leading-relaxed font-sans">
+                    {alertaBloqueo.mensaje}
+                  </p>
+                </div>
+                <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setAlertaBloqueo(null)}
+                    className="w-full sm:w-1/2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition-colors"
+                  >
+                    Entendido / Volver
+                  </button>
+                  <button
+                    type="button"
+                    onClick={alertaBloqueo.onAccion}
+                    className="w-full sm:w-1/2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-all shadow-[0_0_15px_rgba(245,158,11,0.35)] flex items-center justify-center gap-2"
+                  >
+                    <span>{alertaBloqueo.accionIcono}</span>
+                    <span>{alertaBloqueo.accionTexto}</span>
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Modal de Inspección Detallada de Bitácora */}
+        <DetalleBitacoraModal
+          isOpen={Boolean(registroInspeccion)}
+          onClose={() => setRegistroInspeccion(null)}
+          registro={registroInspeccion}
+          reparacion={reparacion}
+          imagenesRespaldo={reparacion?.imagenes_recepcion || []}
         />
       </main>
     </div>

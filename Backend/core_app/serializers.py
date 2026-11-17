@@ -364,7 +364,7 @@ class NotificacionOutputSerializer(serializers.ModelSerializer):
             'marca': modelo.id_marca.nombre if modelo and modelo.id_marca else 'N/D',
             'modelo': modelo.nombre if modelo else 'N/D',
             'tipo': modelo.id_tipo_dispositivo.nombre if modelo and modelo.id_tipo_dispositivo else 'Dispositivo',
-            'numero_serie': disp.numero_serie or 'S/N',
+            'numero_serie': disp.numero_serie or 'Sin registrar',
             'estado_reparacion': reparacion.etapa if reparacion else None,
         }
 

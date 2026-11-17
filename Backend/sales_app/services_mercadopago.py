@@ -147,6 +147,12 @@ def crear_preferencia_mercadopago(
         }
 
     ahora_dt = timezone.now()
+    es_venta_reparacion = venta.reparacion_set.exists()
+
+    # Si es una venta vinculada a una reparación de taller y había quedado CANCELADA por limpieza previa, reactivarla a PENDIENTE
+    if es_venta_reparacion and venta_esta_cancelada(venta.estado_venta):
+        venta.estado_venta = EstadoVenta.PENDIENTE
+        venta.save(update_fields=['estado_venta'])
 
     log_creacion = LogSistema.objects.filter(
         modulo_origen='sales_app',
@@ -155,7 +161,7 @@ def crear_preferencia_mercadopago(
         accion="Realizar Compra Virtual (CU-18)"
     ).first()
 
-    if log_creacion and log_creacion.fecha_hora:
+    if not es_venta_reparacion and log_creacion and log_creacion.fecha_hora:
         hora_log = log_creacion.fecha_hora
         if isinstance(hora_log, datetime.datetime):
             dt_creacion = hora_log
@@ -176,8 +182,9 @@ def crear_preferencia_mercadopago(
         modulo_origen='sales_app',
         tabla_afectada='venta',
         id_registro_afectado=str(venta.id_venta),
-        accion="Preferencia Mercado Pago Creada"
-    ).first()
+        accion="Preferencia Mercado Pago Creada",
+        fecha_hora__gte=ahora_dt - datetime.timedelta(minutes=20)
+    ).order_by('-id_log').first()
 
     if log_pref and log_pref.detalle:
         partes = log_pref.detalle.split('|')
@@ -473,12 +480,73 @@ def procesar_webhook_mercadopago(
     from sales_app.services import (
         evaluar_beneficio_post_compra,
         generar_comprobante_fiscal,
-        enviar_correo_confirmacion_compra
+        enviar_correo_confirmacion_compra,
+        enviar_correo_confirmacion_diagnostico
     )
+    from workshop_app.models import BitacoraReparacion
+
+    def _sincronizar_reparaciones_tras_pago_mp(venta_obj: Venta, pago_obj: Pago, monto_num: Decimal, ruta_factura_pdf: str | None) -> bool:
+        reps_vinculadas = list(venta_obj.reparacion_set.all())
+        if not reps_vinculadas:
+            return False
+        for rep in reps_vinculadas:
+            try:
+                etapa_rep = str(rep.etapa or '').strip().upper()
+                if etapa_rep == 'ESPERANDO_PAGO_DIAGNOSTICO':
+                    rep.etapa = 'ESPERANDO_DIAGNOSTICO'
+                    rep.save(update_fields=['etapa'])
+                    estado_alc = 2
+                    comentario_bit = (
+                        f"Transacción online: Abono de costo de diagnóstico (${monto_num:,.2f}) acreditado vía Mercado Pago.\n"
+                        f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                        f"Cambio de etapa: El equipo avanza automáticamente a 'Esperando Diagnóstico'."
+                    )
+                elif etapa_rep == 'ESPERANDO_DISPOSITIVO':
+                    estado_alc = 1
+                    comentario_bit = (
+                        f"Transacción online: Abono de costo de diagnóstico (${monto_num:,.2f}) acreditado vía Mercado Pago.\n"
+                        f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                        f"Estado actual: Pendiente de recepción física del equipo en mostrador."
+                    )
+                else:
+                    ult = rep.bitacorareparacion_set.order_by('-id_bitacora').first()
+                    estado_alc = ult.estado_alcanzado if ult else 2
+                    comentario_bit = (
+                        f"Transacción online: Abono de ${monto_num:,.2f} acreditado vía Mercado Pago."
+                    )
+
+                BitacoraReparacion.objects.create(
+                    id_reparacion=rep,
+                    id_usuario=venta_obj.id_usuario,
+                    fecha_hora=timezone.now(),
+                    estado_alcanzado=estado_alc,
+                    comentario=comentario_bit
+                )
+                BitacoraReparacion.objects.create(
+                    id_reparacion=rep,
+                    id_usuario=venta_obj.id_usuario,
+                    fecha_hora=timezone.now(),
+                    estado_alcanzado=estado_alc,
+                    comentario=(
+                        f"Comprobante fiscal emitido: N° 0001-{pago_obj.id_pago:08d} por concepto de 'Pago de Diagnóstico' (${monto_num:,.2f}).\n"
+                        f"Archivo: Factura archivada en el sistema."
+                    )
+                )
+                enviar_correo_confirmacion_diagnostico(
+                    reparacion=rep,
+                    pago=pago_obj,
+                    ruta_pdf=ruta_factura_pdf
+                )
+            except Exception as exc_rep_mp:
+                logger.warning("[Webhook MP Taller] Advertencia al actualizar reparación vinculada: %s", exc_rep_mp)
+        return True
 
     payment_id = None
     if data.get("data") and isinstance(data["data"], dict):
         payment_id = data["data"].get("id")
+
+    if not payment_id and data.get("simular_venta_id"):
+        payment_id = f"SIMULADO-{data.get('simular_venta_id')}"
 
     if not payment_id:
         payment_id = query_params.get("data.id") or query_params.get("id")
@@ -503,7 +571,11 @@ def procesar_webhook_mercadopago(
             return {"status": "error", "motivo": f"Venta simulada {payment_id} no encontrada"}
 
         if venta_esta_cancelada(venta.estado_venta):
-            return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
+            if venta.reparacion_set.exists():
+                venta.estado_venta = EstadoVenta.PENDIENTE
+                venta.save(update_fields=['estado_venta'])
+            else:
+                return {"status": "ignored_cancelled", "venta_id": venta.id_venta}
 
         medio_pago_mp = _obtener_o_crear_medio_pago_mp()
         subtotal_v = Decimal(str(venta.monto_subtotal or '0.00'))
@@ -543,7 +615,8 @@ def procesar_webhook_mercadopago(
 
             try:
                 ruta_pdf = generar_comprobante_fiscal(pago, venta)
-                if venta.id_usuario and getattr(venta.id_usuario, 'email', None):
+                es_taller = _sincronizar_reparaciones_tras_pago_mp(venta, pago, monto_pagado, ruta_pdf)
+                if not es_taller and venta.id_usuario and getattr(venta.id_usuario, 'email', None):
                     enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
             except Exception as e:
                 logger.warning(f"[Webhook MP Simulado] Advertencia al generar comprobante: {e}")
@@ -646,7 +719,9 @@ def procesar_webhook_mercadopago(
 
             try:
                 ruta_pdf = generar_comprobante_fiscal(pago, venta)
-                enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
+                es_taller = _sincronizar_reparaciones_tras_pago_mp(venta, pago, monto_pagado, ruta_pdf)
+                if not es_taller:
+                    enviar_correo_confirmacion_compra(venta=venta, pago=pago, ruta_pdf=ruta_pdf)
             except Exception as e:
                 logger.warning("[Webhook MP] Advertencia al generar comprobante o enviar correo: %s", e)
 

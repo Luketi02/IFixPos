@@ -1284,6 +1284,53 @@ class ReporteSatisfaccionApi(APIView):
         return Response(output_serializer.data, status=status.HTTP_200_OK)
 
 
+class AbonarDiagnosticoReparacionApi(APIView):
+    """
+    Permite al cliente abonar desde la plataforma el costo del primer diagnóstico
+    de una reparación que se encuentra en 'ESPERANDO_PAGO_DIAGNOSTICO' o 'ESPERANDO_DISPOSITIVO'.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id_reparacion: int):
+        from rest_framework.exceptions import (
+            PermissionDenied as DRFPermissionDenied,
+            NotFound as DRFNotFound,
+            ValidationError as DRFValidationError
+        )
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from workshop_app.serializers import AbonarDiagnosticoClienteInputSerializer
+        from workshop_app.services import abonar_diagnostico_reparacion_cliente
+
+        serializer = AbonarDiagnosticoClienteInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            resultado = abonar_diagnostico_reparacion_cliente(
+                usuario_ejecutor=request.user,
+                id_reparacion=id_reparacion,
+                datos_validados=serializer.validated_data
+            )
+        except DRFNotFound as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        except DRFPermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except (DRFValidationError, DjangoValidationError) as e:
+            err_msg = getattr(e, 'detail', None) or (e.messages if hasattr(e, 'messages') else [str(e)])
+            return Response(
+                {"error": err_msg[0] if isinstance(err_msg, list) and len(err_msg) == 1 else err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                "mensaje": "Pago de diagnóstico acreditado con éxito. Tu dispositivo ya se encuentra en fila para evaluación técnica.",
+                **resultado
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+
 
 
 

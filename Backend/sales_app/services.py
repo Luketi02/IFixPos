@@ -559,11 +559,61 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
                     Paragraph(f"-{ben['por_desc']:.1f}%", estilo_td_num),
                     Paragraph("Bonificado", estilo_td_num),
                 ])
+
+            # Si la venta corresponde al cobro de diagnóstico de una reparación (o no tiene productos de catálogo)
+            rep_asoc = operacion.reparacion_set.select_related(
+                'id_dispositivo',
+                'id_dispositivo__id_modelo',
+                'id_dispositivo__id_modelo__id_marca'
+            ).first()
+            if rep_asoc:
+                disp = rep_asoc.id_dispositivo
+                marca_nombre = getattr(getattr(getattr(disp, 'id_modelo', None), 'id_marca', None), 'nombre', '') or ''
+                modelo_nombre = getattr(getattr(disp, 'id_modelo', None), 'nombre', '') or ''
+                sn = getattr(disp, 'numero_serie', '') or ''
+                disp_str = f"{marca_nombre} {modelo_nombre}".strip() or "Dispositivo"
+                if sn:
+                    disp_str += f" (N. Serie: {sn})"
+                concepto_diag = f"Pago de Diagnóstico Técnico - {disp_str}"
+                filas_items.append([
+                    Paragraph(concepto_diag, estilo_td),
+                    Paragraph("1", estilo_td),
+                    Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
+                    Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
+                ])
+            elif len(filas_items) == 1:
+                filas_items.append([
+                    Paragraph(f"Cobro de Venta #{operacion.id_venta}", estilo_td),
+                    Paragraph("1", estilo_td),
+                    Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
+                    Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
+                ])
         elif hasattr(operacion, 'id_reparacion'):
             disp_info = "Dispositivo en Taller"
             if getattr(operacion, 'id_dispositivo', None):
                 disp = operacion.id_dispositivo
-                disp_info = f"{getattr(disp, 'marca', '')} {getattr(disp, 'modelo', '')}".strip() or "Dispositivo"
+                marca_nombre = getattr(getattr(getattr(disp, 'id_modelo', None), 'id_marca', None), 'nombre', '') or ''
+                modelo_nombre = getattr(getattr(disp, 'id_modelo', None), 'nombre', '') or ''
+                sn = getattr(disp, 'numero_serie', '') or ''
+                disp_info = f"{marca_nombre} {modelo_nombre}".strip() or f"{getattr(disp, 'marca', '')} {getattr(disp, 'modelo', '')}".strip() or "Dispositivo"
+                if sn:
+                    disp_info += f" (N. Serie: {sn})"
+
+            # Verificar si existió un pago previo de diagnóstico para detallarlo en la factura final
+            pago_diag_previo = Pago.objects.filter(
+                id_venta__reparacion=operacion,
+                monto_pagado__gt=Decimal('0.00')
+            ).exclude(id_pago=pago.id_pago).first()
+
+            if pago_diag_previo:
+                fecha_prev = pago_diag_previo.fecha_pago.strftime('%d/%m/%Y') if pago_diag_previo.fecha_pago else ''
+                concepto_previo = f"Pago de Diagnóstico Técnico - {disp_info} (Abonado previamente el {fecha_prev})"
+                filas_items.append([
+                    Paragraph(f"<b>{concepto_previo}</b>", estilo_td),
+                    Paragraph("1", estilo_td),
+                    Paragraph(f"${pago_diag_previo.monto_pagado:,.2f}", estilo_td_num),
+                    Paragraph(f"${pago_diag_previo.monto_pagado:,.2f}", estilo_td_num),
+                ])
 
             # 1. Renglón explícito de Mano de Obra Técnica (Diagnóstico)
             diag = operacion.diagnostico_set.order_by('-id_diagnostico').first()
@@ -595,10 +645,10 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
                     Paragraph(f"${sub_ins:,.2f}", estilo_td_num),
                 ])
 
-            # Si no hubo desglose específico, renglón genérico con el monto pagado
+            # Si no hubo desglose específico, renglón de diagnóstico detallando el dispositivo
             if len(filas_items) == 1:
                 filas_items.append([
-                    Paragraph(f"Servicio Técnico y Reparación - {disp_info}", estilo_td),
+                    Paragraph(f"Pago de Diagnóstico Técnico - {disp_info}", estilo_td),
                     Paragraph("1", estilo_td),
                     Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
                     Paragraph(f"${pago.monto_pagado:,.2f}", estilo_td_num),
@@ -799,6 +849,10 @@ def registrar_cobro_operacion(
     )
 
     # Paso 5: Instanciar Pago
+    if venta_asociada:
+        # Limpiar cualquier registro transitorio en cero previo a asentar el abono real
+        Pago.objects.filter(id_venta=venta_asociada, monto_pagado=Decimal('0.00')).delete()
+
     pago = Pago.objects.create(
         id_venta=venta_asociada,
         medio_pago=medio_pago_obj,
@@ -816,20 +870,137 @@ def registrar_cobro_operacion(
             evaluar_beneficio_post_compra(venta=operacion)
         except Exception as e_post:
             logger.warning(f"[Motor Beneficios] Error post-compra en completar_pago: {e_post}")
+
+        # Si la venta corresponde al cobro de diagnóstico inicial de una reparación, actualizar etapa y bitácora
+        for rep in operacion.reparacion_set.all():
+            try:
+                from workshop_app.models import BitacoraReparacion
+                etapa_rep = str(rep.etapa or '').strip().upper()
+                if etapa_rep == 'ESPERANDO_PAGO_DIAGNOSTICO':
+                    rep.etapa = 'ESPERANDO_DIAGNOSTICO'
+                    rep.save(update_fields=['etapa'])
+                    estado_alc = 2  # ESPERANDO_DIAGNOSTICO
+                    comentario = (
+                        f"Transacción en caja: Abono de costo de diagnóstico (${monto_abonado:,.2f}) confirmado mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                        f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                        f"Cambio de etapa: El equipo avanza automáticamente a 'Esperando Diagnóstico'."
+                    )
+                elif etapa_rep == 'ESPERANDO_DISPOSITIVO':
+                    estado_alc = 1  # ESPERANDO_DISPOSITIVO
+                    comentario = (
+                        f"Transacción en caja: Abono de costo de diagnóstico (${monto_abonado:,.2f}) confirmado mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                        f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                        f"Estado actual: Pendiente de recepción física del equipo en mostrador."
+                    )
+                else:
+                    ultimo_estado = rep.bitacorareparacion_set.order_by('-id_bitacora').first()
+                    estado_alc = ultimo_estado.estado_alcanzado if ultimo_estado else 2
+                    comentario = (
+                        f"Transacción en caja: Abono de costo de diagnóstico (${monto_abonado:,.2f}) confirmado mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                        f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo)."
+                    )
+
+                BitacoraReparacion.objects.create(
+                    id_reparacion=rep,
+                    id_usuario=usuario_ejecutor,
+                    fecha_hora=timezone.now(),
+                    estado_alcanzado=estado_alc,
+                    comentario=comentario
+                )
+            except Exception as e_bit:
+                logger.warning(f"[Bitácora Reparación] Error al registrar abono diagnóstico: {e_bit}")
+
     elif isinstance(operacion, Reparacion):
-        operacion.etapa = 'PAGADO'
-        operacion.save(update_fields=['etapa', 'id_venta'])
+        etapa_actual = str(operacion.etapa).strip().upper()
+        if etapa_actual in ['PENDIENTE_PAGO', 'ESPERANDO_PAGO', 'FINALIZADO', 'FINALIZADA', 'REPARADO']:
+            operacion.etapa = 'PAGADO'
+            operacion.save(update_fields=['etapa', 'id_venta'])
+            estado_alc = 6  # Finalizada/Pagada
+            comentario_rep = (
+                f"Liquidación final de reparación (${monto_abonado:,.2f}) confirmada en caja mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                f"Cambio de etapa: Orden liquidada y lista para entrega."
+            )
+        elif etapa_actual == 'ESPERANDO_PAGO_DIAGNOSTICO':
+            operacion.etapa = 'ESPERANDO_DIAGNOSTICO'
+            operacion.save(update_fields=['etapa', 'id_venta'])
+            estado_alc = 2  # Esperando Diagnóstico
+            comentario_rep = (
+                f"Transacción en caja: Abono de costo de diagnóstico (${monto_abonado:,.2f}) confirmado mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                f"Cambio de etapa: El equipo avanza automáticamente a 'Esperando Diagnóstico'."
+            )
+        elif etapa_actual == 'ESPERANDO_DISPOSITIVO':
+            operacion.save(update_fields=['id_venta'])
+            estado_alc = 1  # Esperando Dispositivo
+            comentario_rep = (
+                f"Transacción en caja: Abono de costo de diagnóstico (${monto_abonado:,.2f}) confirmado mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}.\n"
+                f"Cobertura de diagnóstico: Pago único acreditado (solo se abona el primer diagnóstico; evaluaciones posteriores sin cargo).\n"
+                f"Estado actual: Pendiente de recepción física del equipo en mostrador."
+            )
+        else:
+            operacion.save(update_fields=['id_venta'])
+            ultimo_estado = operacion.bitacorareparacion_set.order_by('-id_bitacora').first()
+            estado_alc = ultimo_estado.estado_alcanzado if ultimo_estado else 2
+            comentario_rep = f"Cobro de ${monto_abonado:,.2f} confirmado en caja mediante {medio_pago_obj.nombre_medio_pago} por {usuario_ejecutor.email}."
+
         if venta_asociada:
             venta_asociada.estado_venta = 'PAGADO'
             venta_asociada.save(update_fields=['estado_venta'])
 
+        try:
+            from workshop_app.models import BitacoraReparacion
+            BitacoraReparacion.objects.create(
+                id_reparacion=operacion,
+                id_usuario=usuario_ejecutor,
+                fecha_hora=timezone.now(),
+                estado_alcanzado=estado_alc,
+                comentario=comentario_rep
+            )
+        except Exception as e_bit:
+            logger.warning(f"[Bitácora Reparación] Error al registrar bitácora: {e_bit}")
+
     # Paso 6: Disparar automáticamente comprobante fiscal (CU-20)
     ruta_factura = generar_comprobante_fiscal(pago, operacion)
+
+    # Asentar la emisión de la factura fiscal en la Bitácora de la Reparación
+    try:
+        from workshop_app.models import BitacoraReparacion
+        reps_para_factura = list(operacion.reparacion_set.all()) if isinstance(operacion, Venta) else ([operacion] if isinstance(operacion, Reparacion) else [])
+        for r_fact in reps_para_factura:
+            ult_bit = r_fact.bitacorareparacion_set.order_by('-id_bitacora').first()
+            est_bit = ult_bit.estado_alcanzado if ult_bit else 2
+            BitacoraReparacion.objects.create(
+                id_reparacion=r_fact,
+                id_usuario=usuario_ejecutor,
+                fecha_hora=timezone.now(),
+                estado_alcanzado=est_bit,
+                comentario=f"Comprobante fiscal emitido: N° 0001-{pago.id_pago:08d} por concepto de 'Pago de Diagnóstico' (${monto_abonado:,.2f}). Factura archivada en el sistema."
+            )
+    except Exception as exc_bit_pdf:
+        logger.warning(f"[Bitácora Factura] Advertencia al asentar comprobante: {exc_bit_pdf}")
+
+    # Despacho de Correo Electrónico especializado según el tipo de operación
     if isinstance(operacion, Venta):
-        try:
-            enviar_correo_confirmacion_compra(venta=operacion, pago=pago, ruta_pdf=ruta_factura)
-        except Exception as e:
-            logger.warning("[Cobro Venta] Advertencia al despachar correo de confirmación: %s", e)
+        reps_diag = list(operacion.reparacion_set.all())
+        if reps_diag:
+            for rep_diag in reps_diag:
+                try:
+                    enviar_correo_confirmacion_diagnostico(reparacion=rep_diag, pago=pago, ruta_pdf=ruta_factura)
+                except Exception as e_diag:
+                    logger.warning("[Cobro Diagnóstico] Error al despachar correo de taller: %s", e_diag)
+        else:
+            try:
+                enviar_correo_confirmacion_compra(venta=operacion, pago=pago, ruta_pdf=ruta_factura)
+            except Exception as e:
+                logger.warning("[Cobro Venta] Advertencia al despachar correo de confirmación de compra: %s", e)
+
+    elif isinstance(operacion, Reparacion):
+        etapa_post = str(operacion.etapa).strip().upper()
+        if etapa_post in ('ESPERANDO_DIAGNOSTICO', 'ESPERANDO_DISPOSITIVO'):
+            try:
+                enviar_correo_confirmacion_diagnostico(reparacion=operacion, pago=pago, ruta_pdf=ruta_factura)
+            except Exception as e_diag:
+                logger.warning("[Cobro Diagnóstico] Error al despachar correo de taller: %s", e_diag)
 
     # Auditoría en LogSistema
     tipo_op = "Venta" if isinstance(operacion, Venta) else "Reparación"
@@ -1500,20 +1671,22 @@ def limpiar_ventas_pendientes_expiradas(minutos_limite: Optional[int] = None) ->
     fecha_hoy = ahora.date()
     umbral = ahora - datetime.timedelta(minutes=minutos_limite)
 
-    # 1. Consulta única por fecha anterior o marca temporal vencida
+    # 1. Consulta única por fecha anterior o marca temporal vencida (excluyendo ventas vinculadas a reparaciones de taller)
     ids_vencidas = set(
         Venta.objects.filter(
-            estado_venta__iexact='PENDIENTE'
+            estado_venta__iexact='PENDIENTE',
+            reparacion__isnull=True
         ).filter(
             Q(fecha_venta__lt=fecha_hoy) |
             Q(fecha_hora_creacion__isnull=False, fecha_hora_creacion__lte=umbral)
         ).values_list('id_venta', flat=True)
     )
 
-    # 2. Respaldo en lote solo para ventas de hoy sin fecha_hora_creacion
+    # 2. Respaldo en lote solo para ventas de hoy sin fecha_hora_creacion (excluyendo reparaciones)
     ventas_sin_ts = list(
         Venta.objects.filter(
             estado_venta__iexact='PENDIENTE',
+            reparacion__isnull=True,
             fecha_venta__gte=fecha_hoy,
             fecha_hora_creacion__isnull=True
         ).values_list('id_venta', 'fecha_venta')
@@ -1805,6 +1978,220 @@ def enviar_correo_confirmacion_compra(
         modulo_origen="sales_app",
         tabla_afectada="venta",
         id_registro_afectado=str(venta.id_venta),
+        id_usuario=usuario
+    )
+
+
+def enviar_correo_confirmacion_diagnostico(
+    *,
+    reparacion: Reparacion,
+    pago: Pago,
+    ruta_pdf: Optional[str] = None,
+    email_destinatario: Optional[str] = None
+) -> None:
+    """
+    Despacha un correo electrónico especializado al cliente tras el abono de la tarifa de diagnóstico técnico:
+    - Notifica formalmente que el abono fue acreditado exitosamente.
+    - Informa que su dispositivo ya se encuentra formalmente ingresado en taller y listo para recibir el diagnóstico del técnico.
+    - Detalla la ficha técnica del equipo (Marca, Modelo, Número de Serie o IMEI, Código de Reparación y Falla reportada).
+    - Adjunta el comprobante / factura fiscal en formato PDF.
+    - Asienta la notificación en Notificacion y auditoría en LogSistema.
+    """
+    from core_app.selectors import obtener_email_emisor
+    from core_app.models import Notificacion, ConfiguracionSistema, LogSistema
+    from core_app.correos import despachar_correo_en_commit
+
+    usuario = getattr(reparacion.id_dispositivo, 'id_usuario', None) or reparacion.id_usuario
+    email_destino = email_destinatario
+
+    if not email_destino or '@' not in email_destino:
+        if usuario and getattr(usuario, 'email', None) and usuario.email != 'S/N' and '@' in usuario.email:
+            email_destino = usuario.email
+        elif pago and pago.detalle and 'Email:' in pago.detalle:
+            try:
+                partes = pago.detalle.split('Email:')
+                posible_email = partes[1].split('|')[0].strip()
+                if '@' in posible_email:
+                    email_destino = posible_email
+            except Exception:
+                pass
+
+    if not email_destino or '@' not in email_destino:
+        return
+
+    # Extraer datos de la empresa emisora
+    configs = {
+        c.clave: c.valor
+        for c in ConfiguracionSistema.objects.filter(
+            clave__in=['nombreLocal', 'direccionLocal', 'telefonoLocal', 'emailLocal']
+        )
+    }
+    nombre_local = configs.get('nombreLocal') or 'IFixPos'
+    direccion_local = _resolver_direccion_comercio(configs)
+    telefono_local = configs.get('telefonoLocal') or ''
+
+    # Nombre del cliente
+    perfil = getattr(usuario, 'perfilusuario', None)
+    nombre_cliente = f"{perfil.nombre or ''} {perfil.apellido or ''}".strip() if perfil else (usuario.email if usuario else 'Cliente')
+    if not nombre_cliente:
+        nombre_cliente = 'Cliente'
+
+    # Datos del dispositivo
+    disp = reparacion.id_dispositivo
+    marca = getattr(getattr(getattr(disp, 'id_modelo', None), 'id_marca', None), 'nombre', '') or ''
+    modelo = getattr(getattr(disp, 'id_modelo', None), 'nombre', '') or ''
+    nombre_dispositivo = f"{marca} {modelo}".strip() or "Dispositivo"
+    numero_serie = getattr(disp, 'numero_serie', '') or 'Sin registrar'
+    codigo_orden = reparacion.codigo_sec or f"REP-{reparacion.id_reparacion}"
+    falla_declarada = reparacion.desc_cliente or 'Revisión técnica general'
+    total_abonado = pago.monto_pagado
+    medio_nombre = pago.medio_pago.nombre_medio_pago if pago.medio_pago else "Efectivo"
+    fecha_fmt = (pago.fecha_pago or timezone.now().date()).strftime('%d/%m/%Y')
+
+    cuerpo_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0f19; color: #e2e8f0; margin: 0; padding: 24px;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #0f172a; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div style="background: linear-gradient(135deg, #06b6d4, #3b82f6); padding: 24px 32px; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">¡Abono de Diagnóstico Confirmado!</h1>
+          <p style="color: #e0f2fe; margin: 6px 0 0 0; font-size: 13px;">{nombre_local} • Taller y Servicio Técnico</p>
+        </div>
+        <div style="padding: 28px 32px;">
+          <p style="font-size: 15px; color: #f8fafc; margin-top: 0;">Hola, <b>{nombre_cliente}</b>:</p>
+          <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">
+            Te confirmamos que el pago de la tarifa de diagnóstico técnico por un monto de <b style="color: #06b6d4; font-size: 15px;">${total_abonado:,.2f}</b> ha sido acreditado exitosamente.
+          </p>
+          <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">
+            Tu dispositivo ya se encuentra formalmente ingresado en nuestro taller y <b>listo para recibir el diagnóstico del técnico especialista</b>. En breve comenzará su revisión y te enviaremos la evaluación técnica completa junto con el presupuesto de reparación.
+          </p>
+
+          <div style="background-color: #082f49; border: 1px solid #0284c7; padding: 18px; border-radius: 12px; margin: 20px 0; text-align: center;">
+            <p style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 1px; font-weight: bold;">🛡️ Código de Reparación y Seguimiento</p>
+            <p style="margin: 0; font-size: 28px; font-family: monospace; font-weight: bold; color: #ffffff; letter-spacing: 3px;">{codigo_orden}</p>
+            <p style="margin: 10px 0 0 0; font-size: 13px; color: #bae6fd; line-height: 1.5;">
+              Conserva este código para consultar el estado de tu equipo en cualquier momento desde nuestra plataforma o en nuestra sucursal.
+            </p>
+          </div>
+
+          <div style="margin: 24px 0;">
+            <p style="font-size: 12px; text-transform: uppercase; color: #64748b; font-weight: bold; margin-bottom: 8px; letter-spacing: 0.5px;">Ficha del Dispositivo en Taller</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; background-color: #1e293b; border-radius: 8px; overflow: hidden;">
+              <tbody>
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #94a3b8; font-weight: bold; width: 40%;">Equipo:</td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #f1f5f9; font-weight: 600;">{nombre_dispositivo}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #94a3b8; font-weight: bold;">N. Serie:</td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #38bdf8; font-family: monospace;">{numero_serie}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #94a3b8; font-weight: bold;">Falla / Síntoma Reportado:</td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #f1f5f9;">{falla_declarada}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #94a3b8; font-weight: bold;">Medio de Pago:</td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #334155; color: #f1f5f9;">{medio_nombre}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 14px; color: #94a3b8; font-weight: bold;">Monto Abonado:</td>
+                  <td style="padding: 10px 14px; color: #10b981; font-weight: bold; font-family: monospace;">${total_abonado:,.2f}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="background-color: #1e293b; padding: 14px 18px; border-radius: 10px; font-size: 12px; color: #94a3b8; margin-top: 20px;">
+            <p style="margin: 0 0 4px 0;"><b>Sede Central:</b> {direccion_local}</p>
+            <p style="margin: 0;"><b>Adjunto:</b> Encontrarás tu Factura / Comprobante Fiscal en formato PDF adjunta a este correo para tu control y respaldo.</p>
+          </div>
+
+          <div style="margin-top: 24px; padding: 16px; background-color: #082f49; border: 1px solid #0284c7; border-radius: 12px; text-align: center;">
+            <p style="margin: 0; font-size: 14px; color: #38bdf8; font-weight: bold;">
+              ¡Muchas gracias por confiar en nuestro servicio técnico!
+            </p>
+            <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">
+              Cuidamos tu tecnología en cada paso del proceso.
+            </p>
+          </div>
+
+          <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #1e293b; text-align: center; font-size: 11px; color: #64748b;">
+            <p style="margin: 0;">{nombre_local}{(' • Tel: ' + telefono_local) if telefono_local else ''}</p>
+            <p style="margin: 4px 0 0 0;">Mensaje generado automáticamente por el sistema IFixPos.</p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+
+    cuerpo_txt = (
+        f"¡Abono de Diagnóstico Confirmado en {nombre_local}!\n\n"
+        f"Hola, {nombre_cliente}:\n"
+        f"Te confirmamos que el pago de la tarifa de diagnóstico técnico por un monto de ${total_abonado:,.2f} ha sido acreditado exitosamente.\n\n"
+        f"Tu dispositivo ya se encuentra formalmente ingresado en nuestro taller y listo para recibir el diagnóstico del técnico especialista. "
+        f"Pronto recibirás la evaluación técnica detallada y el presupuesto de reparación correspondiente.\n\n"
+        f"FICHA DEL DISPOSITIVO:\n"
+        f"- Equipo: {nombre_dispositivo}\n"
+        f"- N. Serie: {numero_serie}\n"
+        f"- Código de Reparación: {codigo_orden}\n"
+        f"- Falla / Síntoma: {falla_declarada}\n"
+        f"- Medio de Pago: {medio_nombre}\n"
+        f"- Monto Abonado: ${total_abonado:,.2f}\n"
+        f"- Fecha: {fecha_fmt}\n\n"
+        f"Encontrarás tu factura oficial en formato PDF adjunta a este correo.\n\n"
+        f"¡Muchas gracias por confiar en nuestro servicio técnico! {nombre_local}.\n"
+    )
+
+    asunto = f"¡Abono Confirmado! Tu {nombre_dispositivo} está listo para diagnóstico - {nombre_local}"
+    email_emisor = obtener_email_emisor()
+    email_msg = EmailMultiAlternatives(
+        subject=asunto,
+        body=cuerpo_txt,
+        from_email=email_emisor,
+        to=[email_destino]
+    )
+    email_msg.attach_alternative(cuerpo_html, "text/html")
+
+    pdf_path_rel = ruta_pdf or pago.ruta_comprobante
+    if pdf_path_rel:
+        pdf_filename = os.path.basename(pdf_path_rel)
+        pdf_path_abs = os.path.join(settings.MEDIA_ROOT, 'facturas', pdf_filename)
+        if os.path.exists(pdf_path_abs):
+            try:
+                email_msg.attach_file(pdf_path_abs, 'application/pdf')
+            except Exception as e_att:
+                logger.warning("[Confirmación Diagnóstico] Advertencia al adjuntar archivo PDF: %s", e_att)
+
+    despachar_correo_en_commit(
+        lambda: email_msg.send(fail_silently=False),
+        contexto=f"Confirmación Diagnóstico a {email_destino}"
+    )
+
+    try:
+        Notificacion.objects.create(
+            id_usuario=usuario,
+            mensaje=f"¡Abono confirmado! Tu {nombre_dispositivo} ({codigo_orden}) ya se encuentra listo para recibir el diagnóstico del técnico.",
+            tipo="PAGO_DIAGNOSTICO_CONFIRMADO",
+            fecha_envio=timezone.now().date(),
+            leida=False
+        )
+    except Exception as exc_notif:
+        logger.warning("[Confirmación Diagnóstico] Error creando notificación interna: %s", exc_notif)
+
+    LogSistema.objects.create(
+        fecha_hora=timezone.now(),
+        accion="Envío de Factura y Confirmación de Diagnóstico",
+        detalle=(
+            f"Correo de confirmación de diagnóstico con factura PDF y código {codigo_orden} "
+            f"despachado a {email_destino} para Reparación #{reparacion.id_reparacion}."
+        )[:1000],
+        tipo="NOTIFICACION_TALLER",
+        modulo_origen="sales_app",
+        tabla_afectada="reparacion",
+        id_registro_afectado=str(reparacion.id_reparacion),
         id_usuario=usuario
     )
 

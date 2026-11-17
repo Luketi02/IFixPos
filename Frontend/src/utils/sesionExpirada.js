@@ -9,6 +9,7 @@ import axios from 'axios';
 
 export const EVENTO_SESION_EXPIRADA = 'ifixpos:sesion-expirada';
 export const EVENTO_CUENTA_CAMBIADA = 'ifixpos:cuenta-cambiada';
+export const EVENTO_TOKEN_RENOVADO = 'ifixpos:token-renovado';
 export const CLAVE_ACCESS_TOKEN = 'access_token';
 export const CLAVE_REFRESH_TOKEN = 'refresh_token';
 
@@ -70,6 +71,18 @@ export const tokenEstaExpirado = (token) => {
   }
 };
 
+/** Indica si un JWT está próximo a vencer dentro del margen de segundos indicado (por defecto 90s). */
+export const tokenProximoAExpirar = (token, margenSegundos = 90) => {
+  if (!token || typeof token !== 'string') return false;
+  try {
+    const payload = token.split('.')[1];
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' && (json.exp * 1000 - Date.now()) <= margenSegundos * 1000;
+  } catch {
+    return false;
+  }
+};
+
 const extraerDetalle = (data) => {
   if (!data) return '';
   if (typeof data === 'string') return data;
@@ -97,13 +110,21 @@ export const renovarTokenSesion = async () => {
         { withCredentials: true }
       );
 
-      const nuevosTokens = response.data?.tokens;
+      const nuevosTokens = response.data?.tokens || response.data;
       if (nuevosTokens?.access) {
         localStorage.setItem('access_token', nuevosTokens.access);
         localStorage.removeItem('token');
         if (nuevosTokens.refresh) {
           localStorage.setItem('refresh_token', nuevosTokens.refresh);
         }
+        window.dispatchEvent(
+          new CustomEvent(EVENTO_TOKEN_RENOVADO, {
+            detail: {
+              access: nuevosTokens.access,
+              refresh: nuevosTokens.refresh || refreshToken
+            }
+          })
+        );
         return nuevosTokens.access;
       }
       throw new Error('Respuesta de refresco incompleta');
@@ -133,18 +154,18 @@ export const registrarInstanciaAxiosConInterceptores = (instanciaAxios = axios) 
         (! /^https?:\/\//i.test(url) && Boolean(config?.baseURL || API_BASE_URL));
 
       if (esPeticionBackend && !PATRON_RUTA_AUTH_PUBLICA.test(url)) {
-        const yaTieneAuth = Boolean(
-          config.headers?.get?.('Authorization') ?? config.headers?.Authorization
-        );
-        if (!yaTieneAuth) {
-          const token = obtenerAccessToken();
-          if (token) {
+        const tokenVigente = obtenerAccessToken();
+        if (tokenVigente) {
+          const authHeaderActual = config.headers?.get?.('Authorization') ?? config.headers?.Authorization;
+          const tokenEnHeader = authHeaderActual ? String(authHeaderActual).replace(/^Bearer\s+/i, '').trim() : null;
+          // Si no tenía header o si el componente pasó un token en memoria desactualizado/expirado, inyectar el vigente
+          if (!authHeaderActual || (tokenEnHeader && tokenEnHeader !== tokenVigente)) {
             if (config.headers?.set) {
-              config.headers.set('Authorization', `Bearer ${token}`);
+              config.headers.set('Authorization', `Bearer ${tokenVigente}`);
             } else {
               config.headers = {
                 ...(config.headers || {}),
-                Authorization: `Bearer ${token}`
+                Authorization: `Bearer ${tokenVigente}`
               };
             }
           }

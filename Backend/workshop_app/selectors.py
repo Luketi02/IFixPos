@@ -3,7 +3,15 @@ from typing import Optional
 from datetime import date
 from django.db.models import QuerySet, Q, Prefetch
 from django.core.exceptions import ValidationError, ObjectDoesNotExist
-from workshop_app.models import Dispositivo, Reparacion, CategoriaReparacion
+from workshop_app.models import (
+    Dispositivo,
+    Reparacion,
+    CategoriaReparacion,
+    Calificacion,
+    Diagnostico,
+    BitacoraReparacion,
+    DetalleInsumoReparacion
+)
 from users_app.models import Usuario
 from catalog_app.models import ModeloDispositivo, Marca, TipoDispositivo
 
@@ -446,7 +454,8 @@ def filtrar_reparaciones(
         'id_usuario__perfilusuario',
         'id_dispositivo__id_modelo',
         'id_dispositivo__id_modelo__id_marca',
-        'id_dispositivo__id_modelo__id_tipo_dispositivo'
+        'id_dispositivo__id_modelo__id_tipo_dispositivo',
+        'id_venta'
     ).prefetch_related('categorias')
 
     # 2. Evaluación de Rol y Seguridad Innegociable
@@ -460,38 +469,61 @@ def filtrar_reparaciones(
         # Cláusula de aislamiento estricto para clientes
         qs = qs.filter(id_dispositivo__id_usuario=usuario_ejecutor)
     elif rol_codigo in ('ADMIN', 'TECNICO'):
-        # Búsqueda unificada 'q' (CU-45, Dashboard y Mostrador)
-        q_general = str(filtros.get('q') or '').strip()
-        if q_general:
-            q_filtro = (
-                Q(id_dispositivo__id_usuario__perfilusuario__dni__icontains=q_general) |
-                Q(id_dispositivo__id_usuario__perfilusuario__nombre__icontains=q_general) |
-                Q(id_dispositivo__id_usuario__perfilusuario__apellido__icontains=q_general) |
-                Q(id_dispositivo__id_usuario__email__icontains=q_general) |
-                Q(id_dispositivo__id_usuario__perfilusuario__telefono__icontains=q_general) |
-                Q(codigo_sec__icontains=q_general) |
-                Q(id_dispositivo__numero_serie__icontains=q_general) |
-                Q(id_dispositivo__id_modelo__nombre__icontains=q_general) |
-                Q(id_dispositivo__id_modelo__id_marca__nombre__icontains=q_general)
-            )
-            qs = qs.filter(q_filtro)
+        # Búsqueda unificada de texto y optimización híbrida (CU-45, CU-58, Mostrador y Taller)
+        termino_texto = str(filtros.get('q') or filtros.get('cliente_query') or '').strip()
+        tipo_criterio = str(filtros.get('tipo_criterio') or 'TODOS').strip().upper()
 
-        # Búsqueda multicriterio de cliente
-        cliente_query = str(filtros.get('cliente_query') or '').strip()
-        if cliente_query:
-            q_cliente = (
-                Q(id_dispositivo__id_usuario__perfilusuario__dni__icontains=cliente_query) |
-                Q(id_dispositivo__id_usuario__perfilusuario__nombre__icontains=cliente_query) |
-                Q(id_dispositivo__id_usuario__perfilusuario__apellido__icontains=cliente_query) |
-                Q(id_dispositivo__id_usuario__email__icontains=cliente_query) |
-                Q(id_dispositivo__id_usuario__perfilusuario__telefono__icontains=cliente_query)
-            )
-            qs = qs.filter(q_cliente)
+        if termino_texto:
+            if tipo_criterio == 'REPARACION':
+                # Búsqueda quirúrgica indexada por código de orden/reparación
+                qs = qs.filter(
+                    Q(codigo_sec__iexact=termino_texto) |
+                    Q(codigo_sec__icontains=termino_texto)
+                )
+            elif tipo_criterio == 'VENTA':
+                # Búsqueda quirúrgica por código de operación o venta asociada
+                qs = qs.filter(
+                    Q(id_venta__codigo_sec__iexact=termino_texto) |
+                    Q(id_venta__codigo_sec__icontains=termino_texto)
+                )
+            elif tipo_criterio == 'EMAIL':
+                # Búsqueda quirúrgica por correo electrónico del titular o cliente
+                qs = qs.filter(
+                    Q(id_dispositivo__id_usuario__email__iexact=termino_texto) |
+                    Q(id_dispositivo__id_usuario__email__icontains=termino_texto) |
+                    Q(id_usuario__email__iexact=termino_texto)
+                )
+            else:
+                # Modo Auto / TODOS: Si contiene '@', optimiza priorizando búsqueda por email
+                if '@' in termino_texto:
+                    qs = qs.filter(
+                        Q(id_dispositivo__id_usuario__email__icontains=termino_texto) |
+                        Q(id_usuario__email__icontains=termino_texto)
+                    )
+                else:
+                    # Búsqueda general amplia y dinámica
+                    q_filtro = (
+                        Q(id_dispositivo__id_usuario__perfilusuario__dni__icontains=termino_texto) |
+                        Q(id_dispositivo__id_usuario__perfilusuario__nombre__icontains=termino_texto) |
+                        Q(id_dispositivo__id_usuario__perfilusuario__apellido__icontains=termino_texto) |
+                        Q(id_dispositivo__id_usuario__email__icontains=termino_texto) |
+                        Q(id_dispositivo__id_usuario__perfilusuario__telefono__icontains=termino_texto) |
+                        Q(codigo_sec__icontains=termino_texto) |
+                        Q(id_venta__codigo_sec__icontains=termino_texto) |
+                        Q(id_dispositivo__numero_serie__icontains=termino_texto) |
+                        Q(id_dispositivo__id_modelo__nombre__icontains=termino_texto) |
+                        Q(id_dispositivo__id_modelo__id_marca__nombre__icontains=termino_texto)
+                    )
+                    qs = qs.filter(q_filtro)
 
-        # Filtro por técnico asignado
-        id_tecnico = filtros.get('id_tecnico')
-        if id_tecnico:
-            qs = qs.filter(id_usuario_id=id_tecnico)
+        # Filtro por técnico asignado o asignación directa al usuario ejecutor (Técnico / Taller)
+        solo_mis_asignaciones = filtros.get('solo_mis_asignaciones')
+        if solo_mis_asignaciones:
+            qs = qs.filter(id_usuario=usuario_ejecutor)
+        else:
+            id_tecnico = filtros.get('id_tecnico')
+            if id_tecnico:
+                qs = qs.filter(id_usuario_id=id_tecnico)
 
         # Filtro por código de seguridad (token de entrega)
         codigo_seguridad = str(filtros.get('codigo_seguridad') or '').strip()
@@ -917,8 +949,8 @@ ETAPAS_CIERRE_EXITOSO = [
 ]
 # Etapas activas del taller (carga de trabajo en tiempo real)
 ETAPAS_ACTIVAS_TALLER = [
-    'ESPERANDO_DIAGNOSTICO', 'EN_REPARACION', 'ESPERANDO_REPUESTOS', 'ESPERANDO_REPUESTO',
-    'Esperando Diagnóstico', 'En Reparación', 'Esperando Repuesto', 'Esperando Repuestos',
+    'ESPERANDO_DIAGNOSTICO', 'ESPERANDO_PAGO_DIAGNOSTICO', 'EN_REPARACION', 'ESPERANDO_REPUESTOS', 'ESPERANDO_REPUESTO',
+    'Esperando Diagnóstico', 'Esperando Pago de Diagnóstico', 'En Reparación', 'Esperando Repuesto', 'Esperando Repuestos',
 ]
 
 

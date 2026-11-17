@@ -147,12 +147,21 @@ def buscar_operacion_pendiente_cobro(*, identificador: str):
         raise ObjectDoesNotExist("No se encontraron operaciones pendientes.")
 
     # 1. Buscar en Venta (estado PENDIENTE)
+    q_cond_venta = (
+        Q(codigo_sec__iexact=query_str) |
+        Q(id_usuario__email__iexact=query_str) |
+        Q(reparacion__codigo_sec__iexact=query_str) |
+        Q(reparacion__id_dispositivo__id_usuario__email__iexact=query_str)
+    )
+    if query_str.isdigit():
+        q_cond_venta |= Q(id_venta=int(query_str))
+
     venta = Venta.objects.select_related(
         'id_usuario',
         'id_usuario__perfilusuario'
     ).filter(
         Q(estado_venta__iexact='PENDIENTE'),
-        Q(codigo_sec__iexact=query_str) | Q(id_usuario__email__iexact=query_str)
+        q_cond_venta
     ).order_by('-fecha_venta', '-id_venta').first()
 
     if venta:
@@ -166,19 +175,71 @@ def buscar_operacion_pendiente_cobro(*, identificador: str):
         'FINALIZADO',
         'FINALIZADA'
     ]
+    q_cond_rep = (
+        Q(codigo_sec__iexact=query_str) |
+        Q(id_usuario__email__iexact=query_str) |
+        Q(id_dispositivo__id_usuario__email__iexact=query_str)
+    )
+    if query_str.isdigit():
+        q_cond_rep |= Q(id_reparacion=int(query_str))
+
     reparacion = Reparacion.objects.select_related(
         'id_usuario',
         'id_usuario__perfilusuario',
-        'id_dispositivo'
+        'id_dispositivo',
+        'id_dispositivo__id_usuario',
+        'id_dispositivo__id_usuario__perfilusuario',
+        'id_venta'
     ).filter(
-        Q(etapa__in=etapas_pendientes) | Q(etapa__icontains='PAGO'),
-        Q(codigo_sec__iexact=query_str) | Q(id_usuario__email__iexact=query_str)
+        Q(etapa__in=etapas_pendientes) | Q(etapa__icontains='PAGO') | Q(id_venta__estado_venta__iexact='PENDIENTE'),
+        q_cond_rep
     ).order_by('-fecha_inicio', '-id_reparacion').first()
 
     if reparacion:
+        if reparacion.id_venta and str(reparacion.id_venta.estado_venta).strip().upper() == 'PENDIENTE':
+            return reparacion.id_venta
         return reparacion
 
     raise ObjectDoesNotExist("No se encontraron operaciones pendientes.")
+
+
+def obtener_operacion_pendiente_por_id(*, tipo_operacion: str, id_operacion: int):
+    """
+    CU-21: Obtiene la operación pendiente de cobro a partir de su ID físico y tipo ('Venta' o 'Reparación').
+    """
+    from django.core.exceptions import ObjectDoesNotExist
+    from sales_app.models import Venta
+    from workshop_app.models import Reparacion
+
+    tipo_norm = str(tipo_operacion or '').strip().upper()
+
+    if tipo_norm in ('VENTA', 'VENTAS'):
+        venta = Venta.objects.select_related(
+            'id_usuario',
+            'id_usuario__perfilusuario'
+        ).filter(
+            id_venta=id_operacion,
+            estado_venta__iexact='PENDIENTE'
+        ).first()
+        if venta:
+            return venta
+    elif tipo_norm in ('REPARACION', 'REPARACIÓN', 'REPARACIONES'):
+        reparacion = Reparacion.objects.select_related(
+            'id_usuario',
+            'id_usuario__perfilusuario',
+            'id_dispositivo',
+            'id_dispositivo__id_usuario',
+            'id_dispositivo__id_usuario__perfilusuario',
+            'id_venta'
+        ).filter(
+            id_reparacion=id_operacion
+        ).first()
+        if reparacion:
+            if reparacion.id_venta and str(reparacion.id_venta.estado_venta).strip().upper() == 'PENDIENTE':
+                return reparacion.id_venta
+            return reparacion
+
+    raise ObjectDoesNotExist("No se encontró la operación comercial pendiente indicada.")
 
 
 # ==============================================================================
@@ -258,7 +319,7 @@ def _construir_desglose_cobro(
                 monto_insumos += Decimal(str(ins.cantidad or 0)) * Decimal(str(ins.precio_unitario or 0))
         monto_rep = monto_diag + monto_insumos
         etapa_upper = str(getattr(reparacion, 'etapa', '') or '').upper()
-        if monto_rep == Decimal('0.00') and etapa_upper in ('NUEVO_DIAGNOSTICO', 'DIAGNOSTICADO', 'PENDIENTE'):
+        if monto_rep == Decimal('0.00') or etapa_upper in ('ESPERANDO_DISPOSITIVO', 'ESPERANDO_DIAGNOSTICO', 'NUEVO_DIAGNOSTICO', 'DIAGNOSTICADO', 'PENDIENTE'):
             concepto = 'DIAGNOSTICO_INICIAL'
             monto_diag = monto_op
         else:
@@ -401,16 +462,20 @@ def filtrar_cobros_y_pagos(
     # Las cuentas pendientes aún no poseen medio de pago liquidado en caja;
     # si se especifica un medio de pago obligatorio (ej. Efectivo), no coinciden
     if incluir_pendientes and not medio_pago:
-        # B.1. Ventas en estado PENDIENTE sin pago concretado
+        # B.1. Ventas en estado PENDIENTE sin pago concretado o con abono en cero
         qs_ventas_pend = Venta.objects.select_related(
             'id_usuario',
             'id_usuario__perfilusuario'
         ).prefetch_related(
-            'reparacion_set'
+            'reparacion_set',
+            'reparacion_set__id_dispositivo',
+            'reparacion_set__id_dispositivo__id_modelo',
+            'reparacion_set__id_dispositivo__id_modelo__id_marca'
         ).filter(
-            estado_venta__iexact='PENDIENTE',
-            pago__isnull=True
-        )
+            estado_venta__iexact='PENDIENTE'
+        ).filter(
+            Q(pago__isnull=True) | Q(pago__monto_pagado=0) | Q(pago__monto_pagado__isnull=True)
+        ).distinct()
 
         if codigo_seguridad:
             qs_ventas_pend = qs_ventas_pend.filter(
@@ -419,7 +484,10 @@ def filtrar_cobros_y_pagos(
             )
 
         if email_cliente:
-            qs_ventas_pend = qs_ventas_pend.filter(id_usuario__email__iexact=email_cliente)
+            qs_ventas_pend = qs_ventas_pend.filter(
+                Q(id_usuario__email__iexact=email_cliente) |
+                Q(reparacion__id_dispositivo__id_usuario__email__iexact=email_cliente)
+            )
 
         if fecha_desde:
             qs_ventas_pend = qs_ventas_pend.filter(fecha_venta__gte=fecha_desde)
@@ -430,10 +498,19 @@ def filtrar_cobros_y_pagos(
         for v in qs_ventas_pend:
             ventas_procesadas_ids.add(v.id_venta)
             rep = v.reparacion_set.first()
-            tipo_op = "Reparación" if rep else "Venta"
+            tipo_op = "Diagnóstico Técnico" if rep else "Venta"
             id_op = rep.id_reparacion if rep else v.id_venta
             cod_sec = (rep.codigo_sec if rep and rep.codigo_sec else v.codigo_sec) or ''
             monto_total = Decimal(str(v.monto_subtotal or '0.00')) + Decimal(str(v.costo_envio or '0.00'))
+
+            if rep:
+                disp = getattr(rep, 'id_dispositivo', None)
+                mod = getattr(disp, 'id_modelo', None)
+                marca = getattr(mod, 'id_marca', None) if mod else None
+                nombre_equipo = f"{getattr(marca, 'nombre', '')} {getattr(mod, 'nombre', '')}".strip() or "Equipo"
+                detalle_op = f"Diagnóstico inicial para {nombre_equipo} (Token: {cod_sec})"
+            else:
+                detalle_op = 'Venta pendiente de cobro en mostrador / entrega'
 
             transacciones.append({
                 'id_pago': None,
@@ -445,7 +522,7 @@ def filtrar_cobros_y_pagos(
                 'monto': monto_total,
                 'medio_pago': None,
                 'numero_operacion': None,
-                'detalle': 'Venta pendiente de cobro en mostrador / entrega',
+                'detalle': detalle_op,
                 'ruta_comprobante': None,
                 'cliente': _extraer_datos_cliente(v.id_usuario),
                 'desglose_cobro': _construir_desglose_cobro(

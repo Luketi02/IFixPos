@@ -59,7 +59,8 @@ export default function TechnicianTasksScreen() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
   const [filtro, setFiltro] = useState('Todos');
-  const [reparaciones, setReparaciones] = useState(MOCK_REPARACIONES);
+  const [soloMisAsignaciones, setSoloMisAsignaciones] = useState(true);
+  const [reparaciones, setReparaciones] = useState([]);
   const [cargando, setCargando] = useState(false);
 
   const nombreTecnico = formatearNombreConInicial(user, 'Técnico Especialista');
@@ -72,54 +73,63 @@ export default function TechnicianTasksScreen() {
   }, []);
 
   // Carga reactiva de reparaciones reales del taller
-  const cargarReparacionesTaller = useCallback(async () => {
+  const cargarReparacionesTaller = useCallback(async (forzarSoloMias = null) => {
     if (!token) return;
     setCargando(true);
+    const soloMias = forzarSoloMias !== null ? forzarSoloMias : soloMisAsignaciones;
     try {
+      const params = soloMias ? { solo_mis_asignaciones: true } : {};
       const res = await axios.get(`${API_BASE_URL}/api/workshop/reparaciones/`, {
+        params,
         headers: { Authorization: `Bearer ${token}` }
       });
       const datos = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-      if (datos.length > 0) {
-        const mapeadas = datos.map((r) => {
-          const dispNombre = r.dispositivo 
-            ? `${r.dispositivo.marca || ''} ${r.dispositivo.modelo || ''}`.trim() 
-            : (r.modelo_dispositivo || 'Equipo');
-          const clienteNombre = r.cliente 
-            ? (r.cliente.nombre || r.cliente.email) 
-            : (r.email_cliente || 'Cliente');
+      const mapeadas = datos.map((r) => {
+        const dispNombre = r.dispositivo 
+          ? `${r.dispositivo.marca || ''} ${r.dispositivo.modelo || ''}`.trim() 
+          : (r.modelo_dispositivo || 'Equipo');
+        const clienteNombre = r.cliente 
+          ? (r.cliente.nombre || r.cliente.email) 
+          : (r.email_cliente || 'Cliente');
 
-          let estadoFormateado = 'En Diagnóstico';
-          const et = String(r.etapa || '').toUpperCase();
-          if (et.includes('DIAG')) estadoFormateado = 'En Diagnóstico';
-          else if (et.includes('REPAR') || et.includes('PROCESO')) estadoFormateado = 'En Reparación';
-          else if (et.includes('INSUMO') || et.includes('REPUESTO') || et.includes('ESPERANDO')) estadoFormateado = 'Esperando Insumo';
-          else if (et.includes('FINAL') || et.includes('ENTREG')) estadoFormateado = 'Finalizada';
+        let estadoFormateado = 'En Diagnóstico';
+        const et = String(r.etapa || '').toUpperCase();
+        if (et.includes('DIAG')) estadoFormateado = 'En Diagnóstico';
+        else if (et.includes('REPAR') || et.includes('PROCESO')) estadoFormateado = 'En Reparación';
+        else if (et.includes('INSUMO') || et.includes('REPUESTO') || et.includes('ESPERANDO')) estadoFormateado = 'Esperando Insumo';
+        else if (et.includes('FINAL') || et.includes('ENTREG')) estadoFormateado = 'Finalizada';
 
-          return {
-            id: r.codigo_sec || `OT-${r.id_reparacion}`,
-            id_reparacion: r.id_reparacion,
-            dispositivo: dispNombre || 'Dispositivo Taller',
-            cliente: clienteNombre,
-            falla: r.desc_cliente || r.descripcion_problema || 'Servicio técnico integral',
-            prioridad: r.prioridad || 'Media',
-            estado: estadoFormateado,
-            etapa_raw: r.etapa,
-            fecha: r.fecha_inicio || 'Reciente'
-          };
-        });
-        setReparaciones(mapeadas);
-      }
+        return {
+          id: r.codigo_sec || `OT-${r.id_reparacion}`,
+          id_reparacion: r.id_reparacion,
+          dispositivo: dispNombre || 'Dispositivo Taller',
+          cliente: clienteNombre,
+          falla: r.desc_cliente || r.descripcion_problema || 'Servicio técnico integral',
+          prioridad: r.prioridad || 'Media',
+          estado: estadoFormateado,
+          etapa_raw: r.etapa,
+          tecnico: r.tecnico || 'Sin asignar',
+          id_tecnico: r.id_tecnico,
+          fecha: r.fecha_inicio || 'Reciente'
+        };
+      });
+      setReparaciones(mapeadas);
     } catch (_) {
       // Mantiene datos locales de cortesía si falla la conexión
+      setReparaciones(MOCK_REPARACIONES);
     } finally {
       setCargando(false);
     }
-  }, [token]);
+  }, [token, soloMisAsignaciones]);
 
   useEffect(() => {
     cargarReparacionesTaller();
   }, [cargarReparacionesTaller]);
+
+  const handleToggleSoloMias = (checked) => {
+    setSoloMisAsignaciones(checked);
+    cargarReparacionesTaller(checked);
+  };
 
   const totalDiagnostico = reparaciones.filter((r) => r.estado === 'En Diagnóstico').length;
   const totalEnProceso = reparaciones.filter((r) => r.estado === 'En Reparación' || r.estado === 'En Proceso').length;
@@ -197,10 +207,32 @@ export default function TechnicianTasksScreen() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3 self-start md:self-auto">
+              <div className="flex flex-wrap items-center gap-3 self-start md:self-auto">
+                {/* Switch Cyber-Tech: Solo mis asignaciones */}
+                <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-700/80 px-3.5 py-1.5 rounded-xl">
+                  <label htmlFor="toggle-tech-dashboard" className="flex items-center gap-2 cursor-pointer select-none">
+                    <div className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        id="toggle-tech-dashboard"
+                        type="checkbox"
+                        checked={soloMisAsignaciones}
+                        onChange={(e) => handleToggleSoloMias(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
+                    </div>
+                    <span className="text-xs font-semibold text-slate-200">
+                      {soloMisAsignaciones ? 'Solo mis asignaciones' : 'Vista global del taller'}
+                    </span>
+                  </label>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${soloMisAsignaciones ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' : 'bg-slate-700/50 text-slate-400 border-slate-600'}`}>
+                    {soloMisAsignaciones ? 'Mis Órdenes' : 'Taller Global'}
+                  </span>
+                </div>
+
                 <button
                   type="button"
-                  onClick={cargarReparacionesTaller}
+                  onClick={() => cargarReparacionesTaller()}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                   title="Actualizar datos del taller"
                 >
@@ -311,11 +343,16 @@ export default function TechnicianTasksScreen() {
               {/* Header de la Tabla y Filtros */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-700/60">
                 <div>
-                  <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                    Órdenes de Trabajo del Taller
+                  <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                    <span>Órdenes de Trabajo {soloMisAsignaciones ? 'Asignadas' : 'del Taller'}</span>
+                    <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full border ${soloMisAsignaciones ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                      {reparacionesFiltradas.length} {soloMisAsignaciones ? 'asignadas a ti' : 'en taller'}
+                    </span>
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Lista de reparaciones asignadas para revisión y ejecución técnica
+                    {soloMisAsignaciones
+                      ? 'Visualizando exclusivamente tus tareas y dispositivos asignados'
+                      : 'Visualizando todas las órdenes y equipos del taller (Modo colaborativo)'}
                   </p>
                 </div>
 
@@ -345,6 +382,7 @@ export default function TechnicianTasksScreen() {
                       <th className="py-3 px-4">Orden</th>
                       <th className="py-3 px-4">Dispositivo</th>
                       <th className="py-3 px-4">Cliente</th>
+                      {!soloMisAsignaciones && <th className="py-3 px-4">Técnico</th>}
                       <th className="py-3 px-4">Falla Reportada</th>
                       <th className="py-3 px-4">Prioridad</th>
                       <th className="py-3 px-4">Estado</th>
@@ -354,7 +392,7 @@ export default function TechnicianTasksScreen() {
                   <tbody className="divide-y divide-slate-800">
                     {reparacionesFiltradas.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-xs text-slate-400 italic">
+                        <td colSpan={soloMisAsignaciones ? 7 : 8} className="py-8 text-center text-xs text-slate-400 italic">
                           No hay órdenes de trabajo en la categoría seleccionada.
                         </td>
                       </tr>
@@ -364,6 +402,15 @@ export default function TechnicianTasksScreen() {
                           <td className="py-3.5 px-4 font-mono text-cyan-400 font-semibold">{rep.id}</td>
                           <td className="py-3.5 px-4 font-medium text-white">{rep.dispositivo}</td>
                           <td className="py-3.5 px-4 text-slate-300">{rep.cliente}</td>
+                          {!soloMisAsignaciones && (
+                            <td className="py-3.5 px-4 text-slate-300 text-xs font-mono">
+                              {rep.id_tecnico === user?.id_usuario ? (
+                                <span className="text-cyan-400 font-bold">Tú</span>
+                              ) : (
+                                rep.tecnico || 'Sin asignar'
+                              )}
+                            </td>
+                          )}
                           <td className="py-3.5 px-4 text-slate-300 max-w-xs truncate">{rep.falla}</td>
                           <td className="py-3.5 px-4">{getPriorityBadge(rep.prioridad)}</td>
                           <td className="py-3.5 px-4">
@@ -408,6 +455,11 @@ export default function TechnicianTasksScreen() {
                       <div>
                         <h3 className="font-bold text-white text-base">{rep.dispositivo}</h3>
                         <p className="text-xs text-slate-400">Cliente: {rep.cliente}</p>
+                        {!soloMisAsignaciones && (
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            Técnico: <span className="text-cyan-400 font-semibold">{rep.id_tecnico === user?.id_usuario ? 'Tú' : (rep.tecnico || 'Sin asignar')}</span>
+                          </p>
+                        )}
                       </div>
                       <p className="text-xs text-slate-300 bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/40">
                         {rep.falla}

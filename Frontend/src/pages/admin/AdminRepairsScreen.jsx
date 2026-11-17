@@ -5,6 +5,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import { resolverUrlImagen } from '../../utils/imagenes';
+import DetalleBitacoraModal from '../../components/workshop/DetalleBitacoraModal';
 
 import { API_BASE_URL } from '../../config/api';
 // Configuración visual y semántica de los estados de reparación
@@ -38,46 +39,28 @@ export default function AdminRepairsScreen() {
   const [filtroFechaDesde, setFiltroFechaDesde] = useState('');
   const [filtroFechaHasta, setFiltroFechaHasta] = useState('');
 
-  // Debounce para inputs de texto en filtrado dinámico
-  const [debouncedClienteQuery, setDebouncedClienteQuery] = useState(filtroClienteQuery);
-  const [debouncedCodigoSec, setDebouncedCodigoSec] = useState(filtroCodigoSec);
-
   // Estado del modal de detalle de reparación
   const [reparacionSeleccionada, setReparacionSeleccionada] = useState(null);
   const [detallesReparacion, setDetallesReparacion] = useState({});
   const [cargandoDetalleId, setCargandoDetalleId] = useState(null);
+  const [registroInspeccion, setRegistroInspeccion] = useState(null);
 
-  // Debounce de 300ms para evitar saturación de peticiones al escribir
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedClienteQuery(filtroClienteQuery);
-    }, 300);
-    return () => clearTimeout(handler);
-  }, [filtroClienteQuery]);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedCodigoSec(filtroCodigoSec);
-    }, 300);
-    return () => clearTimeout(handler);
-  }, [filtroCodigoSec]);
-
-  // Auto-ocultar alerta de error tras 15 segundos
+  // Auto-ocultar alerta de error tras 6 segundos (Regla 6)
   useEffect(() => {
     if (errorMessage) {
       const timer = setTimeout(() => {
         setErrorMessage('');
-      }, 15000);
+      }, 6000);
       return () => clearTimeout(timer);
     }
   }, [errorMessage]);
 
-  // Auto-ocultar toast informativo tras 15 segundos
+  // Auto-ocultar toast informativo tras 6 segundos (Regla 6)
   useEffect(() => {
     if (toastMensaje) {
       const timer = setTimeout(() => {
         setToastMensaje(null);
-      }, 15000);
+      }, 6000);
       return () => clearTimeout(timer);
     }
   }, [toastMensaje]);
@@ -122,8 +105,8 @@ export default function AdminRepairsScreen() {
 
     try {
       const params = {};
-      if (debouncedClienteQuery.trim()) params.cliente_query = debouncedClienteQuery.trim();
-      if (debouncedCodigoSec.trim()) params.codigo_seguridad = debouncedCodigoSec.trim();
+      if (filtroClienteQuery.trim()) params.cliente_query = filtroClienteQuery.trim();
+      if (filtroCodigoSec.trim()) params.codigo_seguridad = filtroCodigoSec.trim();
       if (filtroEtapa) params.etapa = filtroEtapa;
       if (filtroCategoria) params.id_categoria = filtroCategoria;
       if (filtroFechaDesde) params.fecha_desde = filtroFechaDesde;
@@ -145,18 +128,19 @@ export default function AdminRepairsScreen() {
     }
   }, [
     token,
-    debouncedClienteQuery,
-    debouncedCodigoSec,
+    filtroClienteQuery,
+    filtroCodigoSec,
     filtroEtapa,
     filtroCategoria,
     filtroFechaDesde,
     filtroFechaHasta
   ]);
 
-  // Ejecución reactiva continua del filtrado dinámico
+  // Carga inicial al montar la pantalla
   useEffect(() => {
     cargarReparaciones();
-  }, [cargarReparaciones]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // 3. Obtener radiografía completa de una reparación al seleccionarla
   const handleAbrirDetalle = async (rep) => {
@@ -218,8 +202,8 @@ export default function AdminRepairsScreen() {
         />
 
 
-        {/* Notificaciones y Alertas Flotantes */}
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none">
+        {/* Notificaciones y Alertas Flotantes en esquina inferior izquierda (Fixed, Zero CLS) */}
+        <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none">
           <AnimatePresence>
             {errorMessage && (
               <motion.div
@@ -318,7 +302,7 @@ export default function AdminRepairsScreen() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3.5">
+            <form onSubmit={(e) => { e.preventDefault(); cargarReparaciones(); }} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3.5">
               
               {/* Búsqueda por Cliente (DNI, Nombre, Email, Teléfono) */}
               <div className="lg:col-span-4 relative">
@@ -422,20 +406,28 @@ export default function AdminRepairsScreen() {
                 />
               </div>
 
-              {/* Información y estado de filtrado dinámico */}
+              {/* Botón de acción Filtrar */}
               <div className="lg:col-span-6 flex items-end">
-                <div className="w-full py-2 px-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-400 text-xs flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    Filtrado reactivo en tiempo real
-                  </span>
-                  <span className="font-mono text-cyan-400 font-semibold">
-                    {reparaciones.length} {reparaciones.length === 1 ? 'coincidencia' : 'coincidencias'}
-                  </span>
-                </div>
+                <button
+                  type="submit"
+                  disabled={cargando}
+                  className="w-full py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 font-mono"
+                >
+                  {cargando ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+                      <span>Filtrando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>⚡</span>
+                      <span>Filtrar</span>
+                    </>
+                  )}
+                </button>
               </div>
 
-            </div>
+            </form>
           </section>
 
           {/* Catálogo de Tarjetas en Grilla (Mismo formato con el que se muestran los dispositivos al Cliente) */}
@@ -572,7 +564,7 @@ export default function AdminRepairsScreen() {
 
                           {/* Número de Serie */}
                           <p className="text-[11px] font-mono text-slate-400">
-                            Serie: <span className="text-slate-200">{rep.dispositivo?.numero_serie || 'S/N'}</span>
+                            N. Serie: <span className="text-slate-200">{rep.dispositivo?.numero_serie || 'Sin registrar'}</span>
                           </p>
 
                           {/* Datos del Cliente: Solo DNI, Nombre y Apellido */}
@@ -878,6 +870,18 @@ export default function AdminRepairsScreen() {
                                 <p className="text-xs text-slate-300 mt-1 whitespace-pre-wrap">
                                   {b.comentario || 'Sin comentarios registrados.'}
                                 </p>
+
+                                <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => setRegistroInspeccion(b)}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 hover:text-cyan-300 border border-cyan-500/30 transition-all cursor-pointer shadow-sm hover:shadow-[0_0_12px_rgba(6,182,212,0.25)]"
+                                    title="Inspeccionar detalles de este evento, evidencias fotográficas y pagos"
+                                  >
+                                    <span>🔍</span>
+                                    <span>Inspeccionar detalles</span>
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           ))}
@@ -990,6 +994,26 @@ export default function AdminRepairsScreen() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Modal de Inspección Detallada de Bitácora y Evidencias */}
+      <DetalleBitacoraModal
+        isOpen={Boolean(registroInspeccion)}
+        onClose={() => setRegistroInspeccion(null)}
+        registro={registroInspeccion}
+        reparacion={
+          reparacionSeleccionada
+            ? {
+                ...reparacionSeleccionada,
+                ...(detallesReparacion[reparacionSeleccionada.id_reparacion] || {})
+              }
+            : null
+        }
+        imagenesRespaldo={
+          reparacionSeleccionada
+            ? detallesReparacion[reparacionSeleccionada.id_reparacion]?.imagenes_recepcion || []
+            : []
+        }
+      />
     </div>
   );
 }

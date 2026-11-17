@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,11 +8,14 @@ import useAuth from '../../context/useAuth';
 import { API_BASE_URL } from '../../config/api';
 export default function CompletarPago({ onAlerta }) {
   const { token } = useAuth();
+  const location = useLocation();
 
   // ============================================================================
   // ESTADOS DEL MOTOR DE BÚSQUEDA Y FILTRADO CONTABLE (CU-38)
   // ============================================================================
-  const [busquedaExacta, setBusquedaExacta] = useState('');
+  const [busquedaExacta, setBusquedaExacta] = useState(
+    location.state?.busquedaExacta || location.state?.codigo_sec || ''
+  );
   const [estadoFiltro, setEstadoFiltro] = useState('PENDIENTE');
   const [fechaDesde, setFechaDesde] = useState('');
   const [fechaHasta, setFechaHasta] = useState('');
@@ -47,7 +51,7 @@ export default function CompletarPago({ onAlerta }) {
   // Fase 3: Ticket de Éxito
   const [ticketExito, setTicketExito] = useState(null);
 
-  // Alerta local suave
+  // Alerta local suave con auto-cierre de 6 segundos (Regla 6)
   const [alertaLocal, setAlertaLocal] = useState(null);
 
   const dispararMensaje = useCallback(
@@ -56,7 +60,7 @@ export default function CompletarPago({ onAlerta }) {
         onAlerta(tipo, mensaje);
       } else {
         setAlertaLocal({ tipo, mensaje });
-        setTimeout(() => setAlertaLocal(null), 15000);
+        setTimeout(() => setAlertaLocal(null), 6000);
       }
     },
     [onAlerta]
@@ -127,12 +131,6 @@ export default function CompletarPago({ onAlerta }) {
         if (data.resumen) {
           setResumenCaja(data.resumen);
         }
-
-        if (!data.resultados || data.resultados.length === 0) {
-          if (busquedaExacta.trim()) {
-            dispararMensaje('warning', 'No se encontraron operaciones para los criterios ingresados.');
-          }
-        }
       } catch (error) {
         console.error('Error al filtrar transacciones:', error);
         const msg = error.response?.data?.error || error.response?.data?.mensaje || 'Error al consultar operaciones.';
@@ -144,32 +142,28 @@ export default function CompletarPago({ onAlerta }) {
     [token, estadoFiltro, busquedaExacta, fechaDesde, fechaHasta, medioPagoFiltro, dispararMensaje]
   );
 
-  // Carga inicial de operaciones pendientes de mostrador
+  // Carga inicial o recepción de búsqueda externa (desde Recepcionar o En Curso)
   useEffect(() => {
-    cargarTransacciones();
-  }, [cargarTransacciones]);
+    const busquedaExterna = location.state?.busquedaExacta || location.state?.codigo_sec || '';
+    if (busquedaExterna) {
+      setBusquedaExacta(busquedaExterna);
+      setEstadoFiltro('PENDIENTE');
+      cargarTransacciones({ busqueda_exacta: busquedaExterna, estado_pago: 'PENDIENTE' });
+    } else {
+      cargarTransacciones({ estado_pago: 'PENDIENTE' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, location.state]);
 
-  // Manejar submit del formulario de búsqueda
+  // Manejar submit manual del formulario de búsqueda al presionar "Filtrar"
   const handleBuscar = (e) => {
     if (e && e.preventDefault) e.preventDefault();
     cargarTransacciones();
   };
 
-  // Manejador inteligente de cambio de Medio de Pago
+  // Manejador de cambio de Medio de Pago (selecciona sin disparar consulta hasta dar Filtrar)
   const handleCambioMedioPago = (nuevoMedio) => {
     setMedioPagoFiltro(nuevoMedio);
-    let nuevoEstado = estadoFiltro;
-    // Si se selecciona un medio de pago específico pero el estado estaba en PENDIENTE,
-    // transicionar automáticamente a PAGADO ya que las cuentas pendientes aún no poseen
-    // un medio de pago liquidado en caja.
-    if (nuevoMedio && estadoFiltro === 'PENDIENTE') {
-      nuevoEstado = 'PAGADO';
-      setEstadoFiltro('PAGADO');
-    }
-    cargarTransacciones({
-      medio_pago: nuevoMedio.trim() || undefined,
-      estado_pago: nuevoEstado
-    });
   };
 
   // Atajos rápidos temporales
@@ -230,7 +224,7 @@ export default function CompletarPago({ onAlerta }) {
   // ============================================================================
   const handleSeleccionarOperacion = async (item) => {
     const identificador = item.codigo_seguridad || item.cliente?.email;
-    if (!identificador) {
+    if (!identificador && !item.id_operacion) {
       dispararMensaje('error', 'La transacción no posee código de seguridad ni correo vinculado.');
       return;
     }
@@ -241,7 +235,11 @@ export default function CompletarPago({ onAlerta }) {
 
     try {
       const response = await axios.get(`${API_BASE_URL}/api/sales/operaciones/pendientes/`, {
-        params: { identificador },
+        params: {
+          identificador: identificador || undefined,
+          id_operacion: item.id_operacion,
+          tipo_operacion: item.tipo_operacion
+        },
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -322,16 +320,35 @@ export default function CompletarPago({ onAlerta }) {
 
     setProcesandoPago(true);
     try {
+      const codSeguridad =
+        operacionSeleccionada?.codigo_seguridad ||
+        desgloseOperacion?.codigo_seguridad ||
+        '';
+
+      const ident =
+        codSeguridad ||
+        operacionSeleccionada?.cliente?.email ||
+        desgloseOperacion?.cliente?.email ||
+        busquedaExacta.trim() ||
+        undefined;
+
       const payload = {
+        identificador: ident,
+        codigo_seguridad: codSeguridad || undefined,
         id_operacion: operacionSeleccionada.id_operacion,
         tipo_operacion: operacionSeleccionada.tipo_operacion,
         monto_pagado: parseFloat(montoAbonado),
         medio_pago: medioPago,
+        numero_operacion: numeroOperacion.trim() || undefined,
         cod_operacion: numeroOperacion.trim() || undefined,
         detalle: detalle.trim() || undefined
       };
 
-      const response = await axios.post(`${API_BASE_URL}/api/sales/pagos/completar/`, payload, {
+      const endpoint = codSeguridad
+        ? `${API_BASE_URL}/api/sales/pagos/completar/${encodeURIComponent(codSeguridad)}/`
+        : `${API_BASE_URL}/api/sales/pagos/completar/`;
+
+      const response = await axios.post(endpoint, payload, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -343,12 +360,15 @@ export default function CompletarPago({ onAlerta }) {
 
       // Transición al ticket de éxito con comprobante
       setTicketExito({
-        cliente: operacionSeleccionada.cliente?.nombre || 'Consumidor',
+        cliente:
+          operacionSeleccionada.cliente?.nombre ||
+          desgloseOperacion?.cliente?.nombre ||
+          'Consumidor',
         montoPagado: montoAbonado,
         medioPago: medioPago,
         tipoOperacion: operacionSeleccionada.tipo_operacion,
-        codigoSeguridad: operacionSeleccionada.codigo_seguridad,
-        rutaComprobante: data.pago?.ruta_comprobante || ''
+        codigoSeguridad: codSeguridad,
+        rutaComprobante: data.ruta_comprobante || data.pago?.ruta_comprobante || ''
       });
     } catch (error) {
       console.error('Error al registrar cobro:', error);
@@ -376,28 +396,35 @@ export default function CompletarPago({ onAlerta }) {
 
   return (
     <div className="space-y-6">
-      {/* Alerta flotante local */}
+      {/* Alerta flotante local Cyber-Tech (Fixed, Zero CLS) */}
       <AnimatePresence>
         {alertaLocal && (
           <motion.div
-            initial={{ opacity: 0, y: -15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            className={`p-4 rounded-xl border flex items-center justify-between text-sm shadow-xl ${
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ duration: 0.25 }}
+            className={`fixed bottom-6 left-6 z-50 max-w-md px-4 py-3 rounded-2xl border shadow-2xl backdrop-blur-md flex items-center gap-3 text-sm pointer-events-auto ${
               alertaLocal.tipo === 'success'
-                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/50'
                 : alertaLocal.tipo === 'warning'
-                ? 'bg-amber-950/90 border-amber-500/50 text-amber-200'
-                : 'bg-rose-950/90 border-rose-500/50 text-rose-200'
+                ? 'bg-amber-950/90 border-amber-500/50 text-amber-200 shadow-amber-950/50'
+                : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/50'
             }`}
           >
-            <span>{alertaLocal.mensaje}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="text-base flex-shrink-0">
+                {alertaLocal.tipo === 'success' ? '⚡' : alertaLocal.tipo === 'warning' ? '🔔' : '⚠️'}
+              </span>
+              <span className="font-medium text-xs leading-relaxed">{alertaLocal.mensaje}</span>
+            </div>
             <button
               type="button"
               onClick={() => setAlertaLocal(null)}
-              className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
+              className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-white/10 transition-colors ml-2"
+              aria-label="Cerrar notificación"
             >
-              Cerrar
+              ✕
             </button>
           </motion.div>
         )}
@@ -835,11 +862,7 @@ export default function CompletarPago({ onAlerta }) {
                     </label>
                     <select
                       value={estadoFiltro}
-                      onChange={(e) => {
-                        const nuevo = e.target.value;
-                        setEstadoFiltro(nuevo);
-                        cargarTransacciones({ estado_pago: nuevo });
-                      }}
+                      onChange={(e) => setEstadoFiltro(e.target.value)}
                       className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#8B5CF6] font-sans"
                     >
                       <option value="PENDIENTE">Pendientes (Por Cobrar)</option>
@@ -925,7 +948,7 @@ export default function CompletarPago({ onAlerta }) {
                       ) : (
                         <>
                           <span>⚡</span>
-                          <span>Aplicar Filtros</span>
+                          <span>Filtrar</span>
                         </>
                       )}
                     </button>
