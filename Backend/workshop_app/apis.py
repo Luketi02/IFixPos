@@ -128,16 +128,17 @@ class DispositivoCreateApi(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        # Regla de Negocio Estricta: Únicamente los clientes pueden registrar dispositivos
+        # Regla de Negocio (CU-06): Pueden registrar dispositivos el CLIENTE (para sí mismo)
+        # y el personal de taller (TECNICO / ADMIN) asistiendo a un cliente en mostrador.
         rol_codigo = ''
         if hasattr(request.user, 'id_rol') and request.user.id_rol:
             rol_codigo = (request.user.id_rol.codigo or '').upper()
         elif hasattr(request.user, 'rol') and request.user.rol:
             rol_codigo = (request.user.rol.codigo or '').upper()
 
-        if rol_codigo != 'CLIENTE':
+        if rol_codigo not in ('CLIENTE', 'TECNICO', 'ADMIN'):
             return Response(
-                {"error": "Acceso denegado: Únicamente los clientes pueden registrar dispositivos en el sistema."},
+                {"error": "Acceso denegado: No posee permisos para registrar dispositivos en el sistema."},
                 status=status.HTTP_403_FORBIDDEN
             )
 

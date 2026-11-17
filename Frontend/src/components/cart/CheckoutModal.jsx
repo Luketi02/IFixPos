@@ -25,11 +25,17 @@ const REGEX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // SUBCOMPONENTE AISLADO: RELOJ TEMPORIZADOR DE RESERVA (0 RE-RENDERS AL MODAL)
 // Utiliza el componente compartido <CuentaRegresiva /> (Fase 2 - F7)
 // =============================================================================
-function TemporizadorReservaModal({ expiraEn = null, segundosIniciales = 1800, onExpirado }) {
+function TemporizadorReservaModal({
+  expiraEn = null,
+  segundosIniciales = 1800,
+  identificador = null,
+  onExpirado
+}) {
   return (
     <CuentaRegresiva
       expiraEn={expiraEn}
       segundosIniciales={segundosIniciales}
+      identificador={identificador}
       onExpirado={onExpirado}
     >
       {(segundos, textoMMSS) => (
@@ -898,11 +904,6 @@ export default function CheckoutModal({
 
           setMpPreferencia(resPref.data);
           setEsperandoPagoMP(true);
-
-          const urlPago = resPref.data.init_point || resPref.data.sandbox_init_point;
-          if (urlPago && !resPref.data.modo_simulacion) {
-            window.open(urlPago, '_blank', 'noopener,noreferrer');
-          }
         } catch (prefErr) {
           console.warn('Inconveniente al generar preferencia de Mercado Pago:', prefErr);
           const errDetalle = prefErr.response?.data?.error || 'Inconveniente al conectar con Mercado Pago.';
@@ -936,10 +937,6 @@ export default function CheckoutModal({
       );
       setMpPreferencia(resPref.data);
       setEsperandoPagoMP(true);
-      const urlPago = resPref.data.init_point || resPref.data.sandbox_init_point;
-      if (urlPago && !resPref.data.modo_simulacion) {
-        window.open(urlPago, '_blank', 'noopener,noreferrer');
-      }
     } catch (err) {
       console.warn('Reintento de Mercado Pago fallido:', err);
       const dataErr = err.response?.data;
@@ -2086,8 +2083,9 @@ export default function CheckoutModal({
 
               {/* Temporizador Aislado de Reserva de Stock TTL */}
               <TemporizadorReservaModal
-                expiraEn={resultadoVenta?.expira_en || ordenParaRetomar?.expira_en || null}
-                segundosIniciales={resultadoVenta?.segundos_restantes || ordenParaRetomar?.segundos_restantes || 30 * 60}
+                expiraEn={resultadoVenta?.expira_en ?? ordenParaRetomar?.expira_en ?? null}
+                segundosIniciales={resultadoVenta?.segundos_restantes ?? ordenParaRetomar?.segundos_restantes ?? 30 * 60}
+                identificador={resultadoVenta?.id_venta || ordenParaRetomar?.id_venta || null}
                 onExpirado={handleExpirarReserva}
               />
 

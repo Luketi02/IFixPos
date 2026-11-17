@@ -156,7 +156,7 @@ class RegistroInternoApi(APIView):
         id_ejecutor = getattr(request.user, 'id_usuario', getattr(request.user, 'id', None))
         rol_ejecutor = ""
         if hasattr(request.user, 'id_rol') and request.user.id_rol:
-            rol_ejecutor = request.user.id_rol.nombre_rol
+            rol_ejecutor = getattr(request.user.id_rol, 'codigo', None) or getattr(request.user.id_rol, 'nombre_rol', '') or ""
             
         if not id_ejecutor:
             return Response({"detail": "Usuario no autenticado o token inválido"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -168,7 +168,8 @@ class RegistroInternoApi(APIView):
                 **serializer.validated_data
             )
         except ValidationError as e:
-            return Response({"detail": e.messages if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            msg = e.messages[0] if hasattr(e, 'messages') and e.messages else (e.detail[0] if hasattr(e, 'detail') and isinstance(e.detail, list) else str(e))
+            return Response({"detail": msg, "error": msg}, status=status.HTTP_400_BAD_REQUEST)
             
         output_serializer = UsuarioOutputSerializer(usuario)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)

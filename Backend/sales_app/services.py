@@ -2684,7 +2684,7 @@ def evaluar_beneficio_durante_carrito(
             ).exists()
 
             if not ya_sugerido:
-                motivo = f"Recomendación predictiva durante carrito: Descuento en accesorio compatible {accesorio_compatible.nombre} tras seleccionar {prod.nombre}."
+                motivo = f"¡Complemento ideal para tu {prod.nombre}! Disfruta un descuento exclusivo en {accesorio_compatible.nombre}."
                 b = generar_beneficio_cliente(
                     usuario_destinatario=usuario,
                     motivo=motivo,
@@ -2726,7 +2726,7 @@ def evaluar_beneficio_post_compra(*, venta: Venta) -> Optional[Beneficio]:
 
     if compras_pagadas == 1:
         # Recompensa primera compra
-        motivo = "Fidelización post-compra: Recompensa de bienvenida para su próxima compra en IFixPos."
+        motivo = "¡Gracias por tu primera compra! Tienes un descuento de bienvenida para tu próximo pedido en IFixPos."
         return generar_beneficio_cliente(
             usuario_destinatario=usuario,
             motivo=motivo,
@@ -2745,7 +2745,7 @@ def evaluar_beneficio_post_compra(*, venta: Venta) -> Optional[Beneficio]:
 
     if compras_recientes >= 3:
         # Cliente frecuente VIP
-        motivo = "Premio al cliente frecuente: Beneficio VIP en reconocimiento a su lealtad comercial."
+        motivo = "¡Gracias por elegirnos siempre! Desbloqueaste un beneficio VIP exclusivo por ser cliente frecuente."
         return generar_beneficio_cliente(
             usuario_destinatario=usuario,
             motivo=motivo,

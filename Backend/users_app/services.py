@@ -526,6 +526,7 @@ def registrar_cuenta_publica(
         
     return usuario
 
+@transaction.atomic
 def registrar_cuenta_interna(
     *, 
     id_ejecutor: int, 
@@ -535,38 +536,46 @@ def registrar_cuenta_interna(
     email: str, 
     telefono: str, 
     contrasena: str, 
+    dni: Optional[str] = None,
     telefono_alt: Optional[str] = None, 
+    id_rol: Optional[int] = None,
     id_rol_asignado: Optional[int] = None
 ) -> Usuario:
     with transaction.atomic():
         if email_existe(email):
-            raise ValidationError("El correo electrónico ya se encuentra registrado")
-            
-        if rol_ejecutor == "Tecnico":
+            raise ValidationError("El correo electrónico ya se encuentra registrado en el sistema.")
+
+        dni_limpio = dni.strip() if dni and dni.strip() else None
+        if dni_limpio and PerfilUsuario.objects.filter(dni=dni_limpio).exists():
+            raise ValidationError("El DNI ingresado ya se encuentra asociado a otra cuenta registrada.")
+
+        rol_norm = (rol_ejecutor or "").strip().upper().replace("É", "E").replace("Á", "A")
+        rol_param = id_rol_asignado if id_rol_asignado is not None else id_rol
+
+        if "TECNICO" in rol_norm:
             rol_id_usar = get_rol_cliente()
-        elif rol_ejecutor == "Administrador":
-            if id_rol_asignado is None:
-                raise ValidationError("El administrador debe proveer un id_rol_asignado")
-            rol_id_usar = id_rol_asignado
+        elif "ADMIN" in rol_norm:
+            rol_id_usar = rol_param if rol_param is not None else get_rol_cliente()
         else:
-            raise ValidationError("Rol de ejecutor no autorizado para esta acción")
+            raise ValidationError("Rol de ejecutor no autorizado para esta acción.")
             
         usuario = Usuario.objects.create(
             email=email,
             contrasena=make_password(contrasena),
             fecha_registro=datetime.now(timezone.utc).date(),
-            id_rol_id=rol_id_usar
+            id_rol_id=rol_id_usar,
+            is_active=True
         )
         
-        PerfilUsuario.objects.create(
+        perfil = PerfilUsuario.objects.create(
             id_usuario=usuario,
             nombre=nombre,
             apellido=apellido,
+            dni=dni_limpio,
             telefono=telefono,
-            telefono_alt=telefono_alt
+            telefono_alt=telefono_alt or None
         )
-        
-        ejecutor = Usuario.objects.get(id_usuario=id_ejecutor) if id_ejecutor else None
+        usuario.perfilusuario = perfil
         
         registrar_log_condicional(
             clave_switch="log_seguridad_accesos",
@@ -581,7 +590,16 @@ def registrar_cuenta_interna(
         registrar_y_enviar_notificacion_correo(
             usuario=usuario,
             asunto="Bienvenido a IFixPos - Cuenta Creada",
-            cuerpo_texto=f"Tu cuenta ha sido creada. Tus credenciales son, email: {email}, contraseña: {contrasena}",
+            cuerpo_texto=(
+                f"Hola {nombre} {apellido},\n\n"
+                f"Te damos la bienvenida a IFixPos. Tu cuenta ha sido registrada en nuestra sucursal para que puedas "
+                f"realizar el seguimiento en línea de tus dispositivos y reparaciones.\n\n"
+                f"Tus credenciales de acceso son:\n"
+                f"• Correo electrónico: {email}\n"
+                f"• Contraseña temporal: {contrasena}\n\n"
+                f"Te recomendamos cambiar tu contraseña al ingresar por primera vez.\n\n"
+                f"Atentamente,\nEl equipo de IFixPos"
+            ),
             tipo_notificacion="INFO_CUENTA",
             codigo_sensible=contrasena,
             adjuntar_logo=False

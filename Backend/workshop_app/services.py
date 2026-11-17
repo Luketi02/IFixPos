@@ -248,9 +248,15 @@ def registrar_dispositivo(*, usuario_ejecutor: Usuario, datos_validados: dict) -
         if not id_cliente_final:
             id_cliente_final = usuario_ejecutor.id_usuario
 
-    cliente = Usuario.objects.filter(pk=id_cliente_final).first()
+    cliente = Usuario.objects.select_related('id_rol').filter(pk=id_cliente_final).first()
     if not cliente:
         raise ValidationError("El cliente especificado no existe.")
+
+    # Regla de negocio: un dispositivo solo puede pertenecer a una cuenta con rol Cliente
+    rol_cliente_codigo = (getattr(getattr(cliente, 'id_rol', None), 'codigo', '') or '').upper()
+    rol_cliente_nombre = (getattr(getattr(cliente, 'id_rol', None), 'nombre_rol', '') or '').lower()
+    if rol_cliente_codigo != 'CLIENTE' and rol_cliente_nombre != 'cliente':
+        raise ValidationError("Solo se pueden registrar dispositivos a cuentas con rol de Cliente.")
 
     # 3. Validar modelo de dispositivo (Estándar o Manual 'Otro')
     es_otro = datos_validados.get('es_otro', False) or bool(datos_validados.get('nombre_modelo_otro'))

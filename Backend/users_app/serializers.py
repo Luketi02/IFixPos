@@ -99,20 +99,58 @@ class RegistroInternoInputSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=100, required=True, validators=[nombre_apellido_validator])
     apellido = serializers.CharField(max_length=100, required=True, validators=[nombre_apellido_validator])
     email = serializers.EmailField(required=True)
+    dni = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
     telefono = serializers.CharField(max_length=50, required=True, validators=[telefono_validator])
     contrasena = serializers.CharField(required=True, write_only=True)
     telefono_alt = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
     id_rol = serializers.IntegerField(required=False, allow_null=True)
+    id_rol_asignado = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_dni(self, value):
+        if value and value.strip():
+            clean_dni = value.strip().replace('.', '').replace(' ', '')
+            dni_validator(clean_dni)
+            return clean_dni
+        return None
+
+    def validate_telefono(self, value):
+        if value:
+            clean_value = value.strip().replace(" ", "")
+            telefono_validator(clean_value)
+            return clean_value
+        return value
 
     def validate_telefono_alt(self, value):
         if value and value.strip():
-            telefono_validator(value.strip())
-        return value
+            clean_value = value.strip().replace(" ", "")
+            telefono_validator(clean_value)
+            return clean_value
+        return None
 
 class UsuarioOutputSerializer(serializers.Serializer):
     id_usuario = serializers.IntegerField()
     email = serializers.EmailField()
     fecha_registro = serializers.DateField()
+    nombre = serializers.SerializerMethodField()
+    apellido = serializers.SerializerMethodField()
+    dni = serializers.SerializerMethodField()
+    telefono = serializers.SerializerMethodField()
+
+    def get_nombre(self, obj):
+        perfil = getattr(obj, 'perfilusuario', None)
+        return getattr(perfil, 'nombre', '') or ''
+
+    def get_apellido(self, obj):
+        perfil = getattr(obj, 'perfilusuario', None)
+        return getattr(perfil, 'apellido', '') or ''
+
+    def get_dni(self, obj):
+        perfil = getattr(obj, 'perfilusuario', None)
+        return getattr(perfil, 'dni', '') or ''
+
+    def get_telefono(self, obj):
+        perfil = getattr(obj, 'perfilusuario', None)
+        return getattr(perfil, 'telefono', '') or ''
 
 class LogoutInputSerializer(serializers.Serializer):
     """
@@ -243,6 +281,7 @@ class FiltrarUsuariosInputSerializer(serializers.Serializer):
     dni = serializers.CharField(required=False, allow_blank=True)
     email = serializers.CharField(required=False, allow_blank=True)
     id_rol = serializers.IntegerField(required=False, min_value=1)
+    rol_codigo = serializers.CharField(required=False, allow_blank=True)
     activo = serializers.BooleanField(required=False, allow_null=True, default=None)
     id_pais = serializers.IntegerField(required=False, min_value=1)
     id_provincia = serializers.IntegerField(required=False, min_value=1)

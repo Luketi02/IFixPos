@@ -1286,67 +1286,75 @@ export default function ReparacionDetalle() {
         </main>
       </div>
 
-      {/* Modal Calificar Servicio Técnico (CU-19) */}
-      <CalificarServicioModal
-        isOpen={modalCalificarAbierto}
-        onClose={() => setModalCalificarAbierto(false)}
-        reparacion={reparacion}
-        onSuccess={(nuevaCalificacion) => {
-          setSuccessMessage('¡Muchas gracias por su calificación y retroalimentación!');
-          setReparacion((prev) => (prev ? { ...prev, calificacion: nuevaCalificacion } : prev));
-        }}
-      />
+      {/* Modal Calificar Servicio Técnico (montado únicamente cuando está abierto) */}
+      {modalCalificarAbierto && (
+        <CalificarServicioModal
+          isOpen={modalCalificarAbierto}
+          onClose={() => setModalCalificarAbierto(false)}
+          reparacion={reparacion}
+          onSuccess={(nuevaCalificacion) => {
+            setSuccessMessage('¡Muchas gracias por su calificación y retroalimentación!');
+            setReparacion((prev) => (prev ? { ...prev, calificacion: nuevaCalificacion } : prev));
+          }}
+        />
+      )}
 
       {/* Modal reutilizable del medio de pago seleccionado al aceptar el presupuesto */}
-      <PaymentMethodModalDispatcher
-        isOpen={modalPagoPresupuesto.abierto}
-        onClose={() =>
-          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }))
-        }
-        medioPago={modalPagoPresupuesto.medioPago}
-        idVenta={modalPagoPresupuesto.idVenta}
-        montoTotal={modalPagoPresupuesto.montoTotal}
-        concepto={`Presupuesto de Reparación • ${reparacion?.dispositivo?.marca || ''} ${reparacion?.dispositivo?.modelo || ''}`.trim()}
-        codigoSeguridad={reparacion?.codigo_seguridad || reparacion?.codigo_sec || null}
-        permitirContinuarPendiente={true}
-        textoBotonPendiente="Continuar y abonar al retirar el equipo"
-        textoConfirmar="Confirmar compromiso de pago"
-        onPagoConfirmado={async () => {
-          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
-          setSuccessMessage('¡Pago confirmado exitosamente! Tu reparación ya se encuentra en curso.');
-          await cargarDetalle();
-        }}
-        onContinuarPendiente={() => {
-          setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
-        }}
-      />
+      {modalPagoPresupuesto.abierto && (
+        <PaymentMethodModalDispatcher
+          isOpen={modalPagoPresupuesto.abierto}
+          onClose={() =>
+            setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }))
+          }
+          medioPago={modalPagoPresupuesto.medioPago}
+          idVenta={modalPagoPresupuesto.idVenta}
+          montoTotal={modalPagoPresupuesto.montoTotal}
+          concepto={`Presupuesto de Reparación • ${reparacion?.dispositivo?.marca || ''} ${reparacion?.dispositivo?.modelo || ''}`.trim()}
+          codigoSeguridad={reparacion?.codigo_seguridad || reparacion?.codigo_sec || null}
+          permitirContinuarPendiente={true}
+          textoBotonPendiente="Continuar y abonar al retirar el equipo"
+          textoConfirmar="Confirmar compromiso de pago"
+          onPagoConfirmado={async () => {
+            setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
+            setSuccessMessage('¡Pago confirmado exitosamente! Tu reparación ya se encuentra en curso.');
+            await cargarDetalle();
+          }}
+          onContinuarPendiente={() => {
+            setModalPagoPresupuesto((prev) => ({ ...prev, abierto: false }));
+          }}
+        />
+      )}
 
-      {/* Modal de Checkout Virtual para abonar el Diagnóstico Inicial (mismo flujo y diseño que el Carrito) */}
-      <CheckoutDiagnosticoModal
-        isOpen={modalPagoDiagnostico.abierto}
-        onClose={() =>
-          setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }))
-        }
-        reparacion={reparacion}
-        montoDiagnostico={modalPagoDiagnostico.montoTotal || montoDiagnostico}
-        medioPagoInicial={modalPagoDiagnostico.medioPago || medioDiagSeleccionado}
-        onPagoCompletado={async () => {
-          setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
-          setSuccessMessage(
-            '¡Pago de diagnóstico acreditado con éxito! Tu dispositivo ya se encuentra en fila para evaluación técnica.'
-          );
-          await cargarDetalle();
-        }}
-      />
+      {/* Modal de Checkout Virtual para abonar el Diagnóstico Inicial (montado solo al abrirse) */}
+      {modalPagoDiagnostico.abierto && (
+        <CheckoutDiagnosticoModal
+          isOpen={modalPagoDiagnostico.abierto}
+          onClose={() =>
+            setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }))
+          }
+          reparacion={reparacion}
+          montoDiagnostico={modalPagoDiagnostico.montoTotal || montoDiagnostico}
+          medioPagoInicial={modalPagoDiagnostico.medioPago || medioDiagSeleccionado}
+          onPagoCompletado={async () => {
+            setModalPagoDiagnostico((prev) => ({ ...prev, abierto: false }));
+            setSuccessMessage(
+              '¡Pago de diagnóstico acreditado con éxito! Tu dispositivo ya se encuentra en fila para evaluación técnica.'
+            );
+            await cargarDetalle();
+          }}
+        />
+      )}
 
       {/* Modal Inspección Detallada de Bitácora y Evidencias */}
-      <DetalleBitacoraModal
-        isOpen={Boolean(registroInspeccion)}
-        onClose={() => setRegistroInspeccion(null)}
-        registro={registroInspeccion}
-        reparacion={reparacion}
-        imagenesRespaldo={reparacion?.imagenes_recepcion || []}
-      />
+      {Boolean(registroInspeccion) && (
+        <DetalleBitacoraModal
+          isOpen={Boolean(registroInspeccion)}
+          onClose={() => setRegistroInspeccion(null)}
+          registro={registroInspeccion}
+          reparacion={reparacion}
+          imagenesRespaldo={reparacion?.imagenes_recepcion || []}
+        />
+      )}
     </div>
   );
 }

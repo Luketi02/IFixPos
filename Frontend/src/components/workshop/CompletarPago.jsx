@@ -127,9 +127,19 @@ export default function CompletarPago({ onAlerta }) {
         });
 
         const data = response.data;
-        setTransacciones(data.resultados || []);
+        const listaResultados = data.resultados || [];
+        setTransacciones(listaResultados);
         if (data.resumen) {
           setResumenCaja(data.resumen);
+        }
+
+        if (filtrosOverride.auto_seleccionar && listaResultados.length > 0) {
+          const codigoBuscado = String(queryParams.busqueda_exacta || '').trim().toUpperCase();
+          const itemObjetivo =
+            listaResultados.find(
+              (item) => String(item.codigo_seguridad || '').trim().toUpperCase() === codigoBuscado
+            ) || listaResultados[0];
+          handleSeleccionarOperacion(itemObjetivo, filtrosOverride.medio_pago_preferido);
         }
       } catch (error) {
         console.error('Error al filtrar transacciones:', error);
@@ -139,16 +149,24 @@ export default function CompletarPago({ onAlerta }) {
         setCargandoLista(false);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [token, estadoFiltro, busquedaExacta, fechaDesde, fechaHasta, medioPagoFiltro, dispararMensaje]
   );
 
-  // Carga inicial o recepción de búsqueda externa (desde Recepcionar o En Curso)
+  // Carga inicial o recepción de búsqueda externa (desde Nueva Reparación, Recepcionar o En Curso)
   useEffect(() => {
     const busquedaExterna = location.state?.busquedaExacta || location.state?.codigo_sec || '';
+    const autoSeleccionar = Boolean(location.state?.autoSeleccionar);
+    const medioPreferido = location.state?.medioPagoPreferido || 'Efectivo';
     if (busquedaExterna) {
       setBusquedaExacta(busquedaExterna);
       setEstadoFiltro('PENDIENTE');
-      cargarTransacciones({ busqueda_exacta: busquedaExterna, estado_pago: 'PENDIENTE' });
+      cargarTransacciones({
+        busqueda_exacta: busquedaExterna,
+        estado_pago: 'PENDIENTE',
+        auto_seleccionar: autoSeleccionar,
+        medio_pago_preferido: medioPreferido
+      });
     } else {
       cargarTransacciones({ estado_pago: 'PENDIENTE' });
     }
@@ -222,7 +240,7 @@ export default function CompletarPago({ onAlerta }) {
   // ============================================================================
   // FASE 2: SELECCIÓN Y PREPARACIÓN DE LA OPERACIÓN A COBRAR (CU-21)
   // ============================================================================
-  const handleSeleccionarOperacion = async (item) => {
+  const handleSeleccionarOperacion = async (item, medioPagoPreferido = null) => {
     const identificador = item.codigo_seguridad || item.cliente?.email;
     if (!identificador && !item.id_operacion) {
       dispararMensaje('error', 'La transacción no posee código de seguridad ni correo vinculado.');
@@ -249,8 +267,15 @@ export default function CompletarPago({ onAlerta }) {
       setDesgloseOperacion(data);
       // Precargar datos del formulario con el total a cobrar exacto
       setMontoAbonado(data.total_a_cobrar || String(item.monto) || '0.00');
-      // Seleccionar primer medio activo disponible o 'Efectivo'
-      const primerMedio = catalogoMediosPago[0]?.nombre_medio_pago || 'Efectivo';
+      // Seleccionar medio preferido (ej. Efectivo desde mostrador) o primer medio activo disponible
+      const medioEfectivoCatalogo = catalogoMediosPago.find((m) =>
+        (m.nombre_medio_pago || '').toLowerCase().includes('efectivo')
+      )?.nombre_medio_pago;
+      const primerMedio =
+        medioPagoPreferido ||
+        medioEfectivoCatalogo ||
+        catalogoMediosPago[0]?.nombre_medio_pago ||
+        'Efectivo';
       setMedioPago(primerMedio);
       setNumeroOperacion('');
       setDetalle('');

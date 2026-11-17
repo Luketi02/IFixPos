@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
+import { normalizeRole, ROLES } from '../../utils/roleRoutes';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 import { API_BASE_URL } from '../../config/api';
 import { extraerMensajeError, useMensajeTemporal } from '../../utils/errores';
@@ -24,7 +26,12 @@ export default function IniciarReparacionModal({
   dispositivo,
   onSuccess
 }) {
-  const { token } = useAuth();
+  const { user, token } = useAuth();
+  const navigate = useNavigate();
+
+  const rolNormalizado = normalizeRole(user?.rol || user?.role || user?.id_rol?.codigo);
+  const esAdmin = rolNormalizado === ROLES.ADMIN;
+  const esPersonalTaller = esAdmin || rolNormalizado === ROLES.TECNICO;
 
   // Paso del wizard: 'FORM' | 'CONFIRM' | 'QR_PAGO' | 'SUCCESS'
   const [paso, setPaso] = useState('FORM');
@@ -284,17 +291,57 @@ export default function IniciarReparacionModal({
     }
   };
 
+  // Redirección directa a la pantalla de cobros cuando el personal de taller opera con Efectivo
+  const redirigirACobrosTaller = (ordenActual = resultado) => {
+    const codSec = ordenActual?.codigo_seguridad;
+    setModalPagoAbierto(false);
+    onClose();
+    if (codSec) {
+      navigate(esAdmin ? '/admin/caja/cobros' : '/tecnico/caja/cobros', {
+        state: {
+          codigo_sec: codSec,
+          busquedaExacta: codSec,
+          autoSeleccionar: true,
+          medioPagoPreferido: medioSeleccionado?.nombre_medio_pago || 'Efectivo'
+        }
+      });
+    }
+  };
+
   // Callbacks del modal reutilizable de medio de pago
   const handlePagoModalConfirmado = (datosPago) => {
     if (datosPago?.tipoModal === TIPOS_MODAL_PAGO.MERCADOPAGO) {
-      setResultado((prev) => (prev ? { ...prev, estado_pago: 'PAGADA' } : prev));
+      const ordenActualizada = resultado ? { ...resultado, estado_pago: 'PAGADA' } : resultado;
+      setResultado(ordenActualizada);
       setPagoAcreditadoOnline(true);
+
+      if (esPersonalTaller && ordenActualizada?.id_reparacion) {
+        setModalPagoAbierto(false);
+        onClose();
+        if (typeof onSuccess === 'function') {
+          onSuccess(ordenActualizada);
+        }
+        navigate(`/tecnico/reparaciones/${ordenActualizada.id_reparacion}`);
+        return;
+      }
+    }
+    if (
+      esPersonalTaller &&
+      (datosPago?.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO ||
+        medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO)
+    ) {
+      redirigirACobrosTaller(resultado);
+      return;
     }
     setModalPagoAbierto(false);
     setPaso('SUCCESS');
   };
 
   const handlePagoModalPendiente = () => {
+    if (esPersonalTaller && medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO) {
+      redirigirACobrosTaller(resultado);
+      return;
+    }
     setModalPagoAbierto(false);
     setPaso('SUCCESS');
   };
@@ -323,6 +370,35 @@ export default function IniciarReparacionModal({
   );
 
   if (!isOpen) return null;
+
+  // Evitar apilamiento de modales (Zero Modal Stacking): si el modal del medio de pago está activo,
+  // desmontamos la tarjeta del asistente para mantener una única capa de diálogo y un único backdrop en el DOM.
+  if (modalPagoAbierto) {
+    return (
+      <PaymentMethodModalDispatcher
+        isOpen={modalPagoAbierto}
+        onClose={handlePagoModalPendiente}
+        medioPago={medioSeleccionado}
+        idVenta={resultado?.id_venta || null}
+        montoTotal={costoDiagnostico || 0}
+        concepto={`Diagnóstico Técnico • ${dispositivo?.marca || ''} ${dispositivo?.modelo || ''}`.trim()}
+        codigoSeguridad={resultado?.codigo_seguridad || null}
+        permitirContinuarPendiente={true}
+        textoBotonPendiente={
+          esPersonalTaller && medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO
+            ? 'Ir a Cobrar Operación en Caja'
+            : 'Continuar y abonar al entregar el equipo'
+        }
+        textoConfirmar={
+          esPersonalTaller && medioSeleccionado?.tipoModal === TIPOS_MODAL_PAGO.EFECTIVO
+            ? 'Continuar a Cobrar en Caja'
+            : 'Confirmar'
+        }
+        onPagoConfirmado={handlePagoModalConfirmado}
+        onContinuarPendiente={handlePagoModalPendiente}
+      />
+    );
+  }
 
   // Cálculos reactivos de validación
   const descCaracteres = descripcion.trim().length;
@@ -971,22 +1047,6 @@ export default function IniciarReparacionModal({
             </div>
           )}
         </motion.div>
-
-        {/* Modal reutilizable del medio de pago seleccionado */}
-        <PaymentMethodModalDispatcher
-          isOpen={modalPagoAbierto}
-          onClose={handlePagoModalPendiente}
-          medioPago={medioSeleccionado}
-          idVenta={resultado?.id_venta || null}
-          montoTotal={costoDiagnostico || 0}
-          concepto={`Diagnóstico Técnico • ${dispositivo?.marca || ''} ${dispositivo?.modelo || ''}`.trim()}
-          codigoSeguridad={resultado?.codigo_seguridad || null}
-          permitirContinuarPendiente={true}
-          textoBotonPendiente="Continuar y abonar al entregar el equipo"
-          textoConfirmar="Confirmar"
-          onPagoConfirmado={handlePagoModalConfirmado}
-          onContinuarPendiente={handlePagoModalPendiente}
-        />
       </div>
     </AnimatePresence>
   );

@@ -1,24 +1,43 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import useAuth from '../../context/useAuth';
-
 import { API_BASE_URL } from '../../config/api';
-export default function ClientBenefitsModal({ isOpen, onClose, onUsarEnTienda }) {
-  const { user } = useAuth();
+
+/**
+ * Transforma textos técnicos o robóticos legados almacenados en la BD en mensajes cercanos y claros.
+ */
+function humanizarMotivoBeneficio(motivo) {
+  const texto = String(motivo || '').trim();
+  if (!texto) return 'Beneficio exclusivo disponible para tu próxima compra.';
+
+  // Caso legado: "Recomendación predictiva durante carrito: Descuento en accesorio compatible X tras seleccionar Y."
+  const matchPredictivo = texto.match(
+    /^Recomendaci[oó]n predictiva durante carrito:\s*Descuento en accesorio compatible\s+(.+?)\s+tras seleccionar\s+(.+?)\.?$/i
+  );
+  if (matchPredictivo) {
+    const [, accesorio, productoBase] = matchPredictivo;
+    return `¡Complemento ideal para tu ${productoBase}! Disfruta un descuento exclusivo en ${accesorio}.`;
+  }
+
+  if (/^Fidelizaci[oó]n post-compra:/i.test(texto)) {
+    return '¡Gracias por tu primera compra! Tienes un descuento de bienvenida para tu próximo pedido.';
+  }
+
+  if (/^Premio al cliente frecuente:/i.test(texto)) {
+    return '¡Gracias por elegirnos siempre! Desbloqueaste un beneficio VIP por ser cliente frecuente.';
+  }
+
+  return texto;
+}
+
+export default function ClientBenefitsModal({ isOpen, onClose }) {
   const [tab, setTab] = useState('activos'); // 'activos' | 'historial'
   const [activos, setActivos] = useState([]);
   const [historial, setHistorial] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(null);
+  const [infoExpandidaId, setInfoExpandidaId] = useState(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      cargarBeneficios();
-    }
-  }, [isOpen]);
-
-  const cargarBeneficios = async () => {
+  const cargarBeneficios = useCallback(async () => {
     setCargando(true);
     setError(null);
     try {
@@ -34,21 +53,21 @@ export default function ClientBenefitsModal({ isOpen, onClose, onUsarEnTienda })
     } finally {
       setCargando(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      setInfoExpandidaId(null);
+      cargarBeneficios();
+    }
+  }, [isOpen, cargarBeneficios]);
 
   if (!isOpen) return null;
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-        {/* Contenedor Modal */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 15 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 15 }}
-          transition={{ duration: 0.2 }}
-          className="relative w-full max-w-2xl bg-[#0F172A] border border-slate-700/80 rounded-2xl shadow-2xl shadow-cyan-950/40 flex flex-col max-h-[90vh] overflow-hidden"
-        >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85">
+      {/* Contenedor Modal ligero sin backdrop-blur ni motion wrappers pesados */}
+      <div className="relative w-full max-w-2xl bg-[#0F172A] border border-slate-700/80 rounded-2xl shadow-2xl shadow-cyan-950/40 flex flex-col max-h-[90vh] overflow-hidden">
           {/* Cabecera Cyber-Tech */}
           <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-slate-900/60">
             <div className="flex items-center gap-3">
@@ -149,51 +168,98 @@ export default function ClientBenefitsModal({ isOpen, onClose, onUsarEnTienda })
             )}
 
             {/* Listado de Beneficios Activos */}
-            {!cargando && tab === 'activos' && activos.map((b, idx) => (
-              <motion.div
-                key={idx}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-4 rounded-xl bg-gradient-to-r from-[#1E293B] to-[#1E293B]/80 border border-cyan-500/30 hover:border-cyan-500/60 shadow-lg shadow-black/30 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
-              >
-                <div className="space-y-1.5 min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                      {b.por_desc}% OFF
-                    </span>
-                    <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40">
-                      Válido por {Math.round(b.tiempo_disp)}h
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      Emitido el {b.fecha}
-                    </span>
+            {!cargando && tab === 'activos' && activos.map((b, idx) => {
+              const claveItem = b.id_beneficio ?? idx;
+              const infoAbierta = infoExpandidaId === claveItem;
+              const esEspecifico = Boolean(b.id_producto);
+
+              return (
+                <div
+                  key={claveItem}
+                  className="p-4 rounded-xl bg-[#1E293B] border border-cyan-500/30 hover:border-cyan-500/50 transition-colors space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          {b.por_desc}% OFF
+                        </span>
+                        <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40">
+                          Válido por {Math.round(b.tiempo_disp)}h
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Emitido el {b.fecha}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm font-semibold text-white truncate">
+                        {b.producto_nombre}
+                      </h4>
+
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {humanizarMotivoBeneficio(b.motivo)}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:items-end w-full sm:w-auto shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setInfoExpandidaId(infoAbierta ? null : claveItem)}
+                        className={`w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                          infoAbierta
+                            ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/60'
+                            : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/30'
+                        }`}
+                      >
+                        <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{infoAbierta ? 'Ocultar guía' : '¿Cómo usarlo?'}</span>
+                      </button>
+                      <span className="text-[10px] text-slate-400 mt-1">
+                        Acumulable en Checkout
+                      </span>
+                    </div>
                   </div>
 
-                  <h4 className="text-sm font-semibold text-white truncate">
-                    {b.producto_nombre}
-                  </h4>
-
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {b.motivo}
-                  </p>
+                  {infoAbierta && (
+                    <div className="p-3 rounded-lg bg-slate-900/90 border border-cyan-500/25 text-xs text-slate-300 space-y-1.5">
+                      <p className="font-semibold text-cyan-300">
+                        ¿Cómo aplicar este {b.por_desc}% de descuento?
+                      </p>
+                      {esEspecifico ? (
+                        <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                          <li>
+                            Agrega <span className="font-semibold text-white">{b.producto_nombre}</span> a tu carrito de compras.
+                          </li>
+                          <li>
+                            Inicia el proceso de compra y avanza hasta el <span className="font-semibold text-white">Paso 4 (Revisión)</span>.
+                          </li>
+                          <li>
+                            Selecciona este cupón en la sección <span className="font-semibold text-white">Beneficios y Cupones</span> para ver el descuento reflejado al instante.
+                          </li>
+                        </ol>
+                      ) : (
+                        <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                          <li>
+                            Agrega los productos que desees a tu carrito desde la tienda.
+                          </li>
+                          <li>
+                            Avanza en el checkout hasta el <span className="font-semibold text-white">Paso 4 (Revisión)</span>.
+                          </li>
+                          <li>
+                            Activa este cupón antes de confirmar el pago para descontar el <span className="font-semibold text-white">{b.por_desc}%</span> del subtotal.
+                          </li>
+                        </ol>
+                      )}
+                      <p className="text-[10px] text-slate-400 pt-1 border-t border-slate-800">
+                        Vigencia: {Math.round(b.tiempo_disp)} horas desde su emisión ({b.fecha}). Puedes combinarlo con otros cupones compatibles.
+                      </p>
+                    </div>
+                  )}
                 </div>
-
-                <div className="flex flex-col sm:items-end w-full sm:w-auto">
-                  <button
-                    onClick={() => {
-                      onClose();
-                      if (onUsarEnTienda) onUsarEnTienda();
-                    }}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 shadow-md shadow-cyan-950/30 transition-all cursor-pointer text-center"
-                  >
-                    Usar en la Tienda
-                  </button>
-                  <span className="text-[10px] text-slate-400 mt-1">
-                    Acumulable en Checkout
-                  </span>
-                </div>
-              </motion.div>
-            ))}
+              );
+            })}
 
             {/* Listado de Historial */}
             {!cargando && tab === 'historial' && historial.map((b, idx) => {
@@ -240,7 +306,7 @@ export default function ClientBenefitsModal({ isOpen, onClose, onUsarEnTienda })
                       {b.producto_nombre}
                     </p>
                     <p className="text-[11px] text-slate-400 line-clamp-1">
-                      {b.motivo}
+                      {humanizarMotivoBeneficio(b.motivo)}
                     </p>
                   </div>
                 </div>
@@ -259,14 +325,13 @@ export default function ClientBenefitsModal({ isOpen, onClose, onUsarEnTienda })
 
             <button
               onClick={onClose}
-              className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors"
+              className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors cursor-pointer"
             >
               Entendido
             </button>
           </div>
-        </motion.div>
       </div>
-    </AnimatePresence>
+    </div>
   );
 }
 

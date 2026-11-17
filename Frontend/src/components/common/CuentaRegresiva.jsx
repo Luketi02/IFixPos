@@ -1,14 +1,25 @@
 import { useState, useEffect, useRef } from 'react';
 
 /**
- * Calcula los segundos restantes a partir de un timestamp ISO (`expiraEn`)
+ * Calcula los segundos restantes a partir de un timestamp ISO (`expiraEn`),
+ * una duración numérica en segundos (`expiraEn` entero, como devuelve `VentaOutputSerializer`),
  * o una cantidad inicial de segundos (`segundosIniciales`).
  */
 function resolverTimestampFin(expiraEn, segundosIniciales) {
-  if (expiraEn) {
-    const parseado = Date.parse(expiraEn);
-    if (!Number.isNaN(parseado)) {
-      return parseado;
+  if (expiraEn !== null && expiraEn !== undefined && expiraEn !== '') {
+    // Si el backend envía segundos restantes como número (ej. 1800), evitar Date.parse(1800) que lo interpreta como año 1800.
+    if (typeof expiraEn === 'number' && Number.isFinite(expiraEn)) {
+      return Date.now() + Math.max(0, expiraEn) * 1000;
+    }
+    if (typeof expiraEn === 'string') {
+      const limpio = expiraEn.trim();
+      if (/^\d+(\.\d+)?$/.test(limpio)) {
+        return Date.now() + Math.max(0, Number(limpio)) * 1000;
+      }
+      const parseado = Date.parse(limpio);
+      if (!Number.isNaN(parseado)) {
+        return parseado;
+      }
     }
   }
   const segs = Math.max(0, Number(segundosIniciales) || 0);

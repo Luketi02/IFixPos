@@ -131,10 +131,10 @@ export default function MercadoPagoPaymentModal({
     [idVenta, obtenerCabecerasAuth]
   );
 
-  // Generar preferencia automáticamente al abrir el modal
+  // Generar preferencia automáticamente al abrir el modal (sin abrir pestaña externa automáticamente)
   useEffect(() => {
     if (isOpen && idVenta && !urlPreferenciaInicial) {
-      generarPreferenciaMP(true);
+      generarPreferenciaMP(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, idVenta, urlPreferenciaInicial]);
@@ -455,7 +455,7 @@ export default function MercadoPagoPaymentModal({
                       <button
                         type="button"
                         disabled={cargandoPreferencia}
-                        onClick={() => generarPreferenciaMP(true)}
+                        onClick={() => generarPreferenciaMP(false)}
                         className="py-2.5 px-5 rounded-xl bg-gradient-to-r from-cyan-400 to-cyan-500 hover:from-cyan-300 hover:to-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/20 active:scale-95 transition-all inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
                       >
                         <span>🔄 Generar Link y Código QR de Mercado Pago</span>

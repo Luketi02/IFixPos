@@ -567,6 +567,24 @@ export default function CheckoutDiagnosticoModal({
 
   if (!isOpen) return null;
 
+  // Evitar apilamiento de modales (Zero Modal Stacking)
+  if (modalInstruccionesPagoAbierto) {
+    return (
+      <PaymentMethodModalDispatcher
+        isOpen={modalInstruccionesPagoAbierto}
+        onClose={() => setModalInstruccionesPagoAbierto(false)}
+        medioPago={medioPagoSeleccionado}
+        idVenta={resultadoVenta?.id_venta || null}
+        montoTotal={montoTotalFinal}
+        concepto={`Pago de Diagnóstico — ${dispNombre}`}
+        codigoSeguridad={codigoOrden}
+        procesando={isSubmitting}
+        textoConfirmar="Confirmar y ver Comprobante"
+        onPagoConfirmado={handleConfirmarOtroMedioDigital}
+      />
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/90 flex items-center justify-center p-3 sm:p-4 md:p-6 font-sans">
       <motion.div
@@ -1522,20 +1540,6 @@ export default function CheckoutDiagnosticoModal({
             </>
           )}
         </div>
-
-        {/* Modal secundario para instrucciones de Transferencia o Tarjeta */}
-        <PaymentMethodModalDispatcher
-          isOpen={modalInstruccionesPagoAbierto}
-          onClose={() => setModalInstruccionesPagoAbierto(false)}
-          medioPago={medioPagoSeleccionado}
-          idVenta={resultadoVenta?.id_venta || null}
-          montoTotal={montoTotalFinal}
-          concepto={`Pago de Diagnóstico — ${dispNombre}`}
-          codigoSeguridad={codigoOrden}
-          procesando={isSubmitting}
-          textoConfirmar="Confirmar y ver Comprobante"
-          onPagoConfirmado={handleConfirmarOtroMedioDigital}
-        />
       </motion.div>
     </div>
   );

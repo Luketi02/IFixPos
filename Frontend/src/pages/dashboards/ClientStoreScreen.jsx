@@ -1605,12 +1605,13 @@ export default function ClientStoreScreen() {
         }}
       />
 
-      {/* Modal de Mis Beneficios y Cupones (Motor Inteligente) */}
-      <ClientBenefitsModal
-        isOpen={modalBeneficiosClienteAbierto}
-        onClose={() => setModalBeneficiosClienteAbierto(false)}
-        onUsarEnTienda={() => setModalBeneficiosClienteAbierto(false)}
-      />
+      {/* Modal de Mis Beneficios y Cupones (Montaje condicional para máximo rendimiento) */}
+      {modalBeneficiosClienteAbierto && (
+        <ClientBenefitsModal
+          isOpen={modalBeneficiosClienteAbierto}
+          onClose={() => setModalBeneficiosClienteAbierto(false)}
+        />
+      )}
 
       {/* Popover / Toast Flotante: Recomendación Predictiva en Tiempo Real */}
       <AnimatePresence>

@@ -4,6 +4,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import useAuth from '../../context/useAuth';
 import IniciarReparacionModal from '../devices/IniciarReparacionModal';
+import AsistenteClienteNoRegistradoModal from './AsistenteClienteNoRegistradoModal';
 import { formatearEstadoReparacion } from '../../utils/repairStatus';
 
 import { API_BASE_URL } from '../../config/api';
@@ -31,8 +32,9 @@ export default function NuevaReparacionTaller({ onAlerta }) {
   const [cargando, setCargando] = useState(false);
   const [dispositivoSeleccionado, setDispositivoSeleccionado] = useState(null);
 
-  // Modal de CU-26
+  // Modal de apertura de reparación y asistente para cliente no registrado
   const [modalAbierto, setModalAbierto] = useState(false);
+  const [asistenteNuevoClienteAbierto, setAsistenteNuevoClienteAbierto] = useState(false);
 
   // Filtros de búsqueda (CU-33 / Filtrar Dispositivos de Taller)
   const [busquedaRapida, setBusquedaRapida] = useState('');
@@ -170,12 +172,22 @@ export default function NuevaReparacionTaller({ onAlerta }) {
     return obtenerReparacionActiva(dispositivoSeleccionado);
   }, [dispositivoSeleccionado]);
 
-  // Manejador del éxito tras iniciar la reparación en el modal CU-26
-  const handleReparacionExitosa = (orden) => {
+  // Manejador cuando el asistente integral completa los 3 pasos (Cliente + Dispositivo + Reparación)
+  const handleAsistenteReparacionIniciada = (orden, dispositivoCreado) => {
+    setAsistenteNuevoClienteAbierto(false);
+    dispararMensaje(
+      'success',
+      `¡Orden de servicio para ${dispositivoCreado?.marca || ''} ${dispositivoCreado?.modelo || ''} iniciada exitosamente!`
+    );
+    cargarDispositivos();
+  };
+
+  // Manejador del éxito tras iniciar la reparación en el modal individual
+  const handleReparacionExitosa = () => {
     setModalAbierto(false);
     dispararMensaje(
       'success',
-      `¡Orden de servicio para ${dispositivoSeleccionado?.marca} ${dispositivoSeleccionado?.modelo} iniciada exitosamente! Estado inicial asignado: Esperando Diagnóstico.`
+      `¡Orden de servicio para ${dispositivoSeleccionado?.marca} ${dispositivoSeleccionado?.modelo} iniciada exitosamente!`
     );
     cargarDispositivos();
   };
@@ -225,12 +237,21 @@ export default function NuevaReparacionTaller({ onAlerta }) {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setAsistenteNuevoClienteAbierto(true)}
+            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#06B6D4] to-cyan-400 hover:from-cyan-400 hover:to-cyan-300 text-slate-950 text-xs font-black tracking-wide shadow-lg shadow-cyan-500/25 transition-all flex items-center gap-2 active:scale-95 cursor-pointer"
+          >
+            <span>👤+</span>
+            <span>Cliente No Registrado / Nuevo Equipo</span>
+          </button>
+
           <button
             type="button"
             onClick={() => cargarDispositivos()}
             disabled={cargando}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all flex items-center gap-2 disabled:opacity-50"
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
           >
             <span className={cargando ? 'animate-spin' : ''}>🔄</span>
             <span>Actualizar Listado</span>
@@ -439,15 +460,25 @@ export default function NuevaReparacionTaller({ onAlerta }) {
                 No se encontraron dispositivos con los criterios aplicados.
               </p>
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                Prueba buscando por el DNI exacto del cliente, o limpia los filtros para examinar todos los equipos registrados.
+                Prueba buscando por el DNI exacto del cliente, limpia los filtros o registra al cliente y su dispositivo si aún no están en el sistema.
               </p>
-              <button
-                type="button"
-                onClick={handleLimpiarFiltros}
-                className="mt-2 px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-400 transition-colors"
-              >
-                Restablecer Filtros
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAsistenteNuevoClienteAbierto(true)}
+                  className="px-4 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs font-black shadow-lg shadow-cyan-500/20 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>👤+</span>
+                  <span>Registrar Cliente y Dispositivo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLimpiarFiltros}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-400 border border-slate-700 transition-colors cursor-pointer"
+                >
+                  Restablecer Filtros
+                </button>
+              </div>
             </div>
           ) : (
             <div className="space-y-2.5 max-h-[580px] overflow-y-auto pr-1">
@@ -588,12 +619,6 @@ export default function NuevaReparacionTaller({ onAlerta }) {
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-400 font-mono">ID de Dispositivo:</span>
-                  <span className="font-mono text-slate-300">
-                    #{dispositivoSeleccionado.id_dispositivo}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs">
                   <span className="text-slate-400 font-mono">Fecha de Registro:</span>
                   <span className="text-slate-300">
                     {dispositivoSeleccionado.fecha_registro || 'Registrado en sistema'}
@@ -697,8 +722,22 @@ export default function NuevaReparacionTaller({ onAlerta }) {
         </div>
       </div>
 
-      {/* Modal Reutilizable de Apertura de Orden (CU-26) */}
-      {modalAbierto && dispositivoSeleccionado && (
+      {/* Asistente Unificado de 3 Pasos en un único modal (montado solo cuando está activo) */}
+      {asistenteNuevoClienteAbierto && (
+        <AsistenteClienteNoRegistradoModal
+          isOpen={asistenteNuevoClienteAbierto}
+          onClose={() => setAsistenteNuevoClienteAbierto(false)}
+          onReparacionIniciada={handleAsistenteReparacionIniciada}
+          dniInicial={
+            /^\d+$/.test(busquedaRapida.trim())
+              ? busquedaRapida.trim()
+              : filtrosAvanzados.dni_cliente
+          }
+        />
+      )}
+
+      {/* Modal Reutilizable de Apertura de Orden (montado solo cuando está activo y sin solaparse) */}
+      {modalAbierto && !asistenteNuevoClienteAbierto && dispositivoSeleccionado && (
         <IniciarReparacionModal
           isOpen={modalAbierto}
           onClose={() => setModalAbierto(false)}

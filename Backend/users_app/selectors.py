@@ -93,6 +93,7 @@ def filtrar_usuarios(
     dni: str = None, 
     email: str = None, 
     id_rol: int = None, 
+    rol_codigo: str = None,
     activo: bool = None, 
     id_pais: int = None, 
     id_provincia: int = None, 
@@ -116,6 +117,8 @@ def filtrar_usuarios(
         qs = qs.filter(perfilusuario__dni__icontains=dni.strip())
     if id_rol is not None:
         qs = qs.filter(id_rol=id_rol)
+    if rol_codigo and rol_codigo.strip():
+        qs = qs.filter(id_rol__codigo__iexact=rol_codigo.strip())
     
     if activo is not None:
         qs = qs.filter(is_active=activo)
