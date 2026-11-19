@@ -32,12 +32,17 @@ def obtener_ventas_usuario(id_usuario: int) -> QuerySet[Venta]:
 
 def obtener_carrito_activo(id_usuario: int) -> Optional[CarritoCompra]:
     """
-    Recupera el carrito de compras activo de un usuario.
+    Recupera el carrito de compras activo de un usuario priorizando el que tenga productos
+    en caso de existir registros residuales.
     """
-    return CarritoCompra.objects.filter(
-        id_usuario_id=id_usuario,
-        estado__iexact='activo'
-    ).order_by('-id_carrito').first()
+    from django.db.models import Count
+    return (
+        CarritoCompra.objects
+        .filter(id_usuario_id=id_usuario, estado__iexact='activo')
+        .annotate(num_items=Count('carritoproducto'))
+        .order_by('-num_items', '-id_carrito')
+        .first()
+    )
 
 
 def obtener_items_carrito(id_carrito: int) -> QuerySet[CarritoProducto]:
@@ -1455,11 +1460,483 @@ def obtener_metricas_motor_beneficios() -> dict:
 
 def obtener_items_carrito_activo_usuario(usuario) -> list:
     """Recupera los renglones del carrito activo del usuario con su producto precargado."""
+    from django.db.models import Count
     from sales_app.models import CarritoCompra, CarritoProducto
-    carrito = CarritoCompra.objects.filter(
-        id_usuario=usuario,
-        estado__iexact='activo'
-    ).first()
+    carrito = (
+        CarritoCompra.objects
+        .filter(id_usuario=usuario, estado__iexact='activo')
+        .annotate(num_items=Count('carritoproducto'))
+        .order_by('-num_items', '-id_carrito')
+        .first()
+    )
     if not carrito:
         return []
     return list(CarritoProducto.objects.filter(id_carrito=carrito).select_related('id_producto'))
+
+
+def obtener_reporte_inspeccion_ventas_y_arqueo(
+    *,
+    fecha_inicio: date,
+    fecha_fin: date,
+    canal: str = 'TODAS',
+    estado_venta: str = 'TODOS',
+    id_medio_pago: Optional[int] = None,
+    buscar: str = ''
+) -> Dict[str, Any]:
+    """
+    Genera el reporte integral de Inspección de Ventas y Arqueo de Ingresos/Egresos:
+    - Cantidades de ventas semanales y evolución por semana.
+    - Arqueo de ingresos (ventas presenciales, ventas virtuales, servicios de taller) y
+      egresos (órdenes de compra a proveedores y compras directas/gastos).
+    - Cantidad y listado de ventas presenciales vs. ventas virtuales.
+    - Detalle completo de cada venta (cliente/usuario, productos comprados, medios de pago,
+      beneficios aplicados y comprobante PDF).
+    Optimizado con select_related y prefetch_related (Regla 2).
+    """
+    import datetime
+    from django.utils import timezone
+    from sales_app.models import Venta, Pago, Beneficio, MedioPago
+    from purchases_app.models import OrdenCompra, RegistroCompra
+
+    if fecha_inicio > fecha_fin:
+        raise ValidationError("La fecha de inicio no puede ser posterior a la fecha de fin.")
+
+    # 1. Consultar todas las ventas del período con sus relaciones precargadas
+    ventas_qs = (
+        Venta.objects
+        .filter(fecha_venta__gte=fecha_inicio, fecha_venta__lte=fecha_fin)
+        .select_related(
+            'id_usuario',
+            'id_usuario__perfilusuario',
+            'id_direccion_envio',
+            'id_direccion_envio__id_ciudad',
+            'id_direccion_envio__id_ciudad__id_provincia',
+            'id_direccion_envio__id_ciudad__id_provincia__id_pais'
+        )
+        .prefetch_related(
+            'detalleventa_set__id_producto',
+            'detalleventa_set__id_producto__id_categoria',
+            'pago_set__medio_pago',
+            'reparacion_set'
+        )
+        .order_by('-fecha_venta', '-id_venta')
+    )
+
+    todas_ventas = list(ventas_qs)
+
+    # Pre-cargar beneficios canjeados vinculados a estas ventas en una sola consulta
+    ids_ventas = [v.id_venta for v in todas_ventas]
+    mapa_beneficios_venta: Dict[int, List[Dict[str, Any]]] = {}
+    if ids_ventas:
+        beneficios_canjeados = list(
+            Beneficio.objects
+            .filter(motivo__icontains='[CANJEADO - Venta #')
+            .select_related('id_producto')
+        )
+        import re
+        for b in beneficios_canjeados:
+            m = re.search(r'\[CANJEADO - Venta #(\d+)', b.motivo or '')
+            if m:
+                vid = int(m.group(1))
+                if vid in ids_ventas:
+                    motivo_limpio = re.sub(r'\[CANJEADO - Venta #\d+[^\]]*\]\s*', '', b.motivo or '').strip()
+                    mapa_beneficios_venta.setdefault(vid, []).append({
+                        'id_beneficio': b.id_beneficio,
+                        'motivo': motivo_limpio,
+                        'por_desc': float(b.por_desc or 0),
+                        'producto_nombre': b.id_producto.nombre if b.id_producto else 'Descuento General'
+                    })
+
+    # Cálculo de Arqueo Global de Ingresos sobre el período
+    ingresos_ventas_presenciales = Decimal('0.00')
+    ingresos_ventas_virtuales = Decimal('0.00')
+    ingresos_servicios_taller = Decimal('0.00')
+    desglose_medios_map: Dict[str, Dict[str, Any]] = {}
+
+    ventas_comerciales_serializadas = []
+
+    canal_norm = (canal or 'TODAS').strip().upper()
+    estado_norm = (estado_venta or 'TODOS').strip().upper()
+    texto_buscar = (buscar or '').strip().lower()
+
+    for v in todas_ventas:
+        reparaciones_vinc = list(v.reparacion_set.all())
+        es_taller = len(reparaciones_vinc) > 0
+        detalles = list(v.detalleventa_set.all())
+        pagos = list(v.pago_set.all())
+
+        metodo_ent = (v.metodo_entrega or '').strip().upper()
+        es_presencial = (metodo_ent == 'MOSTRADOR')
+        canal_venta = 'PRESENCIAL' if es_presencial else 'VIRTUAL'
+        canal_etiqueta = (
+            'Presencial en Mostrador'
+            if es_presencial
+            else ('Virtual (Envío a Domicilio)' if metodo_ent == 'ENVIO' else 'Virtual (Retiro en Local)')
+        )
+
+        subtotal_num = Decimal(str(v.monto_subtotal or '0.00'))
+        envio_num = Decimal(str(v.costo_envio or '0.00'))
+        total_venta_num = subtotal_num + envio_num
+        estado_v = (v.estado_venta or 'PENDIENTE').strip().upper()
+        es_pagada = estado_v in ('PAGADA', 'PAGADO')
+
+        # Sumar al arqueo de ingresos si está pagada
+        if es_pagada:
+            monto_pagos = sum((Decimal(str(p.monto_pagado or '0.00')) for p in pagos), Decimal('0.00'))
+            monto_acreditado = monto_pagos if monto_pagos > Decimal('0.00') else total_venta_num
+            if es_taller and len(detalles) == 0:
+                ingresos_servicios_taller += monto_acreditado
+            elif es_presencial:
+                ingresos_ventas_presenciales += monto_acreditado
+            else:
+                ingresos_ventas_virtuales += monto_acreditado
+
+            for p in pagos:
+                nom_mp = p.medio_pago.nombre_medio_pago if p.medio_pago else 'Efectivo / Otro'
+                entry = desglose_medios_map.setdefault(nom_mp, {
+                    'medio_pago': nom_mp,
+                    'cantidad_pagos': 0,
+                    'monto_total': Decimal('0.00')
+                })
+                entry['cantidad_pagos'] += 1
+                entry['monto_total'] += Decimal(str(p.monto_pagado or '0.00'))
+
+        # Si es una orden puramente de taller sin productos de tienda, se contabiliza en el arqueo de taller
+        # pero la lista de ventas comerciales muestra las ventas de productos (presenciales y virtuales)
+        if es_taller and len(detalles) == 0:
+            continue
+
+        # Aplicar filtros de visualización para la lista y KPIs de ventas comerciales
+        if canal_norm in ('PRESENCIAL', 'VIRTUAL') and canal_venta != canal_norm:
+            continue
+
+        if estado_norm != 'TODOS':
+            if estado_norm == 'PAGADA' and estado_v not in ('PAGADA', 'PAGADO'):
+                continue
+            elif estado_norm == 'PENDIENTE' and estado_v != 'PENDIENTE':
+                continue
+            elif estado_norm == 'CANCELADA' and estado_v not in ('CANCELADA', 'CANCELADO'):
+                continue
+
+        if id_medio_pago is not None:
+            tiene_mp = any(p.medio_pago_id == int(id_medio_pago) for p in pagos)
+            if not tiene_mp:
+                continue
+
+        usr = v.id_usuario
+        perfil = getattr(usr, 'perfilusuario', None) if usr else None
+        email_cli = getattr(usr, 'email', '') if usr else ''
+        es_cf = not usr or 'consumidorfinal' in email_cli.lower()
+        nombre_cli = (
+            'Consumidor Final'
+            if es_cf
+            else (
+                f"{getattr(perfil, 'nombre', '') or ''} {getattr(perfil, 'apellido', '') or ''}".strip()
+                or email_cli
+            )
+        )
+        dni_cli = '—' if es_cf else (getattr(perfil, 'dni', '') or 'S/D')
+        tel_cli = '—' if es_cf else (getattr(perfil, 'telefono', '') or 'S/D')
+
+        productos_lista = []
+        total_unidades = 0
+        for d in detalles:
+            prod = d.id_producto
+            cant_d = int(d.cantidad or 1)
+            total_unidades += cant_d
+            productos_lista.append({
+                'id_producto': d.id_producto_id,
+                'nombre_producto': prod.nombre if prod else f'Producto #{d.id_producto_id}',
+                'categoria': (prod.id_categoria.nombre if prod and prod.id_categoria else 'General'),
+                'cantidad': cant_d,
+                'precio_unitario': float(d.precio_unitario or 0),
+                'subtotal': float(d.subtotal or 0)
+            })
+
+        if texto_buscar:
+            coincide_cli = (
+                texto_buscar in nombre_cli.lower()
+                or texto_buscar in email_cli.lower()
+                or texto_buscar in dni_cli.lower()
+                or texto_buscar in (v.codigo_sec or '').lower()
+            )
+            coincide_prod = any(texto_buscar in (p['nombre_producto'] or '').lower() for p in productos_lista)
+            if not coincide_cli and not coincide_prod:
+                continue
+
+        dir_env = v.id_direccion_envio
+        texto_direccion_envio = None
+        if dir_env:
+            partes_dir = [dir_env.nro_calle, dir_env.nombre_barrio]
+            if dir_env.id_ciudad:
+                partes_dir.append(dir_env.id_ciudad.nombre_ciudad)
+                if dir_env.id_ciudad.id_provincia:
+                    partes_dir.append(dir_env.id_ciudad.id_provincia.nombre_provincia)
+            texto_direccion_envio = ", ".join(p for p in partes_dir if p)
+
+        pagos_lista = []
+        ruta_pdf_principal = None
+        nombres_mp = []
+        for p in pagos:
+            nom_m = p.medio_pago.nombre_medio_pago if p.medio_pago else 'Efectivo'
+            if nom_m not in nombres_mp:
+                nombres_mp.append(nom_m)
+            if p.ruta_comprobante and not ruta_pdf_principal:
+                ruta_pdf_principal = p.ruta_comprobante
+            pagos_lista.append({
+                'id_pago': p.id_pago,
+                'medio_pago': nom_m,
+                'monto_pagado': float(p.monto_pagado or 0),
+                'fecha_pago': p.fecha_pago.isoformat() if p.fecha_pago else None,
+                'cod_operacion': p.cod_operacion or '',
+                'detalle': p.detalle or '',
+                'ruta_comprobante': p.ruta_comprobante
+            })
+
+        ventas_comerciales_serializadas.append({
+            'id_venta': v.id_venta,
+            'codigo_sec': v.codigo_sec,
+            'fecha_venta': v.fecha_venta.isoformat() if v.fecha_venta else None,
+            'fecha_hora_creacion': v.fecha_hora_creacion.isoformat() if getattr(v, 'fecha_hora_creacion', None) else None,
+            'canal': canal_venta,
+            'canal_etiqueta': canal_etiqueta,
+            'metodo_entrega': metodo_ent,
+            'estado_venta': 'PAGADA' if es_pagada else ('CANCELADA' if estado_v in ('CANCELADA', 'CANCELADO') else 'PENDIENTE'),
+            'monto_subtotal': float(subtotal_num),
+            'costo_envio': float(envio_num),
+            'monto_total': float(total_venta_num),
+            'cliente': {
+                'nombre_completo': nombre_cli,
+                'email': '—' if es_cf else email_cli,
+                'dni': dni_cli,
+                'telefono': tel_cli,
+                'es_consumidor_final': es_cf
+            },
+            'direccion_envio': texto_direccion_envio,
+            'cantidad_items': len(productos_lista),
+            'total_unidades': total_unidades,
+            'productos': productos_lista,
+            'pagos': pagos_lista,
+            'medios_pago_resumen': ", ".join(nombres_mp) if nombres_mp else ('Pendiente de cobro' if not es_pagada else 'Mostrador'),
+            'ruta_comprobante': ruta_pdf_principal,
+            'beneficios_aplicados': mapa_beneficios_venta.get(v.id_venta, [])
+        })
+
+    # 2. Consultar Egresos del período (Órdenes de Compra + Compras Directas / Gastos)
+    ordenes_egreso = list(
+        OrdenCompra.objects
+        .filter(fecha_emision__gte=fecha_inicio, fecha_emision__lte=fecha_fin)
+        .exclude(estado_orden=OrdenCompra.ESTADO_CANCELADA)
+        .select_related('cuit_prov')
+        .prefetch_related('detalles__id_producto')
+        .order_by('-fecha_emision', '-id_orden')
+    )
+
+    egresos_oc_total = Decimal('0.00')
+    egresos_detalle = []
+
+    for oc in ordenes_egreso:
+        dets_oc = list(oc.detalles.all())
+        monto_oc = sum(
+            Decimal(str(d.cantidad_recibida if d.cantidad_recibida is not None else d.cantidad)) * (d.precio_unitario or Decimal('0.00'))
+            for d in dets_oc
+        )
+        egresos_oc_total += monto_oc
+        resumen_prods = ", ".join(
+            f"{d.id_producto.nombre if d.id_producto else 'Insumo'} (x{d.cantidad_recibida if d.cantidad_recibida is not None else d.cantidad})"
+            for d in dets_oc[:3]
+        )
+        if len(dets_oc) > 3:
+            resumen_prods += f" (+{len(dets_oc) - 3} más)"
+
+        egresos_detalle.append({
+            'id_referencia': f"OC-{oc.id_orden}",
+            'tipo_egreso': 'ORDEN_COMPRA',
+            'tipo_etiqueta': 'Orden de Compra a Proveedor',
+            'fecha': oc.fecha_emision.isoformat() if oc.fecha_emision else None,
+            'origen': oc.cuit_prov.nombre_proveedor if oc.cuit_prov else f"CUIT {oc.cuit_prov_id}",
+            'descripcion': resumen_prods or 'Abastecimiento de inventario',
+            'estado': oc.estado_nombre,
+            'monto': float(monto_oc)
+        })
+
+    # Compras directas: RegistroCompra no tiene DateField sino TimeField (fecha_compra),
+    # por lo que buscamos en LogSistema su fecha de creación o incluimos las registradas en el rango
+    from core_app.models import LogSistema
+    logs_compras_directas = dict(
+        LogSistema.objects
+        .filter(
+            modulo_origen='purchases_app',
+            tabla_afectada='registro_compra',
+            fecha_hora__date__gte=fecha_inicio,
+            fecha_hora__date__lte=fecha_fin
+        )
+        .values_list('id_registro_afectado', 'fecha_hora')
+    )
+    ids_cd_rango = [int(k) for k in logs_compras_directas.keys() if str(k).isdigit()]
+    if ids_cd_rango:
+        compras_directas = list(
+            RegistroCompra.objects
+            .filter(id_compra__in=ids_cd_rango)
+            .select_related('id_usuario', 'id_producto')
+            .order_by('-id_compra')
+        )
+    else:
+        # Si se crearon sin asiento en LogSistema (ej. fixtures), incluir si el rango abarca hoy
+        hoy_date = timezone.now().date()
+        if fecha_inicio <= hoy_date <= fecha_fin:
+            compras_directas = list(
+                RegistroCompra.objects.select_related('id_usuario', 'id_producto').order_by('-id_compra')[:50]
+            )
+        else:
+            compras_directas = []
+
+    egresos_cd_total = Decimal('0.00')
+    for cd in compras_directas:
+        monto_cd = Decimal(str(cd.monto_pagado or '0.00'))
+        egresos_cd_total += monto_cd
+        dt_log = logs_compras_directas.get(str(cd.id_compra))
+        fecha_cd_str = dt_log.date().isoformat() if dt_log else fecha_fin.isoformat()
+        egresos_detalle.append({
+            'id_referencia': f"CD-{cd.id_compra}",
+            'tipo_egreso': 'COMPRA_DIRECTA',
+            'tipo_etiqueta': 'Compra Directa / Gasto Operativo',
+            'fecha': fecha_cd_str,
+            'origen': cd.origen_vendedor,
+            'descripcion': f"{cd.descripcion_articulo} ({cd.motivo})",
+            'estado': 'Impactó Stock' if cd.impacto_stock else 'Gasto Administrativo',
+            'monto': float(monto_cd)
+        })
+
+    # 3. KPIs de Ventas Comerciales filtradas
+    total_ventas = len(ventas_comerciales_serializadas)
+    ventas_pagadas = [v for v in ventas_comerciales_serializadas if v['estado_venta'] == 'PAGADA']
+    ventas_pendientes = [v for v in ventas_comerciales_serializadas if v['estado_venta'] == 'PENDIENTE']
+    ventas_canceladas = [v for v in ventas_comerciales_serializadas if v['estado_venta'] == 'CANCELADA']
+
+    ventas_presenciales_list = [v for v in ventas_comerciales_serializadas if v['canal'] == 'PRESENCIAL']
+    ventas_virtuales_list = [v for v in ventas_comerciales_serializadas if v['canal'] == 'VIRTUAL']
+
+    monto_presenciales_pagadas = sum(
+        Decimal(str(v['monto_total'])) for v in ventas_presenciales_list if v['estado_venta'] == 'PAGADA'
+    )
+    monto_virtuales_pagadas = sum(
+        Decimal(str(v['monto_total'])) for v in ventas_virtuales_list if v['estado_venta'] == 'PAGADA'
+    )
+    facturacion_ventas_pagadas = monto_presenciales_pagadas + monto_virtuales_pagadas
+
+    ticket_promedio = (
+        float((facturacion_ventas_pagadas / Decimal(str(len(ventas_pagadas)))).quantize(Decimal('0.01')))
+        if len(ventas_pagadas) > 0 else 0.0
+    )
+
+    dias_periodo = max(1, (fecha_fin - fecha_inicio).days + 1)
+    semanas_periodo = max(1.0, dias_periodo / 7.0)
+    promedio_ventas_semanales = round(len(ventas_pagadas) / semanas_periodo, 1)
+
+    corte_ultima_semana = fecha_fin - datetime.timedelta(days=6)
+    ventas_ultima_semana = sum(
+        1 for v in ventas_pagadas
+        if v['fecha_venta'] and v['fecha_venta'] >= corte_ultima_semana.isoformat()
+    )
+
+    # 4. Evolución de Ventas Semanales (agrupando por lunes de cada semana)
+    semanas_map: Dict[str, Dict[str, Any]] = {}
+    cursor_dia = fecha_inicio
+    while cursor_dia <= fecha_fin:
+        lunes = cursor_dia - datetime.timedelta(days=cursor_dia.weekday())
+        domingo = lunes + datetime.timedelta(days=6)
+        inicio_sem = max(fecha_inicio, lunes)
+        fin_sem = min(fecha_fin, domingo)
+        clave_sem = lunes.isoformat()
+        if clave_sem not in semanas_map:
+            semanas_map[clave_sem] = {
+                'clave_semana': clave_sem,
+                'etiqueta_semana': f"{inicio_sem.strftime('%d/%m')} al {fin_sem.strftime('%d/%m')}",
+                'fecha_inicio_semana': inicio_sem.isoformat(),
+                'fecha_fin_semana': fin_sem.isoformat(),
+                'total_ventas': 0,
+                'ventas_presenciales': 0,
+                'ventas_virtuales': 0,
+                'monto_presencial': 0.0,
+                'monto_virtual': 0.0,
+                'monto_total': 0.0
+            }
+        cursor_dia += datetime.timedelta(days=1)
+
+    for v in ventas_comerciales_serializadas:
+        if v['estado_venta'] == 'CANCELADA' or not v['fecha_venta']:
+            continue
+        f_v = datetime.date.fromisoformat(v['fecha_venta'])
+        lunes_v = (f_v - datetime.timedelta(days=f_v.weekday())).isoformat()
+        if lunes_v in semanas_map:
+            sem = semanas_map[lunes_v]
+            sem['total_ventas'] += 1
+            if v['canal'] == 'PRESENCIAL':
+                sem['ventas_presenciales'] += 1
+                if v['estado_venta'] == 'PAGADA':
+                    sem['monto_presencial'] = round(sem['monto_presencial'] + v['monto_total'], 2)
+            else:
+                sem['ventas_virtuales'] += 1
+                if v['estado_venta'] == 'PAGADA':
+                    sem['monto_virtual'] = round(sem['monto_virtual'] + v['monto_total'], 2)
+            if v['estado_venta'] == 'PAGADA':
+                sem['monto_total'] = round(sem['monto_total'] + v['monto_total'], 2)
+
+    evolucion_semanal = [semanas_map[k] for k in sorted(semanas_map.keys())]
+
+    total_ingresos = ingresos_ventas_presenciales + ingresos_ventas_virtuales + ingresos_servicios_taller
+    total_egresos = egresos_oc_total + egresos_cd_total
+    balance_neto = total_ingresos - total_egresos
+
+    desglose_medios_lista = sorted(
+        [
+            {
+                'medio_pago': item['medio_pago'],
+                'cantidad_pagos': item['cantidad_pagos'],
+                'monto_total': float(item['monto_total'])
+            }
+            for item in desglose_medios_map.values()
+        ],
+        key=lambda x: x['monto_total'],
+        reverse=True
+    )
+
+    return {
+        'periodo': {
+            'fecha_inicio': fecha_inicio.isoformat(),
+            'fecha_fin': fecha_fin.isoformat(),
+            'dias_analizados': dias_periodo
+        },
+        'kpis_ventas': {
+            'total_ventas': total_ventas,
+            'total_ventas_pagadas': len(ventas_pagadas),
+            'total_ventas_pendientes': len(ventas_pendientes),
+            'total_ventas_canceladas': len(ventas_canceladas),
+            'ventas_ultima_semana': ventas_ultima_semana,
+            'promedio_ventas_semanales': promedio_ventas_semanales,
+            'cantidad_ventas_presenciales': len(ventas_presenciales_list),
+            'ventas_presenciales_pagadas': sum(1 for v in ventas_presenciales_list if v['estado_venta'] == 'PAGADA'),
+            'monto_ventas_presenciales': float(monto_presenciales_pagadas),
+            'cantidad_ventas_virtuales': len(ventas_virtuales_list),
+            'ventas_virtuales_pagadas': sum(1 for v in ventas_virtuales_list if v['estado_venta'] == 'PAGADA'),
+            'monto_ventas_virtuales': float(monto_virtuales_pagadas),
+            'facturacion_ventas_comerciales': float(facturacion_ventas_pagadas),
+            'ticket_promedio': ticket_promedio
+        },
+        'arqueo_caja': {
+            'ingresos_ventas_presenciales': float(ingresos_ventas_presenciales),
+            'ingresos_ventas_virtuales': float(ingresos_ventas_virtuales),
+            'ingresos_servicios_taller': float(ingresos_servicios_taller),
+            'total_ingresos': float(total_ingresos),
+            'egresos_ordenes_compra': float(egresos_oc_total),
+            'egresos_compras_directas': float(egresos_cd_total),
+            'total_egresos': float(total_egresos),
+            'balance_neto': float(balance_neto),
+            'desglose_medios_pago': desglose_medios_lista
+        },
+        'evolucion_semanal': evolucion_semanal,
+        'ventas': ventas_comerciales_serializadas,
+        'egresos_detalle': egresos_detalle
+    }
+

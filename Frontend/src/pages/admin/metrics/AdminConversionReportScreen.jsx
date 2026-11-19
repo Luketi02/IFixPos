@@ -345,14 +345,24 @@ export default function AdminConversionReportScreen() {
       user?.email ||
       'Usuario Autenticado';
 
+    const catSel = categorias.find((c) => String(c.id_categoria) === String(idCategoria));
+    const filtrosActivos = [
+      catSel ? `Categoría: ${catSel.nombre}` : 'Categorías: Todas'
+    ];
+
     exportarInformePDF({
       titulo: 'Reporte de Conversión de Presupuestos (Embudo de Taller)',
       subtitulo: 'Evaluación de efectividad comercial, embudo de ventas y cuantificación de lucro cesante',
       periodo: `${fechaInicio} al ${fechaFin}`,
+      filtros: filtrosActivos,
       kpis,
       tablas,
       resumenTexto,
-      usuario: { nombre: nombreEjecutor, email: user?.email || '' }
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
     });
   };
 

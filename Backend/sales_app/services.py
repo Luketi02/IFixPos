@@ -107,10 +107,16 @@ def procesar_compra_virtual(
     # -------------------------------------------------------------------------
     # Paso 1: Recuperar Carrito y Validar que no esté vacío
     # -------------------------------------------------------------------------
-    carrito = CarritoCompra.objects.filter(
+    carritos_activos_qs = CarritoCompra.objects.filter(
         id_usuario=usuario_cliente,
         estado__iexact='activo'
-    ).order_by('-id_carrito').first()
+    ).order_by('-id_carrito')
+
+    if carritos_activos_qs.count() > 1:
+        from sales_app.services_carrito import _obtener_o_crear_carrito_activo
+        carrito = _obtener_o_crear_carrito_activo(usuario_cliente)
+    else:
+        carrito = carritos_activos_qs.first()
 
     if not carrito:
         carrito = CarritoCompra.objects.filter(
@@ -752,6 +758,32 @@ def generar_comprobante_fiscal(pago: Pago, operacion) -> str:
     return ruta_pdf
 
 
+def _resolver_o_crear_medio_pago(medio_pago_input: str) -> MedioPago:
+    """Resuelve un MedioPago por ID, código o nombre; si no existe, lo crea."""
+    from core_app.constantes import deducir_codigo_medio_pago
+    texto = str(medio_pago_input or 'EFECTIVO').strip()
+    medio_pago_obj = None
+    if texto.isdigit():
+        medio_pago_obj = MedioPago.objects.filter(id_mediopago=int(texto)).first()
+    if not medio_pago_obj:
+        medio_pago_obj = MedioPago.objects.filter(codigo__iexact=texto).first()
+    if not medio_pago_obj:
+        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=texto).first()
+    if not medio_pago_obj:
+        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__icontains=texto).first()
+    if not medio_pago_obj:
+        medio_pago_obj = MedioPago.objects.create(
+            codigo=deducir_codigo_medio_pago(texto),
+            nombre_medio_pago=texto.upper(),
+            estado=True,
+            recargo=Decimal('0.00')
+        )
+    elif not medio_pago_obj.codigo:
+        medio_pago_obj.codigo = deducir_codigo_medio_pago(medio_pago_obj.nombre_medio_pago)
+        medio_pago_obj.save(update_fields=['codigo'])
+    return medio_pago_obj
+
+
 @transaction.atomic
 def registrar_cobro_operacion(
     *,
@@ -762,13 +794,8 @@ def registrar_cobro_operacion(
     """
     CU-21: Completar pago.
     Registra formalmente el ingreso de dinero correspondiente a una venta
-    o reparación pendiente, instanciando el pago en el sistema y transicionando
-    el estado de la operación a 'PAGADO'.
-
-    Paso 2: Verifica que la operación esté pendiente.
-    Paso 4: Verifica que el monto abonado coincida con el total adeudado.
-    Paso 5: Instancia registro en Pago y modifica el estado de la operación a 'PAGADO'.
-    Paso 6: Dispara automáticamente CU-20 (generar comprobante) y auditoría.
+    o reparación pendiente, instanciando el pago (o múltiples pagos en cobro mixto)
+    y transicionando el estado de la operación a 'PAGADO'.
     """
     # Verificación de estado de la operación
     if isinstance(operacion, Venta):
@@ -785,50 +812,55 @@ def registrar_cobro_operacion(
     else:
         raise ValidationError("Entidad desconocida. Solo se pueden cobrar Ventas o Reparaciones.")
 
-    # Paso 4: Validación estricta del monto adeudado
+    # Paso 4: Validación estricta del monto adeudado (simple o mixto)
     total_adeudado = _calcular_total_operacion(operacion)
-    monto_abonado = Decimal(str(datos_validados.get('monto_pagado') or '0.00'))
+    pagos_mixtos = datos_validados.get('pagos_mixtos') or []
 
-    if monto_abonado != total_adeudado:
-        raise ValidationError("El monto abonado no coincide con el total adeudado.")
+    if pagos_mixtos:
+        tramos_resueltos = []
+        suma_mixta = Decimal('0.00')
+        medios_ids_vistos = set()
+        for tramo in pagos_mixtos:
+            m_obj = _resolver_o_crear_medio_pago(tramo.get('medio_pago'))
+            if m_obj.id_mediopago in medios_ids_vistos:
+                raise ValidationError(f"No se puede repetir el medio de pago '{m_obj.nombre_medio_pago}' en un cobro mixto.")
+            medios_ids_vistos.add(m_obj.id_mediopago)
+            m_monto = Decimal(str(tramo.get('monto_pagado') or '0.00'))
+            suma_mixta += m_monto
+            tramos_resueltos.append({
+                'medio_obj': m_obj,
+                'monto': m_monto,
+                'numero_operacion': tramo.get('numero_operacion'),
+                'detalle': tramo.get('detalle')
+            })
+        if abs(suma_mixta - total_adeudado) > Decimal('0.01'):
+            raise ValidationError("La suma de los tramos del cobro mixto no coincide con el total adeudado.")
+        monto_abonado = suma_mixta
+        medio_pago_obj = tramos_resueltos[0]['medio_obj']
+    else:
+        monto_abonado = Decimal(str(datos_validados.get('monto_pagado') or '0.00'))
+        if monto_abonado != total_adeudado:
+            raise ValidationError("El monto abonado no coincide con el total adeudado.")
+        medio_pago_obj = _resolver_o_crear_medio_pago(datos_validados.get('medio_pago'))
+        tramos_resueltos = [{
+            'medio_obj': medio_pago_obj,
+            'monto': monto_abonado,
+            'numero_operacion': datos_validados.get('numero_operacion'),
+            'detalle': datos_validados.get('detalle')
+        }]
 
-    # Resolver o crear MedioPago priorizando código interno inmutable
-    from core_app.constantes import deducir_codigo_medio_pago
     from sales_app.selectors import _construir_desglose_cobro
-    medio_pago_input = str(datos_validados.get('medio_pago') or 'EFECTIVO').strip()
-    medio_pago_obj = None
-    if medio_pago_input.isdigit():
-        medio_pago_obj = MedioPago.objects.filter(id_mediopago=int(medio_pago_input)).first()
-    if not medio_pago_obj:
-        medio_pago_obj = MedioPago.objects.filter(codigo__iexact=medio_pago_input).first()
-    if not medio_pago_obj:
-        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__iexact=medio_pago_input).first()
-    if not medio_pago_obj:
-        medio_pago_obj = MedioPago.objects.filter(nombre_medio_pago__icontains=medio_pago_input).first()
-    if not medio_pago_obj:
-        medio_pago_obj = MedioPago.objects.create(
-            codigo=deducir_codigo_medio_pago(medio_pago_input),
-            nombre_medio_pago=medio_pago_input.upper(),
-            estado=True,
-            recargo=Decimal('0.00')
-        )
-    elif not medio_pago_obj.codigo:
-        medio_pago_obj.codigo = deducir_codigo_medio_pago(medio_pago_obj.nombre_medio_pago)
-        medio_pago_obj.save(update_fields=['codigo'])
 
     # Si es Reparación y no tiene Venta vinculada, aseguramos una venta para consistencia
     venta_asociada = None
     if isinstance(operacion, Venta):
         venta_asociada = operacion
     elif isinstance(operacion, Reparacion):
-        # La venta del diagnóstico inicial (cobro único) puede estar saldada:
-        # no se reutiliza para evitar un segundo Pago sobre la misma cabecera.
         _previa = operacion.id_venta
         _saldada = bool(_previa and str(_previa.estado_venta).strip().upper() in ('PAGADO', 'PAGADA'))
         if _previa and not _saldada:
             venta_asociada = _previa
         else:
-            # Crear cabecera de Venta para documentar la transacción
             codigo_sec = operacion.codigo_sec or uuid.uuid4().hex[:10].upper()
             venta_asociada = Venta.objects.create(
                 id_usuario=operacion.id_usuario,
@@ -843,23 +875,36 @@ def registrar_cobro_operacion(
             operacion.id_venta = venta_asociada
 
     numero_operacion = datos_validados.get('numero_operacion')
-    detalle = datos_validados.get('detalle') or (
+    detalle_base = datos_validados.get('detalle') or (
         f"Cobro registrado en mostrador por {usuario_ejecutor.email} "
         f"para {'Venta #' + str(venta_asociada.id_venta) if venta_asociada else 'Operación'}"
     )
 
-    # Paso 5: Instanciar Pago
+    # Paso 5: Instanciar Pago(s)
     if venta_asociada:
-        # Limpiar cualquier registro transitorio en cero previo a asentar el abono real
         Pago.objects.filter(id_venta=venta_asociada, monto_pagado=Decimal('0.00')).delete()
 
-    pago = Pago.objects.create(
-        id_venta=venta_asociada,
-        medio_pago=medio_pago_obj,
-        monto_pagado=monto_abonado,
-        fecha_pago=timezone.now().date(),
-        cod_operacion=numero_operacion,
-        detalle=detalle[:500]
+    pagos_creados = []
+    for idx_t, tramo in enumerate(tramos_resueltos, start=1):
+        det_tramo = tramo['detalle'] or (
+            f"[Cobro Mixto {idx_t}/{len(tramos_resueltos)}] {detalle_base}"
+            if len(tramos_resueltos) > 1 else detalle_base
+        )
+        p_inst = Pago.objects.create(
+            id_venta=venta_asociada,
+            medio_pago=tramo['medio_obj'],
+            monto_pagado=tramo['monto'],
+            fecha_pago=timezone.now().date(),
+            cod_operacion=tramo['numero_operacion'],
+            detalle=det_tramo[:500]
+        )
+        pagos_creados.append(p_inst)
+
+    pago = pagos_creados[0]
+    descripcion_medios = (
+        " + ".join(f"{t['medio_obj'].nombre_medio_pago} (${t['monto']:,.2f})" for t in tramos_resueltos)
+        if len(tramos_resueltos) > 1
+        else medio_pago_obj.nombre_medio_pago
     )
 
     # Transicionar el estado de la operación a PAGADO
@@ -1010,7 +1055,7 @@ def registrar_cobro_operacion(
         accion="Completar pago (CU-21)",
         detalle=(
             f"Cobro de ${monto_abonado} registrado por {usuario_ejecutor.email} para {tipo_op} #{id_op}. "
-            f"Medio: {medio_pago_obj.nombre_medio_pago}, Operación: {numero_operacion or 'N/A'}. "
+            f"Medio: {descripcion_medios}, Operación: {numero_operacion or 'N/A'}. "
             f"Estado transicionado a PAGADO."
         )[:1000],
         tipo="REGISTRO_PAGO",
@@ -1335,6 +1380,16 @@ def crear_venta_presencial(
     venta.monto_subtotal = monto_total
     venta.save(update_fields=['monto_subtotal'])
 
+    # Aplicar y canjear beneficios seleccionados por el cajero para el cliente vinculado
+    beneficios_seleccionados = datos_validados.get('beneficios_aplicados') or []
+    if beneficios_seleccionados and id_cliente:
+        res_ben = aplicar_y_canjear_beneficios_en_venta(
+            venta=venta,
+            lista_id_beneficios=beneficios_seleccionados
+        )
+        if res_ben and 'nuevo_subtotal' in res_ben:
+            monto_total = Decimal(str(res_ben['nuevo_subtotal']))
+
     # Auditoría del evento en LogSistema
     LogSistema.objects.create(
         fecha_hora=timezone.now(),
@@ -1374,10 +1429,11 @@ def crear_venta_presencial(
                 }
             )
 
+        monto_efectivo_cobrado = venta.monto_subtotal if beneficios_seleccionados else Decimal(str(datos_validados['monto_pagado']))
         pago = Pago.objects.create(
             id_venta=venta,
             medio_pago=medio_pago_obj,
-            monto_pagado=Decimal(str(datos_validados['monto_pagado'])),
+            monto_pagado=monto_efectivo_cobrado,
             fecha_pago=timezone.now().date(),
             cod_operacion=str(datos_validados.get('numero_operacion') or f"POS-{venta.codigo_sec}"),
             detalle=datos_validados.get('detalle') or "Cobro directo atómico en caja mostrador"
@@ -1599,26 +1655,26 @@ def cancelar_venta_y_restituir_stock(
                 id_venta=venta
             )
 
-    # Restituir los productos al carrito de compras activo del cliente
-    carrito_activo, _ = CarritoCompra.objects.get_or_create(
-        id_usuario=venta.id_usuario,
-        estado='activo',
-        defaults={'fecha_creacion': timezone.now().date()}
-    )
-    for det in detalles:
-        item_existente = CarritoProducto.objects.filter(
-            id_carrito=carrito_activo,
-            id_producto=det.id_producto
-        ).first()
-        if item_existente:
-            item_existente.cantidad += det.cantidad
-            item_existente.save(update_fields=['cantidad'])
-        else:
-            CarritoProducto.objects.create(
+    # Restituir los productos al carrito de compras activo SOLO si es una compra virtual (NO venta presencial de mostrador ni taller)
+    es_venta_mostrador = str(venta.metodo_entrega or '').strip().upper() == 'MOSTRADOR'
+    es_venta_taller = venta.reparacion_set.exists() if hasattr(venta, 'reparacion_set') else False
+    if not es_venta_mostrador and not es_venta_taller and venta.id_usuario:
+        from sales_app.services_carrito import _obtener_o_crear_carrito_activo
+        carrito_activo = _obtener_o_crear_carrito_activo(venta.id_usuario)
+        for det in detalles:
+            item_existente = CarritoProducto.objects.filter(
                 id_carrito=carrito_activo,
-                id_producto=det.id_producto,
-                cantidad=det.cantidad
-            )
+                id_producto=det.id_producto
+            ).first()
+            if item_existente:
+                item_existente.cantidad += det.cantidad
+                item_existente.save(update_fields=['cantidad'])
+            else:
+                CarritoProducto.objects.create(
+                    id_carrito=carrito_activo,
+                    id_producto=det.id_producto,
+                    cantidad=det.cantidad
+                )
 
     venta.estado_venta = 'CANCELADA'
     venta.save(update_fields=['estado_venta'])

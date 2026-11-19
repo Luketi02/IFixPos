@@ -64,6 +64,7 @@ export const ADMIN_MENU_ITEMS = [
   {
     label: 'Métricas y Análisis',
     children: [
+      { value: 'metrics-sales', label: 'Ventas y Arqueo de Caja', icon: Coins01Icon, route: '/admin/metricas/ventas-arqueo' },
       { value: 'metrics-conversion', label: 'Conversión de Presupuestos', icon: Analytics01Icon, route: '/admin/metricas/conversion-presupuestos' },
       { value: 'metrics-efficiency', label: 'Demanda y Eficiencia', icon: DashboardSquare01Icon, route: '/admin/metricas/demanda-eficiencia' },
       { value: 'metrics-productivity', label: 'Productividad Técnica', icon: UserGroupIcon, route: '/admin/metricas/productividad-tecnica' },

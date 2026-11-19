@@ -6,10 +6,12 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import SupplierModal from '../../components/purchases/SupplierModal';
+import InspeccionProveedorPanel from '../../components/purchases/InspeccionProveedorPanel';
+import { exportarInformePDF } from '../../utils/reportPrinter';
 
 import { API_BASE_URL } from '../../config/api';
 export default function AdminSuppliersScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -28,10 +30,12 @@ export default function AdminSuppliersScreen() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Modal de Registro / Modificación
+  // Modal de Registro / Modificación y Vista de Inspección Detallada
   const [modalAbierto, setModalAbierto] = useState(false);
   const [proveedorSeleccionado, setProveedorSeleccionado] = useState(null);
   const [nombreSugeridoModal, setNombreSugeridoModal] = useState('');
+  const [proveedorInspeccionado, setProveedorInspeccionado] = useState(null);
+  const [refreshInspeccionKey, setRefreshInspeccionKey] = useState(0);
 
   // Si se redirige desde Recepción de Compras (Paso 10/11), abrir el modal automáticamente
   useEffect(() => {
@@ -184,14 +188,141 @@ export default function AdminSuppliersScreen() {
     setModalAbierto(true);
   };
 
-  const handleGuardadoExitoso = (mensaje) => {
+  const handleAbrirInspeccion = (prov) => {
+    setProveedorInspeccionado(prov);
+  };
+
+  const handleGuardadoExitoso = (mensaje, provActualizado = null) => {
     setSuccessMsg(mensaje || 'Operación realizada con éxito.');
     consultarProveedores();
+    if (proveedorInspeccionado) {
+      if (provActualizado && typeof provActualizado === 'object') {
+        setProveedorInspeccionado((prev) => ({ ...prev, ...provActualizado }));
+      }
+      setRefreshInspeccionKey((k) => k + 1);
+    }
   };
 
   const totalProveedores = proveedores.length;
   const totalActivos = proveedores.filter((p) => p.estado !== false).length;
-  const totalInactivos = totalProveedores - totalActivos;
+  const totalCumplen = proveedores.filter(
+    (p) => Math.round(Number(p.indice_confiabilidad ?? 60)) >= 60
+  ).length;
+  const totalIncumplen = totalProveedores - totalCumplen;
+
+  const handleExportarInformeCumplimientoPDF = () => {
+    if (proveedores.length === 0) return;
+
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Administrador';
+
+    const filtrosActivos = [
+      filtroNombre.trim() ? `Búsqueda: ${filtroNombre.trim()}` : null,
+      filtroCuit.trim() ? `CUIT: ${filtroCuit.trim()}` : null,
+      filtroEstado === 'true'
+        ? 'Estado: Activos'
+        : filtroEstado === 'false'
+        ? 'Estado: Inactivos'
+        : 'Estado: Todos',
+      filtroEnvio === 'true'
+        ? 'Logística: Realiza envíos'
+        : filtroEnvio === 'false'
+        ? 'Logística: Retiro en sede'
+        : null
+    ].filter(Boolean);
+
+    exportarInformePDF({
+      titulo: 'Informe Ejecutivo: Cumplimiento y Confiabilidad de Proveedores',
+      subtitulo:
+        'Auditoría del padrón de proveedores, índice de confiabilidad operativa, tiempos medios de entrega y clasificación de cumplimiento',
+      periodo: 'Padrón Actualizado en Tiempo Real',
+      filtros: filtrosActivos,
+      kpis: [
+        {
+          label: 'Total Proveedores',
+          valor: `${totalProveedores}`,
+          detalle: `${totalActivos} activos en padrón`
+        },
+        {
+          label: 'Proveedores que Cumplen',
+          valor: `${totalCumplen}`,
+          detalle: 'Confiabilidad ≥ 60%'
+        },
+        {
+          label: 'En Observación / No Cumplen',
+          valor: `${totalIncumplen}`,
+          detalle: 'Confiabilidad < 60% por demoras/parciales'
+        },
+        {
+          label: 'Confiabilidad Media',
+          valor: `${
+            totalProveedores > 0
+              ? Math.round(
+                  proveedores.reduce(
+                    (acc, p) => acc + Number(p.indice_confiabilidad ?? 60),
+                    0
+                  ) / totalProveedores
+                )
+              : 0
+          }%`,
+          detalle: 'Promedio general del padrón'
+        }
+      ],
+      resumenEjecutivo:
+        `Evaluación de cumplimiento sobre ${totalProveedores} proveedores empadronados (${totalActivos} activos). ` +
+        `Se identificaron ${totalCumplen} proveedores que cumplen con los parámetros de confiabilidad (≥ 60%) y ` +
+        `${totalIncumplen} proveedores con penalizaciones por demoras en entregas, recepciones incompletas o cancelaciones.`,
+      tablas: [
+        {
+          titulo: 'Nómina de Proveedores y Dictamen de Cumplimiento',
+          columnas: [
+            { header: 'Razón Social / Proveedor', key: 'nombre_proveedor' },
+            { header: 'CUIT', key: 'cuit_prov' },
+            { header: 'Nivel', key: 'nivel', render: (p) => p.nivel || 'Estándar' },
+            {
+              header: 'Confiabilidad',
+              key: 'indice_confiabilidad',
+              align: 'center',
+              render: (p) => `${Math.round(Number(p.indice_confiabilidad ?? 60))}%`
+            },
+            {
+              header: 'Entrega Prom.',
+              key: 'tiempo_promedio_entrega',
+              align: 'center',
+              render: (p) =>
+                p.tiempo_promedio_entrega && Number(p.tiempo_promedio_entrega) > 0
+                  ? `${p.tiempo_promedio_entrega} días`
+                  : 'Sin entregas'
+            },
+            {
+              header: 'Dictamen',
+              key: 'dictamen',
+              render: (p) => {
+                const conf = Math.round(Number(p.indice_confiabilidad ?? 60));
+                if (conf >= 70) return 'CUMPLE (Alto Desempeño)';
+                if (conf >= 60) return 'CUMPLE (Estándar)';
+                return 'NO CUMPLE / EN OBSERVACIÓN';
+              }
+            },
+            {
+              header: 'Estado',
+              key: 'estado',
+              align: 'center',
+              render: (p) => (p.estado !== false ? 'Activo' : 'Inactivo')
+            }
+          ],
+          filas: proveedores
+        }
+      ],
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
+    });
+  };
 
   const hayFiltrosActivos = Boolean(
     filtroNombre.trim() ||
@@ -215,22 +346,50 @@ export default function AdminSuppliersScreen() {
         />
 
         <div className="p-6 sm:p-8 space-y-6 flex-1 max-w-7xl w-full mx-auto">
-          {/* Cabecera Operativa con Botón de Creación */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold text-white tracking-tight">Directorio de Proveedores</h2>
-            </div>
-            <button
-              type="button"
-              onClick={handleAbrirNuevo}
-              className="px-4 py-2.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-            >
-              <svg className="w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-              </svg>
-              <span>Registrar Nuevo Proveedor</span>
-            </button>
-          </div>
+          {proveedorInspeccionado ? (
+            <InspeccionProveedorPanel
+              key={`${proveedorInspeccionado.cuit_prov}-${refreshInspeccionKey}`}
+              proveedorBase={proveedorInspeccionado}
+              onVolver={() => setProveedorInspeccionado(null)}
+              onModificarProveedor={(prov) => handleAbrirModificar(prov)}
+            />
+          ) : (
+            <>
+              {/* Cabecera Operativa con Botón de Informe y Creación */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white tracking-tight">
+                    Directorio y Cumplimiento de Proveedores
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Inspecciona el cumplimiento de entregas, confiabilidad, cotizaciones y órdenes de compra de cada proveedor.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleExportarInformeCumplimientoPDF}
+                    disabled={cargando || proveedores.length === 0}
+                    className="px-4 py-2.5 rounded-xl bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 border border-violet-500/30 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span>Informe de Cumplimiento (PDF)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleAbrirNuevo}
+                    className="px-4 py-2.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <svg className="w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span>Registrar Nuevo Proveedor</span>
+                  </button>
+                </div>
+              </div>
           {/* Alertas Flotantes Cyber-Tech en esquina inferior izquierda (Fixed, Zero CLS) */}
           <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-md">
             <AnimatePresence>
@@ -520,24 +679,45 @@ export default function AdminSuppliersScreen() {
                             </span>
                           </td>
 
-                          {/* Acción: Modificar */}
-                          <td className="py-4 px-5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirModificar(prov)}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition-all"
-                            >
-                              Modificar
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                           {/* Acciones: Inspeccionar y Modificar (diferenciados por ícono) */}
+                           <td className="py-4 px-5 text-right">
+                             <div className="inline-flex items-center justify-end gap-2">
+                               <button
+                                 type="button"
+                                 onClick={() => handleAbrirInspeccion(prov)}
+                                 title="Inspeccionar detalles del proveedor, entregas, cotizaciones y órdenes de compra"
+                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 border border-violet-500/30 text-xs font-semibold transition-all cursor-pointer"
+                               >
+                                 <svg className="w-3.5 h-3.5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                 </svg>
+                                 <span>Inspeccionar</span>
+                               </button>
+
+                               <button
+                                 type="button"
+                                 onClick={() => handleAbrirModificar(prov)}
+                                 title="Modificar información legal, contacto o estado del proveedor"
+                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition-all cursor-pointer"
+                               >
+                                 <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                 </svg>
+                                 <span>Modificar</span>
+                               </button>
+                             </div>
+                           </td>
+                         </tr>
+                       );
+                     })}
+                   </tbody>
+                 </table>
+               </div>
+             )}
+           </div>
+            </>
+          )}
         </div>
       </main>
 

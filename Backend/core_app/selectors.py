@@ -569,8 +569,9 @@ def obtener_estado_almacenamiento() -> dict:
     from django.conf import settings
     from core_app.models import CopiaSeguridad
     from core_app.serializers import CopiaSeguridadOutputSerializer
+    from core_app.services import _obtener_base_backups
 
-    backup_dir = os.path.join(settings.BASE_DIR, 'backups')
+    backup_dir = _obtener_base_backups()
     os.makedirs(backup_dir, exist_ok=True)
 
     free_bytes = 0
@@ -601,5 +602,39 @@ def obtener_estado_almacenamiento() -> dict:
         "total_copias": total_copias,
         "ultima_copia": ultima_data
     }
+
+
+def obtener_direccion_local_formateada(fallback: str = "") -> str:
+    """
+    Obtiene la dirección física legible de la sede (`direccionLocal`).
+    Si `direccionLocal` almacena un ID numérico de `geo_app.Direccion`, lo resuelve
+    a su texto completo (Calle, Barrio, Ciudad, Provincia) usando `select_related`,
+    evitando exponer identificadores internos de base de datos en vistas o PDFs.
+    """
+    raw = obtener_configuracion_texto('direccionLocal', fallback=fallback)
+    if not raw:
+        return fallback
+    if raw.isdigit():
+        try:
+            from geo_app.models import Direccion
+            dir_obj = (
+                Direccion.objects
+                .select_related('id_ciudad__id_provincia__id_pais')
+                .filter(id_direccion=int(raw))
+                .first()
+            )
+            if dir_obj:
+                partes = [dir_obj.nro_calle, dir_obj.nombre_barrio]
+                if dir_obj.id_ciudad:
+                    partes.append(dir_obj.id_ciudad.nombre_ciudad)
+                    if dir_obj.id_ciudad.id_provincia:
+                        partes.append(dir_obj.id_ciudad.id_provincia.nombre_provincia)
+                texto = ", ".join(p for p in partes if p)
+                return texto or fallback
+            return fallback
+        except Exception:
+            return fallback
+    return raw
+
 
 

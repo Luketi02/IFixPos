@@ -569,10 +569,13 @@ class CopiaSeguridadOutputSerializer(serializers.Serializer):
         if not obj.ubicacion_archivo:
             return "N/D"
         try:
-            rel = os.path.relpath(obj.ubicacion_archivo, settings.BASE_DIR)
-            return rel.replace('\\', '/')
+            carpeta = os.path.dirname(obj.ubicacion_archivo)
+            rel = os.path.relpath(carpeta, settings.BASE_DIR).replace('\\', '/')
+            if rel.startswith('..'):
+                return f"backups/{self.get_categoria_backup(obj).lower()}s/"
+            return f"{rel.rstrip('/')}/"
         except Exception:
-            return obj.ubicacion_archivo
+            return "backups/"
 
 
 class RestaurarBackupInputSerializer(serializers.Serializer):

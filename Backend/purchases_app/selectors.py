@@ -1041,3 +1041,274 @@ def listar_compras_directas(
     return qs
 
 
+def obtener_expediente_inspeccion_proveedor(
+    *,
+    usuario_ejecutor: Usuario,
+    id_proveedor: str
+) -> Dict[str, Any]:
+    """
+    Recupera el expediente integral de inspección de un proveedor en modo solo lectura:
+    - Datos legales, fiscales, contacto y dirección física del proveedor.
+    - Métricas de confiabilidad, cumplimiento de entregas y desempeño de abastecimiento.
+    - Historial detallado de entregas / recepciones y evaluación de plazos.
+    - Lista completa de cotizaciones del proveedor (con su solicitud asociada y archivo PDF).
+    - Lista completa de órdenes de compra del proveedor (con sus renglones de productos).
+    Optimizado con select_related y prefetch_related para evitar consultas N+1.
+    """
+    _verificar_permiso_admin(usuario_ejecutor)
+
+    proveedor = obtener_proveedor_completo(id_proveedor)
+    hoy = timezone.now().date()
+
+    # 1. Invitaciones a cotizar dirigidas a este proveedor
+    invitaciones = list(
+        InvitacionCotizar.objects
+        .filter(cuit_prov=proveedor)
+        .select_related('id_solicitud', 'cuit_prov')
+        .prefetch_related('cotizacion_set')
+        .order_by('-id_invitacion')
+    )
+
+    # 2. Cotizaciones emitidas por este proveedor
+    cotizaciones = list(
+        Cotizacion.objects
+        .filter(id_invitacion__cuit_prov=proveedor)
+        .select_related(
+            'id_invitacion',
+            'id_invitacion__id_solicitud',
+            'id_invitacion__cuit_prov',
+            'id_invitacion__cuit_prov__id_direccion'
+        )
+        .prefetch_related(
+            'cotizacionproducto_set__id_producto',
+            'cotizacionproducto_set__id_producto__id_categoria',
+            'id_invitacion__id_solicitud__solicitudcotizacionproducto_set'
+        )
+        .order_by('-id_cotizacion')
+    )
+
+    # 3. Órdenes de compra adjudicadas a este proveedor
+    ordenes = list(
+        OrdenCompra.objects
+        .filter(cuit_prov=proveedor)
+        .select_related(
+            'cuit_prov',
+            'cuit_prov__id_direccion',
+            'cuit_prov__id_direccion__id_ciudad'
+        )
+        .prefetch_related(
+            'detalles__id_producto',
+            'detalles__id_producto__id_categoria'
+        )
+        .order_by('-fecha_emision', '-id_orden')
+    )
+
+    # Cálculo de métricas de cotizaciones
+    total_invitaciones = len(invitaciones)
+    total_cotizaciones = len(cotizaciones)
+    invitaciones_pendientes = sum(1 for i in invitaciones if i.estado_invitacion == InvitacionCotizar.ESTADO_PENDIENTE)
+    invitaciones_rechazadas = sum(1 for i in invitaciones if i.estado_invitacion == InvitacionCotizar.ESTADO_RECHAZADA)
+
+    cotizaciones_aceptadas = sum(1 for c in cotizaciones if c.estado_cotizacion == Cotizacion.ESTADO_ACEPTADA)
+    cotizaciones_pendientes = sum(1 for c in cotizaciones if c.estado_cotizacion == Cotizacion.ESTADO_PENDIENTE)
+    cotizaciones_descartadas = sum(1 for c in cotizaciones if c.estado_cotizacion == Cotizacion.ESTADO_DESCARTADA)
+    cotizaciones_rechazadas = sum(1 for c in cotizaciones if c.estado_cotizacion == Cotizacion.ESTADO_RECHAZADA)
+
+    tasa_respuesta_cotizaciones = (
+        round((total_cotizaciones / total_invitaciones) * 100, 1)
+        if total_invitaciones > 0 else 0.0
+    )
+    tasa_adjudicacion_cotizaciones = (
+        round((cotizaciones_aceptadas / total_cotizaciones) * 100, 1)
+        if total_cotizaciones > 0 else 0.0
+    )
+    plazos_prometidos = [int(c.tiempo_promesa) for c in cotizaciones if c.tiempo_promesa and int(c.tiempo_promesa) > 0]
+    plazo_prometido_promedio = (
+        round(sum(plazos_prometidos) / len(plazos_prometidos), 1)
+        if plazos_prometidos else float(proveedor.tiempo_promedio_entrega or 0)
+    )
+
+    # Cálculo de métricas de órdenes de compra y recepciones
+    total_ordenes = len(ordenes)
+    ordenes_entregadas_completas = sum(1 for o in ordenes if o.estado_orden == OrdenCompra.ESTADO_ENTREGADA)
+    ordenes_entregadas_parciales = sum(1 for o in ordenes if o.estado_orden == OrdenCompra.ESTADO_ENTREGADA_PARCIALMENTE)
+    ordenes_esperando_entrega = sum(1 for o in ordenes if o.estado_orden == OrdenCompra.ESTADO_ESPERANDO_ENTREGA)
+    ordenes_canceladas = sum(1 for o in ordenes if o.estado_orden == OrdenCompra.ESTADO_CANCELADA)
+
+    total_recepciones = ordenes_entregadas_completas + ordenes_entregadas_parciales
+    plazo_referencia = (
+        int(round(plazo_prometido_promedio))
+        if plazo_prometido_promedio > 0
+        else (int(proveedor.tiempo_promedio_entrega) if proveedor.tiempo_promedio_entrega and proveedor.tiempo_promedio_entrega > 0 else 5)
+    )
+
+    entregas_en_tiempo_y_forma = 0
+    entregas_con_demora_o_parciales = 0
+    total_unidades_solicitadas = 0
+    total_unidades_recibidas = 0
+    monto_total_comprometido = Decimal("0.00")
+    monto_total_recepcionado = Decimal("0.00")
+
+    historial_entregas = []
+
+    for o in ordenes:
+        detalles_orden = list(o.detalles.all())
+        unid_sol = sum(int(d.cantidad or 0) for d in detalles_orden)
+        unid_rec = sum(
+            int(d.cantidad_recibida if d.cantidad_recibida is not None else (d.cantidad if o.estado_orden == OrdenCompra.ESTADO_ENTREGADA else 0))
+            for d in detalles_orden
+        )
+        monto_sol = sum(Decimal(str(d.cantidad or 0)) * (d.precio_unitario or Decimal("0.00")) for d in detalles_orden)
+        monto_rec = sum(
+            Decimal(str(d.cantidad_recibida if d.cantidad_recibida is not None else (d.cantidad if o.estado_orden == OrdenCompra.ESTADO_ENTREGADA else 0))) * (d.precio_unitario or Decimal("0.00"))
+            for d in detalles_orden
+        )
+
+        if o.estado_orden != OrdenCompra.ESTADO_CANCELADA:
+            total_unidades_solicitadas += unid_sol
+            monto_total_comprometido += monto_sol
+
+        dias_transcurridos = None
+        en_tiempo = False
+        entrega_completa = False
+        cumplio_entrega = False
+        observacion_cumplimiento = "En tránsito / Esperando recepción"
+
+        if o.estado_orden in (OrdenCompra.ESTADO_ENTREGADA, OrdenCompra.ESTADO_ENTREGADA_PARCIALMENTE):
+            total_unidades_recibidas += unid_rec
+            monto_total_recepcionado += monto_rec
+            fecha_fin = o.fecha_recepcion or hoy
+            dias_transcurridos = max(0, (fecha_fin - o.fecha_emision).days) if o.fecha_emision else 0
+            en_tiempo = dias_transcurridos <= plazo_referencia
+            entrega_completa = (o.estado_orden == OrdenCompra.ESTADO_ENTREGADA) and (unid_rec >= unid_sol)
+            cumplio_entrega = en_tiempo and entrega_completa
+
+            if cumplio_entrega:
+                entregas_en_tiempo_y_forma += 1
+                observacion_cumplimiento = f"Cumplió en tiempo y forma ({dias_transcurridos} d ≤ {plazo_referencia} d)"
+            else:
+                entregas_con_demora_o_parciales += 1
+                motivos = []
+                if not entrega_completa:
+                    motivos.append(f"Entrega parcial ({unid_rec}/{unid_sol} u.)")
+                if not en_tiempo:
+                    motivos.append(f"Demora ({dias_transcurridos} d vs {plazo_referencia} d ref.)")
+                observacion_cumplimiento = " • ".join(motivos) or "Observación en recepción"
+        elif o.estado_orden == OrdenCompra.ESTADO_CANCELADA:
+            dias_transcurridos = max(0, (hoy - o.fecha_emision).days) if o.fecha_emision else 0
+            observacion_cumplimiento = "Orden cancelada / Incumplida"
+        elif o.estado_orden == OrdenCompra.ESTADO_ESPERANDO_ENTREGA:
+            dias_transcurridos = max(0, (hoy - o.fecha_emision).days) if o.fecha_emision else 0
+            if dias_transcurridos > plazo_referencia:
+                observacion_cumplimiento = f"En tránsito con demora ({dias_transcurridos} d transcurridos)"
+            else:
+                observacion_cumplimiento = f"En tránsito dentro de plazo ({dias_transcurridos} d transcurridos)"
+
+        historial_entregas.append({
+            "id_orden": o.id_orden,
+            "fecha_emision": o.fecha_emision,
+            "fecha_recepcion": o.fecha_recepcion,
+            "nro_remito": o.nro_remito,
+            "tipo_entrega": o.tipo_entrega,
+            "tipo_entrega_nombre": o.tipo_entrega_nombre,
+            "sol_tec": o.sol_tec,
+            "estado_orden": o.estado_orden,
+            "estado_nombre": o.estado_nombre,
+            "dias_transcurridos": dias_transcurridos,
+            "plazo_referencia_dias": plazo_referencia,
+            "en_tiempo": en_tiempo,
+            "entrega_completa": entrega_completa,
+            "cumplio_entrega": cumplio_entrega,
+            "unidades_solicitadas": unid_sol,
+            "unidades_recibidas": unid_rec,
+            "monto_solicitado": str(monto_sol.quantize(Decimal("0.01"))),
+            "monto_recepcionado": str(monto_rec.quantize(Decimal("0.01"))),
+            "observacion_cumplimiento": observacion_cumplimiento,
+        })
+
+    ordenes_cerradas = total_recepciones + ordenes_canceladas
+    conf_num = float(proveedor.indice_confiabilidad if proveedor.indice_confiabilidad is not None else Decimal("60.00"))
+    tasa_cumplimiento_entregas = (
+        round((entregas_en_tiempo_y_forma / ordenes_cerradas) * 100, 1)
+        if ordenes_cerradas > 0 else round(conf_num, 1)
+    )
+    tasa_efectividad_unidades = (
+        round((total_unidades_recibidas / total_unidades_solicitadas) * 100, 1)
+        if total_unidades_solicitadas > 0 else 100.0
+    )
+
+    # Clasificación de cumplimiento del proveedor
+    if conf_num >= 70.0 and (ordenes_cerradas == 0 or tasa_cumplimiento_entregas >= 60.0):
+        clasificacion_cumplimiento = "CUMPLE"
+        etiqueta_cumplimiento = "Proveedor Cumplidor (Alto Desempeño)"
+        motivo_cumplimiento = (
+            f"Confiabilidad del {conf_num:.0f}% con {entregas_en_tiempo_y_forma} de {ordenes_cerradas} "
+            f"órdenes cerradas entregadas en tiempo y forma."
+        )
+    elif conf_num >= 55.0:
+        clasificacion_cumplimiento = "CUMPLE" if total_recepciones < 5 and ordenes_canceladas == 0 else "EN_OBSERVACION"
+        etiqueta_cumplimiento = (
+            "Cumplimiento Estándar (Base Inicial 60%)"
+            if total_recepciones < 5 and ordenes_canceladas == 0
+            else "Cumplimiento Regular (En Observación)"
+        )
+        if total_recepciones < 5 and ordenes_canceladas == 0:
+            motivo_cumplimiento = (
+                f"Mantiene confiabilidad base del {conf_num:.0f}% ({total_recepciones}/5 recepciones concretadas "
+                f"para ajuste dinámico de puntaje)."
+            )
+        else:
+            motivo_cumplimiento = (
+                f"Confiabilidad del {conf_num:.0f}%. Registra {entregas_con_demora_o_parciales} recepciones "
+                f"con demora/parciales y {ordenes_canceladas} canceladas."
+            )
+    else:
+        clasificacion_cumplimiento = "NO_CUMPLE"
+        etiqueta_cumplimiento = "Incumplimiento Detectado (Riesgo Operativo)"
+        motivo_cumplimiento = (
+            f"Confiabilidad reducida al {conf_num:.0f}% por demoras, entregas incompletas ({entregas_con_demora_o_parciales}) "
+            f"u órdenes canceladas ({ordenes_canceladas})."
+        )
+
+    return {
+        "proveedor": proveedor,
+        "metricas_abastecimiento": {
+            "indice_confiabilidad": round(conf_num, 2),
+            "tiempo_promedio_entrega_dias": int(proveedor.tiempo_promedio_entrega or 0),
+            "plazo_prometido_promedio_dias": plazo_prometido_promedio,
+            "plazo_referencia_dias": plazo_referencia,
+            "total_invitaciones_cotizar": total_invitaciones,
+            "invitaciones_pendientes": invitaciones_pendientes,
+            "invitaciones_rechazadas": invitaciones_rechazadas,
+            "total_cotizaciones_respondidas": total_cotizaciones,
+            "cotizaciones_aceptadas": cotizaciones_aceptadas,
+            "cotizaciones_pendientes": cotizaciones_pendientes,
+            "cotizaciones_descartadas": cotizaciones_descartadas,
+            "cotizaciones_rechazadas": cotizaciones_rechazadas,
+            "tasa_respuesta_cotizaciones": tasa_respuesta_cotizaciones,
+            "tasa_adjudicacion_cotizaciones": tasa_adjudicacion_cotizaciones,
+            "total_ordenes_compra": total_ordenes,
+            "total_recepciones": total_recepciones,
+            "ordenes_entregadas_completas": ordenes_entregadas_completas,
+            "ordenes_entregadas_parciales": ordenes_entregadas_parciales,
+            "ordenes_esperando_entrega": ordenes_esperando_entrega,
+            "ordenes_canceladas": ordenes_canceladas,
+            "entregas_en_tiempo_y_forma": entregas_en_tiempo_y_forma,
+            "entregas_con_demora_o_parciales": entregas_con_demora_o_parciales,
+            "tasa_cumplimiento_entregas": tasa_cumplimiento_entregas,
+            "total_unidades_solicitadas": total_unidades_solicitadas,
+            "total_unidades_recibidas": total_unidades_recibidas,
+            "tasa_efectividad_unidades": tasa_efectividad_unidades,
+            "monto_total_comprometido": str(monto_total_comprometido.quantize(Decimal("0.01"))),
+            "monto_total_recepcionado": str(monto_total_recepcionado.quantize(Decimal("0.01"))),
+            "clasificacion_cumplimiento": clasificacion_cumplimiento,
+            "etiqueta_cumplimiento": etiqueta_cumplimiento,
+            "motivo_cumplimiento": motivo_cumplimiento,
+        },
+        "historial_entregas": historial_entregas,
+        "cotizaciones": cotizaciones,
+        "ordenes_compra": ordenes,
+    }
+
+
+

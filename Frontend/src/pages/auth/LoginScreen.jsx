@@ -25,6 +25,20 @@ const LoginScreen = () => {
   // Inicializado con string vacío para evitar problemas en el renderizado condicional suave
   const [errorMsg, setErrorMsg] = useState(''); 
   const [supportEmail, setSupportEmail] = useState('soporte@ifixnet.com'); // Correo por defecto
+  const [mostrarAvisoMovil, setMostrarAvisoMovil] = useState(false);
+
+  // Detección de acceso desde dispositivo móvil (celular / pantalla reducida)
+  useEffect(() => {
+    const detectarMovil = () => {
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+      const esUaMovil = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+      const esPantallaMovil = typeof window !== 'undefined' && window.innerWidth < 768;
+      if (esUaMovil || esPantallaMovil) {
+        setMostrarAvisoMovil(true);
+      }
+    };
+    detectarMovil();
+  }, []);
 
   // Obtener el correo de soporte dinámico desde la BD de Django
   useEffect(() => {
@@ -207,6 +221,34 @@ const LoginScreen = () => {
           <h1 className="text-3xl font-bold tracking-tight text-slate-50 mb-2">IFixPos</h1>
           <p className="text-slate-400">Ingresá a tu sesión</p>
         </div>
+
+        {/* Notificación de compatibilidad para dispositivos móviles */}
+        {mostrarAvisoMovil && (
+          <div
+            role="alert"
+            className="mb-6 p-4 rounded-xl bg-amber-950/70 border border-amber-500/40 text-amber-100 text-xs leading-relaxed shadow-lg flex items-start justify-between gap-3"
+          >
+            <div className="flex items-start gap-2.5">
+              <span className="text-base leading-none mt-0.5 shrink-0">💻</span>
+              <div>
+                <p className="font-bold text-amber-300 uppercase tracking-wider text-[10px] mb-1">
+                  Aviso de Compatibilidad
+                </p>
+                <p>
+                  Este sistema ha sido diseñado para su uso en computadoras de escritorio o portátiles. Actualmente no cuenta con soporte optimizado para dispositivos móviles, por lo que su experiencia de usuario podría verse afectada. Le recomendamos acceder desde una computadora.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMostrarAvisoMovil(false)}
+              className="text-amber-300 hover:text-white font-bold px-1.5 py-0.5 shrink-0 cursor-pointer"
+              aria-label="Cerrar aviso de compatibilidad"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">

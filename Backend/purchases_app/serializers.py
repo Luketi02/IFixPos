@@ -1610,3 +1610,20 @@ class RegistroCompraOutputSerializer(serializers.Serializer):
     producto_nombre = serializers.CharField(source='id_producto.nombre', allow_null=True, read_only=True)
 
 
+class ExpedienteInspeccionProveedorOutputSerializer(serializers.Serializer):
+    """
+    Serializador de salida para el expediente integral de inspección de un proveedor:
+    1) Datos legales, fiscales, dirección y contacto del proveedor.
+    2) Métricas de confiabilidad, entregas y abastecimiento.
+    3) Historial detallado de entregas / recepciones.
+    4) Lista de cotizaciones respondidas (con PDF adjunto e ítems).
+    5) Lista de órdenes de compra (con productos comprados y estados).
+    """
+    proveedor = ProveedorDetalleOutputSerializer(read_only=True)
+    metricas_abastecimiento = serializers.DictField(read_only=True)
+    historial_entregas = serializers.ListField(child=serializers.DictField(), read_only=True)
+    cotizaciones = CotizacionOutputSerializer(many=True, read_only=True)
+    ordenes_compra = OrdenCompraOutputSerializer(many=True, read_only=True)
+
+
+

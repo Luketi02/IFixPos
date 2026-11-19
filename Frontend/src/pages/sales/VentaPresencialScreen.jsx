@@ -39,15 +39,20 @@ export default function VentaPresencialScreen() {
   }, []);
 
   // ============================================================================
-  // ESTADO DEL CLIENTE ASOCIADO (PASO 2)
+  // ESTADO DEL CLIENTE ASOCIADO Y BENEFICIOS EN EL MODAL DE CONFIRMACIÓN
   // ============================================================================
-  // null = Consumidor Final (por defecto para agilidad operativa en mostrador)
+  // null = Consumidor Final (por defecto hasta vincular cliente en el modal de cobro)
   const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
-  const [mostrarModalBuscarCliente, setMostrarModalBuscarCliente] = useState(false);
+  const [mostrarBuscadorClienteModal, setMostrarBuscadorClienteModal] = useState(true);
   const [busquedaClienteDni, setBusquedaClienteDni] = useState('');
   const [busquedaClienteEmail, setBusquedaClienteEmail] = useState('');
   const [clientesEncontrados, setClientesEncontrados] = useState([]);
   const [buscandoClientes, setBuscandoClientes] = useState(false);
+
+  // Beneficios activos del cliente vinculado
+  const [beneficiosCliente, setBeneficiosCliente] = useState([]);
+  const [cargandoBeneficiosCliente, setCargandoBeneficiosCliente] = useState(false);
+  const [beneficiosSeleccionados, setBeneficiosSeleccionados] = useState([]);
 
   // ============================================================================
   // ESTADOS DEL CATÁLOGO DE PRODUCTOS (PASOS 3 & 4)
@@ -243,21 +248,60 @@ export default function VentaPresencialScreen() {
     }
   };
 
+  const cargarBeneficiosDeCliente = useCallback(
+    async (idUsuarioCliente) => {
+      if (!idUsuarioCliente || !token) {
+        setBeneficiosCliente([]);
+        setBeneficiosSeleccionados([]);
+        return;
+      }
+      setCargandoBeneficiosCliente(true);
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/sales/beneficios/mis-beneficios/`, {
+          params: { id_cliente: idUsuarioCliente },
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const activos = Array.isArray(res.data?.activos) ? res.data.activos : [];
+        setBeneficiosCliente(activos);
+        setBeneficiosSeleccionados([]);
+      } catch (err) {
+        console.warn('No fue posible consultar los beneficios del cliente:', err);
+        setBeneficiosCliente([]);
+        setBeneficiosSeleccionados([]);
+      } finally {
+        setCargandoBeneficiosCliente(false);
+      }
+    },
+    [token]
+  );
+
   const seleccionarCliente = (cliente) => {
     setClienteSeleccionado(cliente);
-    setMostrarModalBuscarCliente(false);
+    setMostrarBuscadorClienteModal(false);
     setBusquedaClienteDni('');
     setBusquedaClienteEmail('');
     setClientesEncontrados([]);
+    cargarBeneficiosDeCliente(cliente.id_usuario);
     const nombreCompleto = cliente.perfil?.nombre
       ? `${cliente.perfil.nombre} ${cliente.perfil.apellido || ''}`.trim()
       : cliente.email;
-    dispararAlerta('success', `Cliente ${nombreCompleto} asignado a la venta en curso.`);
+    dispararAlerta('success', `Cliente ${nombreCompleto} vinculado a la venta.`);
   };
 
   const restablecerAConsumidorFinal = () => {
     setClienteSeleccionado(null);
-    dispararAlerta('success', 'Cliente restablecido a Consumidor Final para venta rápida.');
+    setBeneficiosCliente([]);
+    setBeneficiosSeleccionados([]);
+    setMostrarBuscadorClienteModal(true);
+    dispararAlerta('success', 'Operación configurada como Consumidor Final.');
+  };
+
+  const toggleBeneficioSeleccionado = (idBeneficio) => {
+    setBeneficiosSeleccionados((prev) =>
+      prev.includes(idBeneficio)
+        ? prev.filter((id) => id !== idBeneficio)
+        : [...prev, idBeneficio]
+    );
   };
 
   // ============================================================================
@@ -536,6 +580,27 @@ export default function VentaPresencialScreen() {
     return ticketItems.reduce((acc, item) => acc + item.cantidad * item.precio_venta, 0);
   }, [ticketItems]);
 
+  // Cálculo del descuento por beneficios seleccionados del cliente vinculado
+  const descuentoBeneficios = useMemo(() => {
+    if (!clienteSeleccionado || beneficiosSeleccionados.length === 0) return 0;
+    let descTotal = 0;
+    beneficiosCliente.forEach((b) => {
+      if (!beneficiosSeleccionados.includes(b.id_beneficio)) return;
+      const porc = (Number(b.por_desc) || 0) / 100;
+      if (b.id_producto) {
+        const itemMatch = ticketItems.find(
+          (it) => Number(it.id_producto) === Number(b.id_producto)
+        );
+        if (itemMatch) {
+          descTotal += itemMatch.cantidad * itemMatch.precio_venta * porc;
+        }
+      } else {
+        descTotal += totalPagar * porc;
+      }
+    });
+    return Math.min(totalPagar, Math.round(descTotal * 100) / 100);
+  }, [clienteSeleccionado, beneficiosSeleccionados, beneficiosCliente, ticketItems, totalPagar]);
+
   // ============================================================================
   // CONFIRMACIÓN DE LA VENTA Y APERTURA DE COBRO (TICKET EN MEMORIA)
   // ============================================================================
@@ -544,8 +609,9 @@ export default function VentaPresencialScreen() {
       dispararAlerta('error', 'El ticket no tiene ningún producto cargado.', 4000);
       return;
     }
-    // Preconfigurar monto en memoria sin tocar la BD para evitar ventas a medias
-    setMontoEntregado(totalPagar.toFixed(2));
+    const netoInicial = Math.max(0, totalPagar - descuentoBeneficios);
+    setMontoEntregado(netoInicial.toFixed(2));
+    setMostrarBuscadorClienteModal(!clienteSeleccionado);
     setVentaConfirmada(null);
     setDatosQR(null);
     setEsperandoPagoQR(false);
@@ -571,8 +637,15 @@ export default function VentaPresencialScreen() {
   }, [medioPagoElegido]);
 
   const totalOperacionNum = useMemo(() => {
-    return totalPagar;
-  }, [totalPagar]);
+    return Math.max(0, totalPagar - descuentoBeneficios);
+  }, [totalPagar, descuentoBeneficios]);
+
+  // Sincronizar monto entregado cuando cambia el descuento por beneficios seleccionados
+  useEffect(() => {
+    if (mostrarModalCobro) {
+      setMontoEntregado(totalOperacionNum.toFixed(2));
+    }
+  }, [totalOperacionNum, mostrarModalCobro]);
 
   const montoEntregadoNum = useMemo(() => {
     return parseFloat(montoEntregado) || 0;
@@ -604,6 +677,7 @@ export default function VentaPresencialScreen() {
           id_producto: item.id_producto,
           cantidad: item.cantidad
         })),
+        beneficios_aplicados: clienteSeleccionado ? beneficiosSeleccionados : [],
         medio_pago: medioPagoElegido.toUpperCase(),
         monto_pagado: totalOperacionNum.toFixed(2),
         numero_operacion: esTransferencia ? numeroOperacion.trim() : (numeroOperacion.trim() || null),
@@ -697,7 +771,8 @@ export default function VentaPresencialScreen() {
           productos: ticketItems.map((item) => ({
             id_producto: item.id_producto,
             cantidad: item.cantidad
-          }))
+          })),
+          beneficios_aplicados: clienteSeleccionado ? beneficiosSeleccionados : []
         };
         const resVenta = await axios.post(`${API_BASE_URL}/api/sales/ventas/presencial/`, payload, {
           headers: {
@@ -866,6 +941,9 @@ export default function VentaPresencialScreen() {
   const iniciarNuevaVenta = () => {
     setTicketItems([]);
     setClienteSeleccionado(null);
+    setBeneficiosCliente([]);
+    setBeneficiosSeleccionados([]);
+    setMostrarBuscadorClienteModal(true);
     setVentaConfirmada(null);
     setMostrarModalCobro(false);
     setComprobanteEmitido(null);
@@ -898,100 +976,43 @@ export default function VentaPresencialScreen() {
           title="Venta Presencial en Mostrador"
         />
 
-        {/* Notificación Cyber-Tech Flotante */}
-        <AnimatePresence>
-          {alerta && (
-            <motion.div
-              initial={{ opacity: 0, y: -16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.25 }}
-              className={`mx-6 mt-4 p-4 rounded-xl border flex items-center justify-between text-sm shadow-xl z-20 ${
-                alerta.tipo === 'success'
-                  ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/50'
-                  : 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/50'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-lg">{alerta.tipo === 'success' ? '✓' : '⚠'}</span>
-                <span className="font-medium">{alerta.mensaje}</span>
-              </div>
-              <button
-                onClick={() => setAlerta(null)}
-                className="text-xs px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors"
+        {/* Notificación Push Flotante en Esquina Inferior Izquierda */}
+        <div className="fixed bottom-6 left-6 z-[70] flex flex-col gap-2 pointer-events-none max-w-md w-[calc(100%-3rem)]">
+          <AnimatePresence>
+            {alerta && (
+              <motion.div
+                initial={{ opacity: 0, x: -24, y: 12 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                exit={{ opacity: 0, x: -24, y: 12 }}
+                transition={{ duration: 0.22 }}
+                className={`pointer-events-auto p-4 rounded-2xl border flex items-center justify-between gap-3 text-xs sm:text-sm shadow-2xl ${
+                  alerta.tipo === 'success'
+                    ? 'bg-emerald-950/95 border-emerald-500/60 text-emerald-100'
+                    : alerta.tipo === 'info'
+                    ? 'bg-cyan-950/95 border-cyan-500/60 text-cyan-100'
+                    : 'bg-rose-950/95 border-rose-500/60 text-rose-100'
+                }`}
               >
-                Cerrar
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Cuerpo Principal del Mostrador */}
-        <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
-          {/* ===================================================================== */}
-          {/* PASO 2: ASIGNACIÓN DE CLIENTE (CONSUMIDOR FINAL O REGISTRADO)         */}
-          {/* ===================================================================== */}
-          <section className="bg-[#1E293B] border border-slate-700/80 rounded-2xl p-5 shadow-lg">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-violet-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold">
-                  {clienteSeleccionado ? 'CR' : 'CF'}
+                <div className="flex items-center gap-2.5">
+                  <span className="text-base font-bold">
+                    {alerta.tipo === 'success' ? '✓' : alerta.tipo === 'info' ? 'ℹ' : '⚠'}
+                  </span>
+                  <span className="font-medium leading-relaxed">{alerta.mensaje}</span>
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-slate-400 uppercase tracking-wider">Cliente de Mostrador:</span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-mono font-semibold ${
-                        clienteSeleccionado
-                          ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40'
-                          : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                      }`}
-                    >
-                      {clienteSeleccionado ? 'Cliente Registrado' : 'Consumidor Final (Venta Rápida)'}
-                    </span>
-                  </div>
-                  <h3 className="text-base font-bold text-white mt-0.5">
-                    {clienteSeleccionado
-                      ? clienteSeleccionado.perfil?.nombre
-                        ? `${clienteSeleccionado.perfil.nombre} ${clienteSeleccionado.perfil.apellido || ''}`.trim()
-                        : clienteSeleccionado.email
-                      : 'Consumidor Final'}
-                  </h3>
-                  {clienteSeleccionado && (
-                    <p className="text-xs text-slate-400 font-mono mt-0.5">
-                      {clienteSeleccionado.perfil?.dni && `DNI: ${clienteSeleccionado.perfil.dni} • `}
-                      Email: {clienteSeleccionado.email}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 w-full sm:w-auto">
                 <button
                   type="button"
-                  onClick={() => setMostrarModalBuscarCliente(true)}
-                  className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/30 text-xs font-semibold hover:border-cyan-500 transition-all flex items-center justify-center gap-2"
+                  onClick={() => setAlerta(null)}
+                  className="text-xs px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors shrink-0 cursor-pointer"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  {clienteSeleccionado ? 'Cambiar Cliente' : 'Buscar Cliente Registrado'}
+                  ✕
                 </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-                {clienteSeleccionado && (
-                  <button
-                    type="button"
-                    onClick={restablecerAConsumidorFinal}
-                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-all"
-                    title="Restablecer a Consumidor Final"
-                  >
-                    Restablecer
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-
+        {/* Cuerpo Principal del Mostrador: Primero Selección de Productos */}
+        <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
           {/* ===================================================================== */}
           {/* LAYOUT PRINCIPAL: CATÁLOGO (IZQUIERDA) + TICKET POS (DERECHA)         */}
           {/* ===================================================================== */}
@@ -1412,127 +1433,244 @@ export default function VentaPresencialScreen() {
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL 1: BÚSQUEDA Y ASIGNACIÓN DE CLIENTE (PASO 2)                        */}
-      {/* ========================================================================= */}
-      <AnimatePresence>
-        {mostrarModalBuscarCliente && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#1E293B] border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4"
-            >
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 className="text-base font-bold text-white">Buscar y Asignar Cliente</h3>
-                <button
-                  type="button"
-                  onClick={() => setMostrarModalBuscarCliente(false)}
-                  className="text-slate-400 hover:text-white text-sm"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={handleBuscarClientes} className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 uppercase">DNI del Cliente</label>
-                    <input
-                      type="text"
-                      placeholder="Ej: 38123456"
-                      value={busquedaClienteDni}
-                      onChange={(e) => setBusquedaClienteDni(e.target.value)}
-                      className="w-full mt-1 px-3 py-2 bg-[#0F172A] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 uppercase">Correo Electrónico</label>
-                    <input
-                      type="email"
-                      placeholder="cliente@email.com"
-                      value={busquedaClienteEmail}
-                      onChange={(e) => setBusquedaClienteEmail(e.target.value)}
-                      className="w-full mt-1 px-3 py-2 bg-[#0F172A] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="submit"
-                    disabled={buscandoClientes}
-                    className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all disabled:opacity-50"
-                  >
-                    {buscandoClientes ? 'Buscando...' : 'Buscar en Padrón'}
-                  </button>
-                </div>
-              </form>
-
-              {/* Resultados */}
-              <div className="max-h-60 overflow-y-auto space-y-2 pt-2 border-t border-slate-800">
-                {clientesEncontrados.length > 0 ? (
-                  clientesEncontrados.map((cli) => {
-                    const nombre = cli.perfil?.nombre
-                      ? `${cli.perfil.nombre} ${cli.perfil.apellido || ''}`.trim()
-                      : cli.email;
-                    return (
-                      <div
-                        key={cli.id_usuario}
-                        onClick={() => seleccionarCliente(cli)}
-                        className="p-3 bg-[#0F172A] border border-slate-800 hover:border-cyan-500 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
-                      >
-                        <div>
-                          <h5 className="text-xs font-bold text-white">{nombre}</h5>
-                          <p className="text-[11px] font-mono text-slate-400 mt-0.5">
-                            {cli.perfil?.dni && `DNI: ${cli.perfil.dni} • `}
-                            {cli.email}
-                          </p>
-                        </div>
-                        <span className="text-xs font-semibold text-cyan-400">Seleccionar →</span>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <p className="text-xs text-slate-500 text-center py-4">
-                    Ingresa datos de búsqueda para listar los clientes coincidentes.
-                  </p>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* ========================================================================= */}
-      {/* MODAL 2: COBRO EN CAJA / COMPLETAR PAGO (ATÓMICO EN MOSTRADOR)           */}
+      {/* MODAL UNIFICADO: VINCULAR CLIENTE, SELECCIONAR BENEFICIOS Y COBRAR        */}
       {/* ========================================================================= */}
       <AnimatePresence>
         {mostrarModalCobro && ticketItems.length > 0 && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 overflow-y-auto">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#1E293B] border border-slate-700 rounded-2xl p-6 w-full max-w-xl shadow-2xl space-y-5"
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="bg-[#1E293B] border border-slate-700 rounded-2xl p-6 w-full max-w-2xl shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto"
             >
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div>
                   <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider block">
-                    Caja Operativa • Cobro de Mostrador
+                    Caja Operativa • Confirmación y Cobro de Mostrador
                   </span>
                   <h3 className="text-lg font-black text-white tracking-tight">
-                    Completar Cobro de Venta
+                    Asociar Cliente, Beneficios y Completar Cobro
                   </h3>
                 </div>
                 <button
                   type="button"
                   onClick={handleCerrarModalCobro}
-                  className="text-slate-400 hover:text-white text-sm"
+                  className="text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   ✕
                 </button>
               </div>
+
+              {/* 1. VINCULACIÓN DE CLIENTE A LA VENTA */}
+              <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[11px] font-mono text-cyan-400 uppercase tracking-wider block">
+                      1. Asociar Venta a un Cliente
+                    </span>
+                    <p className="text-xs text-slate-400">
+                      Vincula al comprador por DNI o correo para aplicar sus beneficios, o continúa como Consumidor Final.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {clienteSeleccionado ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setMostrarBuscadorClienteModal((v) => !v)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 text-xs font-semibold cursor-pointer"
+                        >
+                          {mostrarBuscadorClienteModal ? 'Ocultar Buscador' : 'Cambiar Cliente'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={restablecerAConsumidorFinal}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold cursor-pointer"
+                        >
+                          Usar Consumidor Final
+                        </button>
+                      </>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                        Actual: Consumidor Final
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tarjeta del Cliente Vinculado */}
+                {clienteSeleccionado && (
+                  <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-mono uppercase text-violet-300 font-bold">
+                        ✓ Cliente Vinculado a la Operación
+                      </span>
+                      <p className="text-sm font-bold text-white mt-0.5">
+                        {clienteSeleccionado.perfil?.nombre
+                          ? `${clienteSeleccionado.perfil.nombre} ${clienteSeleccionado.perfil.apellido || ''}`.trim()
+                          : clienteSeleccionado.email}
+                      </p>
+                      <p className="text-xs font-mono text-slate-300">
+                        {clienteSeleccionado.perfil?.dni ? `DNI: ${clienteSeleccionado.perfil.dni} • ` : ''}
+                        {clienteSeleccionado.email}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Formulario para solicitar datos y vincular al cliente */}
+                {(!clienteSeleccionado || mostrarBuscadorClienteModal) && (
+                  <div className="space-y-2.5 pt-1">
+                    <form onSubmit={handleBuscarClientes} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                      <div className="sm:col-span-4">
+                        <label className="text-[10px] font-mono text-slate-400 uppercase block mb-1">
+                          DNI del Cliente
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 38123456"
+                          value={busquedaClienteDni}
+                          onChange={(e) => setBusquedaClienteDni(e.target.value)}
+                          className="w-full px-3 py-2 bg-[#1E293B] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-5">
+                        <label className="text-[10px] font-mono text-slate-400 uppercase block mb-1">
+                          Correo Electrónico
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="cliente@email.com"
+                          value={busquedaClienteEmail}
+                          onChange={(e) => setBusquedaClienteEmail(e.target.value)}
+                          className="w-full px-3 py-2 bg-[#1E293B] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <button
+                          type="submit"
+                          disabled={buscandoClientes}
+                          className="w-full px-3 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+                        >
+                          {buscandoClientes ? 'Buscando...' : 'Buscar Cliente'}
+                        </button>
+                      </div>
+                    </form>
+
+                    {clientesEncontrados.length > 0 && (
+                      <div className="max-h-40 overflow-y-auto space-y-1.5 pt-1">
+                        {clientesEncontrados.map((cli) => {
+                          const nombre = cli.perfil?.nombre
+                            ? `${cli.perfil.nombre} ${cli.perfil.apellido || ''}`.trim()
+                            : cli.email;
+                          return (
+                            <div
+                              key={cli.id_usuario}
+                              onClick={() => seleccionarCliente(cli)}
+                              className="p-2.5 bg-[#1E293B] border border-slate-700 hover:border-cyan-400 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
+                            >
+                              <div>
+                                <h5 className="text-xs font-bold text-white">{nombre}</h5>
+                                <p className="text-[11px] font-mono text-slate-400">
+                                  {cli.perfil?.dni && `DNI: ${cli.perfil.dni} • `}
+                                  {cli.email}
+                                </p>
+                              </div>
+                              <span className="text-xs font-bold text-cyan-400">Vincular →</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. BENEFICIOS AUTOMÁTICOS DEL CLIENTE VINCULADO */}
+              {clienteSeleccionado && (
+                <div className="bg-[#0F172A] border border-violet-500/30 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] font-mono text-violet-300 uppercase tracking-wider block">
+                        2. Beneficios y Cupones Otorgados al Cliente
+                      </span>
+                      <p className="text-xs text-slate-400">
+                        Selecciona los beneficios vigentes que deseas aplicar a esta venta.
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono px-2.5 py-0.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/30">
+                      {beneficiosSeleccionados.length} seleccionado(s)
+                    </span>
+                  </div>
+
+                  {cargandoBeneficiosCliente ? (
+                    <div className="py-4 text-center text-xs text-slate-400">
+                      Consultando beneficios vigentes del cliente...
+                    </div>
+                  ) : beneficiosCliente.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-xs text-slate-400">
+                      Este cliente no registra beneficios o cupones activos en este momento.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                      {beneficiosCliente.map((ben) => {
+                        const esEspecifico = Boolean(ben.id_producto);
+                        const itemEnTicket = esEspecifico
+                          ? ticketItems.find(
+                              (it) => Number(it.id_producto) === Number(ben.id_producto)
+                            )
+                          : null;
+                        const aplicable = !esEspecifico || Boolean(itemEnTicket);
+                        const seleccionado = beneficiosSeleccionados.includes(ben.id_beneficio);
+
+                        return (
+                          <label
+                            key={ben.id_beneficio}
+                            className={`flex items-start justify-between gap-3 p-3 rounded-xl border transition-all ${
+                              !aplicable
+                                ? 'bg-slate-900/40 border-slate-800/80 opacity-60 cursor-not-allowed'
+                                : seleccionado
+                                ? 'bg-violet-500/15 border-violet-400 cursor-pointer'
+                                : 'bg-[#1E293B]/80 border-slate-700/80 hover:border-slate-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <input
+                                type="checkbox"
+                                disabled={!aplicable}
+                                checked={seleccionado}
+                                onChange={() => toggleBeneficioSeleccionado(ben.id_beneficio)}
+                                className="mt-0.5 rounded border-slate-600 text-violet-500 focus:ring-violet-500"
+                              />
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-xs font-bold text-white">
+                                    {Number(ben.por_desc || 0).toFixed(0)}% OFF —{' '}
+                                    {ben.producto_nombre || 'Descuento General'}
+                                  </span>
+                                  {!aplicable && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                      Producto no incluido en el ticket
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-300 leading-snug">
+                                  {ben.motivo}
+                                </p>
+                              </div>
+                            </div>
+                            <span className="text-xs font-mono font-bold text-emerald-400 shrink-0">
+                              -{Number(ben.por_desc || 0).toFixed(0)}%
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Resumen de Operación */}
               <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-4 grid grid-cols-2 gap-3 text-xs">
@@ -1543,15 +1681,36 @@ export default function VentaPresencialScreen() {
                   </p>
                 </div>
                 <div>
-                  <span className="text-slate-400 font-mono">Cliente:</span>
+                  <span className="text-slate-400 font-mono">Cliente Asociado:</span>
                   <p className="font-semibold text-white truncate mt-0.5">
-                    {ventaConfirmada?.cliente || (clienteSeleccionado ? (clienteSeleccionado.perfil?.nombre ? `${clienteSeleccionado.perfil.nombre} ${clienteSeleccionado.perfil.apellido || ''}`.trim() : clienteSeleccionado.email) : 'Consumidor Final')}
+                    {ventaConfirmada?.cliente ||
+                      (clienteSeleccionado
+                        ? clienteSeleccionado.perfil?.nombre
+                          ? `${clienteSeleccionado.perfil.nombre} ${clienteSeleccionado.perfil.apellido || ''}`.trim()
+                          : clienteSeleccionado.email
+                        : 'Consumidor Final')}
                   </p>
                 </div>
+                {descuentoBeneficios > 0 && (
+                  <div className="col-span-2 pt-2 border-t border-slate-800/80 space-y-1">
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Subtotal Original:</span>
+                      <span className="font-mono">
+                        ${totalPagar.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-violet-300 font-semibold">
+                      <span>Descuento por Beneficios ({beneficiosSeleccionados.length}):</span>
+                      <span className="font-mono">
+                        -${descuentoBeneficios.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 <div className="col-span-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                  <span className="font-mono text-slate-300 font-bold uppercase">Total Adeudado:</span>
+                  <span className="font-mono text-slate-300 font-bold uppercase">Total a Cobrar:</span>
                   <span className="text-xl font-black font-mono text-emerald-400">
-                    ${totalPagar.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${totalOperacionNum.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
               </div>
@@ -1805,7 +1964,7 @@ export default function VentaPresencialScreen() {
                         </h4>
                         <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
                           Al presionar continuar, se generará el código QR por un total de{' '}
-                          <strong className="text-emerald-400 font-mono">${totalPagar.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>{' '}
+                          <strong className="text-emerald-400 font-mono">${totalOperacionNum.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>{' '}
                           en pantalla para que el cliente lo escanee y pague desde su dispositivo móvil.
                         </p>
                       </div>

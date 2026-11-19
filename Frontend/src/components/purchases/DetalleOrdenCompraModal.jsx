@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
+import { exportarInformePDF } from '../../utils/reportPrinter';
 
 import { API_BASE_URL } from '../../config/api';
 export default function DetalleOrdenCompraModal({
@@ -643,8 +644,44 @@ export default function DetalleOrdenCompraModal({
 
                   <button
                     type="button"
-                    onClick={() => window.print()}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 border border-violet-500/30 transition-colors flex items-center gap-2"
+                    onClick={() =>
+                      exportarInformePDF({
+                        titulo: `Orden de Compra Oficial #${data.id_orden}`,
+                        subtitulo: `Proveedor: ${proveedor.razon_social || proveedor.nombre_proveedor} (CUIT: ${proveedor.cuit || proveedor.cuit_prov})`,
+                        periodo: `Emisión: ${formatFecha(data.fecha_emision)}${data.fecha_recepcion ? ` | Recepción: ${formatFecha(data.fecha_recepcion)}` : ''}`,
+                        filtros: [
+                          `Estado: ${data.estado_nombre || data.estado || '—'}`,
+                          `Modalidad: ${data.tipo_entrega_nombre || (Number(data.tipo_entrega) === 2 ? 'Envío a Domicilio' : 'Retiro en Sucursal')}`,
+                          data.nro_remito ? `Remito: ${data.nro_remito}` : null
+                        ].filter(Boolean),
+                        codigoReferencia: `OC-${data.id_orden}`,
+                        kpis: [
+                          { label: 'Proveedor Adjudicado', valor: proveedor.razon_social || proveedor.nombre_proveedor, detalle: `CUIT: ${proveedor.cuit || proveedor.cuit_prov}` },
+                          { label: 'Estado Operativo', valor: data.estado_nombre || data.estado || '—', detalle: data.sol_tec ? 'Prioridad Taller' : 'Reposición Stock' },
+                          { label: 'Monto Solicitado', valor: formatMoneda(totalSolicitado), detalle: `${renglones.length} ítem(s)` },
+                          { label: 'Total a Abonar', valor: formatMoneda(totalAbonar), detalle: data.nro_remito ? `Remito: ${data.nro_remito}` : 'Segun recepción' }
+                        ],
+                        tablas: [
+                          {
+                            titulo: 'Detalle de Productos e Insumos Comprados',
+                            columnas: [
+                              { header: 'Producto / Insumo', key: 'nombre_producto' },
+                              { header: 'Cant. Solicitada', key: 'cantidad', align: 'center' },
+                              {
+                                header: 'Cant. Recibida',
+                                key: 'cantidad_recibida',
+                                align: 'center',
+                                render: (r) => (r.cantidad_recibida !== null && r.cantidad_recibida !== undefined ? r.cantidad_recibida : 'Pendiente')
+                              },
+                              { header: 'Precio Unitario', key: 'precio_unitario', align: 'right', render: (r) => formatMoneda(r.precio_unitario) },
+                              { header: 'Subtotal', key: 'subtotal', align: 'right', render: (r) => formatMoneda(r.subtotal) }
+                            ],
+                            filas: renglones
+                          }
+                        ]
+                      })
+                    }
+                    className="px-4 py-2 rounded-xl text-xs font-semibold bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 border border-violet-500/30 transition-colors flex items-center gap-2 cursor-pointer"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />

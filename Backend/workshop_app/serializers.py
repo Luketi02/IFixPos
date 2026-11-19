@@ -1775,6 +1775,7 @@ class CambiarEstadoReparacionInputSerializer(serializers.Serializer):
         'FINALIZADO': 'FINALIZADO',
         'FINALIZADA': 'FINALIZADO',
         'ESPERANDO_DIAGNOSTICO': 'ESPERANDO_DIAGNOSTICO',
+        'EN_DIAGNOSTICO': 'EN_DIAGNOSTICO',
         'ESPERANDO_CONFIRMACION': 'ESPERANDO_CONFIRMACION'
     }
 

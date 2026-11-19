@@ -59,6 +59,7 @@ const AdminAuditLogsScreen = lazy(() => import('./pages/admin/AdminAuditLogsScre
 const AdminBackupsScreen = lazy(() => import('./pages/admin/AdminBackupsScreen'));
 
 // Métricas y Reportes Gerenciales
+const AdminSalesReportScreen = lazy(() => import('./pages/admin/metrics/AdminSalesReportScreen'));
 const AdminConversionReportScreen = lazy(() => import('./pages/admin/metrics/AdminConversionReportScreen'));
 const AdminEfficiencyReportScreen = lazy(() => import('./pages/admin/metrics/AdminEfficiencyReportScreen'));
 const AdminProductivityReportScreen = lazy(() => import('./pages/admin/metrics/AdminProductivityReportScreen'));
@@ -185,7 +186,9 @@ function App() {
                 <Route path="/admin/auditoria/copias-seguridad" element={<AdminBackupsScreen />} />
                 <Route path="/admin/backups" element={<AdminBackupsScreen />} />
                 <Route path="/admin/copias-seguridad" element={<AdminBackupsScreen />} />
-                {/* Métricas y Análisis (CU-72, CU-73, CU-74, CU-75 & CU-76) */}
+                {/* Métricas y Análisis (CU-72, CU-73, CU-74, CU-75, CU-76 & Ventas/Arqueo) */}
+                <Route path="/admin/metricas/ventas-arqueo" element={<AdminSalesReportScreen />} />
+                <Route path="/admin/reportes/ventas" element={<AdminSalesReportScreen />} />
                 <Route path="/admin/metricas/conversion-presupuestos" element={<AdminConversionReportScreen />} />
                 <Route path="/admin/metricas/demanda-eficiencia" element={<AdminEfficiencyReportScreen />} />
                 <Route path="/admin/metricas/productividad-tecnica" element={<AdminProductivityReportScreen />} />

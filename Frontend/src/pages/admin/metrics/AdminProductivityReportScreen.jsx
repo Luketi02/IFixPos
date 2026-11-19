@@ -29,7 +29,7 @@ const obtenerFechaFormato = (d) => {
 };
 
 export default function AdminProductivityReportScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   // ============================================================================
   // ESTADOS DE PARÁMETROS TEMPORALES Y SEGMENTACIÓN (PASOS 2 Y 3)
@@ -232,9 +232,22 @@ export default function AdminProductivityReportScreen() {
       { header: 'Eventos Bitácora', key: 'registros_bitacora', align: 'center', render: (f) => `${f.registros_bitacora} eventos` }
     ];
 
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Usuario Autenticado';
+
+    const tecSel = listaTecnicos.find((t) => String(t.id_usuario) === String(idTecnico));
+    const filtrosActivos = [
+      tecSel ? `Técnico: ${tecSel.nombre_completo || tecSel.email}` : 'Personal Técnico: Todos los profesionales',
+      'Carga Viva: Tiempo Real'
+    ];
+
     exportarInformePDF({
       titulo: 'Informe Ejecutivo: Productividad y Carga de Trabajo Técnica',
-      subtitulo: `Horizonte Histórico: ${fechaInicio} al ${fechaFin} | Radiografía de Taller: Tiempo Real`,
+      subtitulo: 'Auditoría de rendimiento operativo, facturación de mano de obra y trazabilidad en bitácora',
+      periodo: `${fechaInicio} al ${fechaFin}`,
+      filtros: filtrosActivos,
       resumenEjecutivo: `Auditoría integral del personal técnico operativo (${totalTecnicos || 0} profesionales). Se identificó una carga viva concurrente en taller de ${cargaVivaTotal || 0} dispositivos (~${cargaPromedioPorTecnico || 0} equipos/téc), un volumen de ${volumenFinalizadoTotal || 0} órdenes culminadas y una facturación acumulada por mano de obra de ${formatearMoneda(facturacionTotal || 0)}, con ${interaccionesBitacoraTotal || 0} registros de trazabilidad en bitácora.`,
       kpis: [
         { label: 'Carga Viva Actual', valor: `${cargaVivaTotal || 0} eq.`, detalle: `~${cargaPromedioPorTecnico || 0} / técnico` },
@@ -248,7 +261,12 @@ export default function AdminProductivityReportScreen() {
           columnas,
           filas: datosReporte
         }
-      ]
+      ],
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
     });
   };
 

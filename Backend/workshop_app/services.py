@@ -1764,41 +1764,48 @@ def cambiar_estado_reparacion(
         raise ValidationError(f"La reparación ya se encuentra en el estado '{nuevo_estado}'.")
 
     # MÁQUINA DE ESTADOS - REGLAS DE TRANSICIÓN OPERATIVAS
-    if nuevo_estado == 'ESPERANDO_REPUESTOS':
-        if etapa_actual != 'EN_REPARACION':
+    estados_terminales = ('ENTREGADO', 'ENTREGADA', 'CANCELADO', 'CANCELADA')
+    if etapa_actual in estados_terminales:
+        raise ValidationError(
+            f"Transición no permitida: La reparación se encuentra en un estado terminal '{reparacion.etapa}'."
+        )
+
+    if etapa_actual == 'ESPERANDO_DISPOSITIVO':
+        raise ValidationError(
+            "Transición no permitida: El dispositivo aún no fue recepcionado físicamente en el taller."
+        )
+
+    # Regla 1: Si está en ESPERANDO_DIAGNOSTICO por primera vez (sin diagnóstico previo ni reingreso previo),
+    # no se permite transicionar manualmente hasta registrar el diagnóstico inicial.
+    if etapa_actual == 'ESPERANDO_DIAGNOSTICO':
+        tiene_diagnostico_previo = reparacion.diagnostico_set.exists()
+        veces_esperando_diag = BitacoraReparacion.objects.filter(
+            id_reparacion=reparacion,
+            estado_alcanzado=2
+        ).count()
+        if not tiene_diagnostico_previo and veces_esperando_diag < 2:
             raise ValidationError(
-                f"Transición no permitida: Para pasar a 'Esperando Repuestos', el equipo debe encontrarse en 'En Reparación' (actualmente: '{reparacion.etapa}')."
+                "Transición no permitida: La reparación se encuentra en 'Esperando Diagnóstico' por primera vez. Debes registrar el diagnóstico técnico inicial antes de actualizar el estado manualmente."
             )
 
-    elif nuevo_estado == 'FINALIZADO':
-        if etapa_actual != 'EN_REPARACION':
-            raise ValidationError(
-                f"Transición no permitida: Para finalizar la reparación, el equipo debe encontrarse en 'En Reparación' (actualmente: '{reparacion.etapa}')."
-            )
-        # Verificar que posea diagnóstico técnico cargado
-        if not reparacion.diagnostico_set.exists():
-            raise ValidationError(
-                "No se puede finalizar la orden porque el equipo no cuenta con un diagnóstico técnico registrado."
-            )
-
-    elif nuevo_estado == 'EN_REPARACION':
-        # Permitido como reanudación desde 'ESPERANDO_REPUESTOS' o retrabajo desde 'FINALIZADO'
-        if etapa_actual not in ('ESPERANDO_REPUESTOS', 'FINALIZADO'):
-            raise ValidationError(
-                f"Transición no permitida: No es posible pasar a 'En Reparación' desde '{reparacion.etapa}'. Esta acción solo es válida desde 'Esperando Repuestos' (reanudación) o desde 'Finalizado' (retrabajo)."
-            )
-
-    elif nuevo_estado in ('ESPERANDO_DIAGNOSTICO', 'EN_DIAGNOSTICO'):
-        # Permitido desde cualquier estado activo (no terminal) para reevaluación técnica o nuevo diagnóstico
-        estados_terminales = ('ENTREGADO', 'ENTREGADA', 'CANCELADO', 'CANCELADA')
-        if etapa_actual in estados_terminales:
-            raise ValidationError(
-                f"Transición no permitida: No es posible solicitar nuevo diagnóstico sobre una reparación en estado terminal '{reparacion.etapa}'."
-            )
-
-    else:
+    # Regla 2: Después del primer diagnóstico (o segunda vez en adelante), el técnico puede
+    # pasar libremente a cualquier otro estado operativo válido.
+    estados_operativos_permitidos = (
+        'ESPERANDO_DIAGNOSTICO',
+        'EN_DIAGNOSTICO',
+        'ESPERANDO_CONFIRMACION',
+        'EN_REPARACION',
+        'ESPERANDO_REPUESTOS',
+        'FINALIZADO',
+    )
+    if nuevo_estado not in estados_operativos_permitidos:
         raise ValidationError(
             f"Transición no permitida: No es posible cambiar manualmente de '{reparacion.etapa}' hacia '{nuevo_estado}'."
+        )
+
+    if nuevo_estado == 'FINALIZADO' and not reparacion.diagnostico_set.exists():
+        raise ValidationError(
+            "No se puede finalizar la orden porque el equipo no cuenta con un diagnóstico técnico registrado."
         )
 
     # Paso 6: Actualizar etapa en Reparacion

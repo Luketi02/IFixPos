@@ -411,14 +411,6 @@ def registrar_log_evento(
 # 💾 SUBSISTEMA DE RESPALDOS MULTINIVEL Y ROTACIÓN FIFO (CU-22)
 # ==============================================================================
 
-DIRECTORIOS_BACKUP = {
-    'DIARIO': os.path.join(settings.BASE_DIR, 'backups', 'diarios'),
-    'SEMANAL': os.path.join(settings.BASE_DIR, 'backups', 'semanales'),
-    'QUINCENAL': os.path.join(settings.BASE_DIR, 'backups', 'quincenales'),
-    'MENSUAL': os.path.join(settings.BASE_DIR, 'backups', 'mensuales'),
-    'MANUAL': os.path.join(settings.BASE_DIR, 'backups', 'manuales'),
-}
-
 CARPETAS_POR_TIPO = {
     'DIARIO': 'diarios',
     'SEMANAL': 'semanales',
@@ -428,18 +420,32 @@ CARPETAS_POR_TIPO = {
 }
 
 
+def _obtener_base_backups() -> str:
+    """Retorna la ruta raíz de respaldos respetando `settings.BACKUPS_DIR` si se sobreescribe en pruebas."""
+    dir_override = getattr(settings, 'BACKUPS_DIR', None)
+    if dir_override:
+        return str(dir_override)
+    return os.path.join(settings.BASE_DIR, 'backups')
+
+
+def _obtener_directorios_backup() -> dict:
+    base = _obtener_base_backups()
+    return {tipo: os.path.join(base, sub) for tipo, sub in CARPETAS_POR_TIPO.items()}
+
+
 def asegurar_directorios_backup() -> dict:
     """Asegura la existencia de las subcarpetas especializadas de respaldos."""
-    for d in DIRECTORIOS_BACKUP.values():
+    dirs = _obtener_directorios_backup()
+    for d in dirs.values():
         os.makedirs(d, exist_ok=True)
-    return DIRECTORIOS_BACKUP
+    return dirs
 
 
 def obtener_directorio_backup_por_tipo(tipo: str) -> str:
     """Obtiene la ruta física del directorio correspondiente al tipo de respaldo."""
     tipo_up = (tipo or 'MANUAL').upper()
-    asegurar_directorios_backup()
-    return DIRECTORIOS_BACKUP.get(tipo_up, DIRECTORIOS_BACKUP['MANUAL'])
+    dirs = asegurar_directorios_backup()
+    return dirs.get(tipo_up, dirs['MANUAL'])
 
 
 def purgar_copias_excedentes_fifo_por_tipo(*, tipo_backup: str, limite: int) -> int:
@@ -479,17 +485,18 @@ def purgar_copias_excedentes_fifo_por_tipo(*, tipo_backup: str, limite: int) -> 
 
 def depurar_archivos_backup_huerfanos() -> dict:
     """
-    Escanea la carpeta de respaldos (y sus subdirectorios) y elimina físicamente
-    cualquier archivo .sql que no se encuentre registrado en la base de datos (CopiaSeguridad).
-    Retorna métricas de archivos eliminados y espacio liberado en bytes.
+    Escanea la carpeta de respaldos (y sus subdirectorios) y:
+    1) Elimina físicamente cualquier archivo .sql que no se encuentre registrado en la BD.
+    2) Elimina de la BD registros de CopiaSeguridad cuyo archivo físico ya no exista en disco.
+    Retorna métricas de archivos eliminados, registros BD depurados y espacio liberado.
     """
-    base_backups = os.path.join(settings.BASE_DIR, 'backups')
-    if not os.path.exists(base_backups):
-        return {"eliminados": 0, "bytes_liberados": 0, "archivos": []}
+    base_backups = _obtener_base_backups()
+    os.makedirs(base_backups, exist_ok=True)
 
+    copias_bd = list(CopiaSeguridad.objects.all())
     rutas_en_bd = set(
-        os.path.normcase(os.path.abspath(r)) for r in
-        CopiaSeguridad.objects.exclude(ubicacion_archivo__isnull=True).values_list('ubicacion_archivo', flat=True)
+        os.path.normcase(os.path.abspath(c.ubicacion_archivo))
+        for c in copias_bd if c.ubicacion_archivo
     )
 
     eliminados = 0
@@ -510,8 +517,17 @@ def depurar_archivos_backup_huerfanos() -> dict:
                     except OSError:
                         pass
 
+    ids_huerfanos_bd = [
+        c.id_backup for c in copias_bd
+        if not c.ubicacion_archivo or not os.path.exists(c.ubicacion_archivo)
+    ]
+    registros_bd_eliminados = 0
+    if ids_huerfanos_bd:
+        registros_bd_eliminados, _ = CopiaSeguridad.objects.filter(id_backup__in=ids_huerfanos_bd).delete()
+
     return {
         "eliminados": eliminados,
+        "registros_bd_eliminados": registros_bd_eliminados,
         "bytes_liberados": bytes_liberados,
         "mb_liberados": round(bytes_liberados / (1024 * 1024), 2),
         "archivos": archivos_purgados

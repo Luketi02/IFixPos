@@ -49,18 +49,22 @@ export default function AdminQuotationsScreen() {
   const [cargandoAuxiliares, setCargandoAuxiliares] = useState(false);
 
   // ---------------------------------------------------------------------------
-  // Estados del Modal de Nueva Solicitud de Cotización
+  // Estados del Modal de Nueva Solicitud de Cotización (Wizard 2 pasos + Confirmación)
   // ---------------------------------------------------------------------------
   const [modalAbierto, setModalAbierto] = useState(false);
+  const [pasoModalSolicitud, setPasoModalSolicitud] = useState(1); // 1: Insumos | 2: Proveedores
   const [confirmandoEmision, setConfirmandoEmision] = useState(false);
   const [procesandoEnvio, setProcesandoEnvio] = useState(false);
 
-  // Selección de Proveedores Destinatarios (Paso 2 y 3)
+  // Selección de Proveedores Destinatarios (Paso 2)
   const [busquedaProveedorModal, setBusquedaProveedorModal] = useState('');
+  const [filtroEstadoProveedorModal, setFiltroEstadoProveedorModal] = useState('ACTIVOS'); // 'ACTIVOS' | 'TODOS'
   const [proveedoresSeleccionados, setProveedoresSeleccionados] = useState([]); // Array de cuit_prov
 
-  // Selección de Insumos / Repuestos (Paso 2 y 3)
+  // Selección de Insumos / Repuestos (Paso 1)
   const [busquedaInsumoModal, setBusquedaInsumoModal] = useState('');
+  const [filtroCategoriaInsumoModal, setFiltroCategoriaInsumoModal] = useState('');
+  const [filtroStockInsumoModal, setFiltroStockInsumoModal] = useState('TODOS'); // 'TODOS' | 'BAJO' | 'SIN_STOCK'
   const [insumoSeleccionadoId, setInsumoSeleccionadoId] = useState('');
   const [itemsSolicitados, setItemsSolicitados] = useState([]);
 
@@ -238,10 +242,14 @@ export default function AdminQuotationsScreen() {
   // Apertura y Reinicio del Formulario de Confección (Paso 1 y 2)
   // ---------------------------------------------------------------------------
   const abrirModalNuevaSolicitud = () => {
+    setPasoModalSolicitud(1);
     setProveedoresSeleccionados([]);
     setBusquedaProveedorModal('');
+    setFiltroEstadoProveedorModal('ACTIVOS');
     setItemsSolicitados([]);
     setBusquedaInsumoModal('');
+    setFiltroCategoriaInsumoModal('');
+    setFiltroStockInsumoModal('TODOS');
     setInsumoSeleccionadoId('');
     setMostrarCargaManual(false);
     setManualMarca('');
@@ -256,23 +264,33 @@ export default function AdminQuotationsScreen() {
   const cerrarModalNuevaSolicitud = () => {
     if (procesandoEnvio) return;
     setModalAbierto(false);
+    setPasoModalSolicitud(1);
     setConfirmandoEmision(false);
     setErrorModal('');
   };
 
   // ---------------------------------------------------------------------------
-  // Lógica de Selección y Validación de Proveedores (Paso 3 y Excepciones Paso 4)
+  // Lógica de Selección y Validación de Proveedores (Paso 2)
   // ---------------------------------------------------------------------------
   const proveedoresFiltradosModal = useMemo(() => {
     const q = busquedaProveedorModal.trim().toLowerCase();
-    if (!q) return proveedoresPadron;
-    return proveedoresPadron.filter(
-      (p) =>
+    return proveedoresPadron.filter((p) => {
+      if (filtroEstadoProveedorModal === 'ACTIVOS' && !p.estado) return false;
+      if (!q) return true;
+      return (
         (p.nombre_proveedor || '').toLowerCase().includes(q) ||
         (p.cuit_prov || '').toLowerCase().includes(q) ||
         (p.correo || '').toLowerCase().includes(q)
-    );
-  }, [proveedoresPadron, busquedaProveedorModal]);
+      );
+    });
+  }, [proveedoresPadron, busquedaProveedorModal, filtroEstadoProveedorModal]);
+
+  const seleccionarTodosProveedoresActivos = () => {
+    const cuitsActivos = proveedoresFiltradosModal
+      .filter((p) => p.estado)
+      .map((p) => p.cuit_prov);
+    setProveedoresSeleccionados((prev) => Array.from(new Set([...prev, ...cuitsActivos])));
+  };
 
   const objetosProveedoresSeleccionados = useMemo(() => {
     return proveedoresSeleccionados
@@ -298,19 +316,37 @@ export default function AdminQuotationsScreen() {
   };
 
   // ---------------------------------------------------------------------------
-  // Lógica de Selección y Carga de Insumos / Repuestos (Paso 3 y Excepciones Paso 4)
+  // Lógica de Selección y Carga de Insumos / Repuestos (Paso 1)
   // ---------------------------------------------------------------------------
+  const categoriasInsumosModal = useMemo(() => {
+    const setCats = new Set();
+    productosCatalogo.forEach((p) => {
+      if (p.estado !== false) {
+        const cat = p.nombre_categoria || p.categoria;
+        if (cat) setCats.add(cat);
+      }
+    });
+    return Array.from(setCats).sort((a, b) => a.localeCompare(b));
+  }, [productosCatalogo]);
+
   const productosFiltradosModal = useMemo(() => {
     const q = busquedaInsumoModal.trim().toLowerCase();
-    const activos = productosCatalogo.filter((p) => p.estado !== false);
-    if (!q) return activos;
-    return activos.filter(
-      (p) =>
+    return productosCatalogo.filter((p) => {
+      if (p.estado === false) return false;
+      const cat = p.nombre_categoria || p.categoria || '';
+      if (filtroCategoriaInsumoModal && cat !== filtroCategoriaInsumoModal) return false;
+      const stockAct = Number(p.cantidad_actual ?? 0);
+      const stockMin = Number(p.stock_minimo ?? 5);
+      if (filtroStockInsumoModal === 'SIN_STOCK' && stockAct > 0) return false;
+      if (filtroStockInsumoModal === 'BAJO' && stockAct > stockMin) return false;
+      if (!q) return true;
+      return (
         (p.nombre || '').toLowerCase().includes(q) ||
-        (p.nombre_categoria || p.categoria || '').toLowerCase().includes(q) ||
+        cat.toLowerCase().includes(q) ||
         (p.descripcion || '').toLowerCase().includes(q)
-    );
-  }, [productosCatalogo, busquedaInsumoModal]);
+      );
+    });
+  }, [productosCatalogo, busquedaInsumoModal, filtroCategoriaInsumoModal, filtroStockInsumoModal]);
 
   const agregarInsumoDeCatalogo = (productoObj) => {
     setErrorModal('');
@@ -1119,675 +1155,800 @@ export default function AdminQuotationsScreen() {
       </main>
 
       {/* =====================================================================
-          MODAL PRINCIPAL: CONFECCIÓN Y EMISIÓN DE SOLICITUD DE COTIZACIÓN
+          MODAL PRINCIPAL: CONFECCIÓN EN 2 PASOS + CONFIRMACIÓN (ZERO STACKING)
          ===================================================================== */}
-      <AnimatePresence>
-        {modalAbierto && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 12 }}
-              className="bg-[#1E293B] border border-cyan-500/30 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden my-auto"
-            >
-              {/* Cabecera del Modal */}
-              <div className="px-6 py-4 border-b border-slate-800 bg-[#0F172A]/80 flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400">
-                    {confirmandoEmision
-                      ? 'Paso Final • Confirmación de Emisión'
-                      : 'Formulario de Confección de Sondeo'}
-                  </span>
-                  <h2 className="text-lg sm:text-xl font-black text-white">
-                    {confirmandoEmision
-                      ? 'Resumen Final del Pedido de Cotización'
-                      : 'Nueva Solicitud de Cotización'}
-                  </h2>
-                </div>
+      {modalAbierto && !modalNuevoProductoAbierto && !modalNuevoProveedorAbierto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 overflow-y-auto">
+          <div className="bg-[#1E293B] border border-cyan-500/30 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden my-auto">
+            {/* Cabecera del Modal */}
+            <div className="px-6 py-4 border-b border-slate-800 bg-[#0F172A]/80 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400">
+                  {confirmandoEmision
+                    ? 'Paso Final • Confirmación de Emisión'
+                    : pasoModalSolicitud === 1
+                    ? 'Paso 1 de 2 • Selección de Insumos y Repuestos'
+                    : 'Paso 2 de 2 • Selección de Proveedores Destinatarios'}
+                </span>
+                <h2 className="text-lg sm:text-xl font-black text-white">
+                  {confirmandoEmision
+                    ? 'Resumen Final del Pedido de Cotización'
+                    : 'Nueva Solicitud de Cotización'}
+                </h2>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* Indicador visual de pasos */}
+                {!confirmandoEmision && (
+                  <div className="hidden sm:flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setPasoModalSolicitud(1)}
+                      className={`px-3 py-1 rounded-full font-bold border transition-colors cursor-pointer ${
+                        pasoModalSolicitud === 1
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                          : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      }`}
+                    >
+                      1. Insumos ({itemsSolicitados.length})
+                    </button>
+                    <span className="text-slate-600">→</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (itemsSolicitados.length > 0) setPasoModalSolicitud(2);
+                      }}
+                      className={`px-3 py-1 rounded-full font-bold border transition-colors ${
+                        pasoModalSolicitud === 2
+                          ? 'bg-violet-500/20 text-violet-300 border-violet-500/40 cursor-pointer'
+                          : itemsSolicitados.length > 0
+                          ? 'bg-slate-800 text-slate-300 border-slate-700 cursor-pointer'
+                          : 'bg-slate-800/50 text-slate-500 border-slate-800 cursor-not-allowed'
+                      }`}
+                    >
+                      2. Proveedores ({proveedoresSeleccionados.length})
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={cerrarModalNuevaSolicitud}
                   disabled={procesandoEnvio}
                   className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                  title="Cerrar"
                 >
                   ✕
                 </button>
               </div>
+            </div>
 
-              {/* Cuerpo del Modal */}
-              <div className="p-6 overflow-y-auto space-y-6 flex-1">
-                {/* Alerta de Error dentro del Modal */}
-                <AnimatePresence>
-                  {errorModal && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -6 }}
-                      className="bg-rose-500/15 border border-rose-500/40 text-rose-200 px-4 py-3 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-rose-400 text-base">⚠</span>
-                        <span>{errorModal}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setErrorModal('')}
-                        className="text-rose-300 hover:text-white text-xs font-mono cursor-pointer shrink-0"
-                      >
-                        ✕
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+            {/* Cuerpo del Modal */}
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
+              {/* Alerta de Error dentro del Modal */}
+              {errorModal && (
+                <div className="bg-rose-500/15 border border-rose-500/40 text-rose-200 px-4 py-3 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-rose-400 text-base">⚠</span>
+                    <span>{errorModal}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorModal('')}
+                    className="text-rose-300 hover:text-white text-xs font-mono cursor-pointer shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
-                {!confirmandoEmision ? (
-                  /* =========================================================
-                     VISTA 1: FORMULARIO DE CONFECCIÓN (PASOS 2, 3, 4 Y 5)
-                     ========================================================= */
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                    {/* COLUMNA IZQUIERDA (5 cols): PROVEEDORES DESTINATARIOS */}
-                    <div className="lg:col-span-5 bg-[#0F172A]/70 border border-slate-800 rounded-2xl p-5 flex flex-col space-y-4">
-                      <div>
-                        <h3 className="text-sm font-bold text-white">
-                          1. Proveedores Destinatarios
-                        </h3>
-                        <p className="text-xs text-slate-400">
-                          Seleccione los proveedores activos que recibirán el pliego.
-                        </p>
-                      </div>
-
-                      {/* Buscador de Proveedores */}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={busquedaProveedorModal}
-                          onChange={(e) => setBusquedaProveedorModal(e.target.value)}
-                          placeholder="Buscar proveedor por nombre o CUIT..."
-                          className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#06B6D4]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNombreProveedorSugerido(busquedaProveedorModal.trim());
-                            setModalNuevoProveedorAbierto(true);
-                          }}
-                          title="Registrar un nuevo proveedor en el padrón"
-                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold border border-cyan-500/30 shrink-0 cursor-pointer"
-                        >
-                          + Proveedor
-                        </button>
-                      </div>
-
-                      {/* Excepción Paso 4: Alerta si se seleccionó algún proveedor inactivo */}
-                      {proveedoresInactivosSeleccionados.length > 0 && (
-                        <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-3 text-xs text-amber-200 space-y-2">
-                          <div className="font-bold text-amber-300">
-                            ⚠ Proveedor(es) inactivo(s) detectado(s)
-                          </div>
-                          <p>
-                            El sistema bloquea la emisión hacia proveedores inactivos. Debe desmarcarlos para continuar.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={quitarProveedoresInactivos}
-                            className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-bold border border-amber-400/40 transition-colors cursor-pointer"
-                          >
-                            Quitar proveedores inactivos de la lista
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Lista de Proveedores del Padrón */}
-                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
-                        {cargandoAuxiliares ? (
-                          <div className="py-8 text-center text-xs text-slate-400 font-mono">
-                            Cargando padrón de proveedores...
-                          </div>
-                        ) : proveedoresFiltradosModal.length === 0 ? (
-                          /* Excepción Paso 4: Proveedor no existe en el padrón */
-                          <div className="bg-[#1E293B] border border-amber-500/30 rounded-xl p-4 text-center space-y-3">
-                            <p className="text-xs text-amber-300 font-semibold">
-                              El proveedor &ldquo;{busquedaProveedorModal}&rdquo; no existe en el padrón.
-                            </p>
-                            <p className="text-[11px] text-slate-400">
-                              Puede empadronarlo ahora mismo o limpiar la búsqueda para elegir otro destinatario activo.
-                            </p>
-                            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setNombreProveedorSugerido(busquedaProveedorModal.trim());
-                                  setModalNuevoProveedorAbierto(true);
-                                }}
-                                className="px-3.5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
-                              >
-                                Registrar Nuevo Proveedor
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setBusquedaProveedorModal('')}
-                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
-                              >
-                                Limpiar búsqueda
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          proveedoresFiltradosModal.map((prov) => {
-                            const seleccionado = proveedoresSeleccionados.includes(prov.cuit_prov);
-                            return (
-                              <div
-                                key={prov.cuit_prov}
-                                onClick={() => toggleSeleccionProveedor(prov.cuit_prov)}
-                                className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                                  seleccionado
-                                    ? prov.estado
-                                      ? 'bg-cyan-500/10 border-[#06B6D4] shadow-md shadow-cyan-950/30'
-                                      : 'bg-rose-500/15 border-rose-500/60'
-                                    : 'bg-[#1E293B]/90 border-slate-800 hover:border-slate-700'
-                                }`}
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold text-white truncate">
-                                      {prov.nombre_proveedor}
-                                    </span>
-                                    <span
-                                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-                                        prov.estado
-                                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                                          : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                                      }`}
-                                    >
-                                      {prov.estado ? 'Activo' : 'Inactivo'}
-                                    </span>
-                                  </div>
-                                  <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
-                                    CUIT: {prov.cuit_prov} • {prov.correo || 'Sin correo'}
-                                  </div>
-                                </div>
-
-                                <input
-                                  type="checkbox"
-                                  checked={seleccionado}
-                                  onChange={() => {}}
-                                  className="w-4 h-4 accent-[#06B6D4] rounded cursor-pointer"
-                                />
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
+              {!confirmandoEmision && pasoModalSolicitud === 1 ? (
+                /* =========================================================
+                   PASO 1: SELECCIÓN RÁPIDA DE INSUMOS + FILTROS
+                   ========================================================= */
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">
+                        1. Seleccione los Insumos o Repuestos a Cotizar
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        Filtre por nombre, categoría o nivel de stock y haga clic para añadirlos al pedido.
+                      </p>
                     </div>
 
-                    {/* COLUMNA DERECHA (7 cols): INSUMOS Y REPUESTOS REQUERIDOS */}
-                    <div className="lg:col-span-7 bg-[#0F172A]/70 border border-slate-800 rounded-2xl p-5 flex flex-col space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h3 className="text-sm font-bold text-white">
-                            2. Listado de Insumos / Repuestos Requeridos
-                          </h3>
-                          <p className="text-xs text-slate-400">
-                            Seleccione artículos del catálogo o utilice las opciones para insumos no registrados.
-                          </p>
-                        </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMostrarCargaManual((prev) => !prev)}
+                        className="px-3 py-1.5 rounded-xl bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 text-xs font-bold border border-violet-500/30 transition-colors cursor-pointer"
+                      >
+                        {mostrarCargaManual ? 'Ocultar Carga Manual' : '+ Carga Manual (Sondeo)'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModalNuevoProductoAbierto(true)}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold border border-cyan-500/30 transition-colors cursor-pointer"
+                      >
+                        + Registrar en Catálogo
+                      </button>
+                    </div>
+                  </div>
 
-                        {/* Excepción Paso 4: Opciones para Insumo no registrado */}
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setMostrarCargaManual((prev) => !prev)}
-                            className="px-3 py-1.5 rounded-xl bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 text-xs font-bold border border-violet-500/30 transition-all cursor-pointer"
-                          >
-                            {mostrarCargaManual ? 'Ocultar Carga Manual' : '+ Carga Manual (Sondeo)'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setModalNuevoProductoAbierto(true)}
-                            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold border border-cyan-500/30 transition-all cursor-pointer"
-                          >
-                            + Registrar en Catálogo
-                          </button>
+                  {/* Carga Manual colapsable */}
+                  {mostrarCargaManual && (
+                    <div className="bg-violet-950/25 border border-violet-500/40 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-violet-300">
+                          Carga Manual de Insumo para Sondeo (Sin alterar el catálogo general)
+                        </span>
+                        <span className="text-[11px] font-mono text-violet-400">Texto Libre Técnico</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                        <div className="sm:col-span-4">
+                          <label className="block text-[11px] font-mono text-slate-300 mb-1">Marca *</label>
+                          <input
+                            type="text"
+                            value={manualMarca}
+                            onChange={(e) => setManualMarca(e.target.value)}
+                            placeholder="Ej. Samsung / Apple"
+                            className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <label className="block text-[11px] font-mono text-slate-300 mb-1">Modelo *</label>
+                          <input
+                            type="text"
+                            value={manualModelo}
+                            onChange={(e) => setManualModelo(e.target.value)}
+                            placeholder="Ej. Galaxy S23 Ultra"
+                            className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <label className="block text-[11px] font-mono text-slate-300 mb-1">Descripción Técnica *</label>
+                          <input
+                            type="text"
+                            value={manualDescripcion}
+                            onChange={(e) => setManualDescripcion(e.target.value)}
+                            placeholder="Ej. Flex placa sub-carga original"
+                            className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
+                          />
                         </div>
                       </div>
 
-                      {/* Selector desde el Catálogo del Sistema */}
-                      <div className="bg-[#1E293B] border border-slate-700/80 rounded-xl p-3.5 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
-                          <div className="sm:col-span-5">
-                            <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                              Filtrar Catálogo
-                            </label>
-                            <input
-                              type="text"
-                              value={busquedaInsumoModal}
-                              onChange={(e) => setBusquedaInsumoModal(e.target.value)}
-                              placeholder="Buscar repuesto o insumo..."
-                              className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#06B6D4]"
-                            />
-                          </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setMostrarCargaManual(false)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={agregarInsumoManualSondeo}
+                          className="px-4 py-1.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 cursor-pointer"
+                        >
+                          Añadir Ítem Manual al Sondeo
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
-                          <div className="sm:col-span-5">
-                            <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                              Insumo del Catálogo
-                            </label>
-                            <select
-                              value={insumoSeleccionadoId}
-                              onChange={(e) => setInsumoSeleccionadoId(e.target.value)}
-                              className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#06B6D4] cursor-pointer"
-                            >
-                              <option value="">Seleccione un insumo...</option>
-                              {productosFiltradosModal.map((prod) => (
-                                <option key={prod.id_producto} value={prod.id_producto}>
-                                  {prod.nombre} (Stock: {prod.cantidad_actual ?? 0})
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                  {/* Barra de Filtrado Rápido de Insumos */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-[#0F172A]/80 border border-slate-800 rounded-xl p-3.5">
+                    <div className="sm:col-span-5">
+                      <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                        Buscar por nombre o descripción
+                      </label>
+                      <input
+                        type="text"
+                        value={busquedaInsumoModal}
+                        onChange={(e) => setBusquedaInsumoModal(e.target.value)}
+                        placeholder="Ej. Pantalla, Batería, Flux..."
+                        className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#06B6D4]"
+                      />
+                    </div>
+                    <div className="sm:col-span-4">
+                      <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                        Categoría
+                      </label>
+                      <select
+                        value={filtroCategoriaInsumoModal}
+                        onChange={(e) => setFiltroCategoriaInsumoModal(e.target.value)}
+                        className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#06B6D4]"
+                      >
+                        <option value="">Todas las categorías</option>
+                        {categoriasInsumosModal.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                        Nivel de Stock
+                      </label>
+                      <select
+                        value={filtroStockInsumoModal}
+                        onChange={(e) => setFiltroStockInsumoModal(e.target.value)}
+                        className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#06B6D4]"
+                      >
+                        <option value="TODOS">Todos</option>
+                        <option value="BAJO">Stock Bajo / Crítico</option>
+                        <option value="SIN_STOCK">Sin Stock (0)</option>
+                      </select>
+                    </div>
+                  </div>
 
-                          <div className="sm:col-span-2 flex justify-end">
+                  {/* Grilla de Selección Directa + Carrito de Renglones */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                    {/* Catálogo filtrable (7 cols) */}
+                    <div className="lg:col-span-7 bg-[#0F172A]/70 border border-slate-800 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[11px] font-mono uppercase text-slate-400">
+                          Catálogo ({productosFiltradosModal.length} resultados)
+                        </span>
+                        {(busquedaInsumoModal || filtroCategoriaInsumoModal || filtroStockInsumoModal !== 'TODOS') && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBusquedaInsumoModal('');
+                              setFiltroCategoriaInsumoModal('');
+                              setFiltroStockInsumoModal('TODOS');
+                            }}
+                            className="text-[11px] text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                          >
+                            Limpiar filtros
+                          </button>
+                        )}
+                      </div>
+
+                      {cargandoAuxiliares ? (
+                        <div className="py-10 text-center text-xs text-slate-400 font-mono">
+                          Cargando catálogo de insumos...
+                        </div>
+                      ) : productosFiltradosModal.length === 0 ? (
+                        <div className="py-8 text-center space-y-3">
+                          <p className="text-xs text-amber-300">
+                            No hay insumos que coincidan con la búsqueda o filtros aplicados.
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2">
                             <button
                               type="button"
                               onClick={() => {
-                                const prodObj = productosCatalogo.find(
-                                  (p) => String(p.id_producto) === String(insumoSeleccionadoId)
-                                );
-                                agregarInsumoDeCatalogo(prodObj);
+                                setManualDescripcion(busquedaInsumoModal.trim());
+                                setMostrarCargaManual(true);
                               }}
-                              className="w-full px-3.5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
+                              className="px-3 py-1.5 rounded-lg bg-violet-500/20 text-violet-200 border border-violet-500/40 text-xs font-semibold cursor-pointer"
                             >
-                              Agregar
+                              + Carga Manual (Sondeo)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setModalNuevoProductoAbierto(true)}
+                              className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 text-xs font-semibold cursor-pointer"
+                            >
+                              + Registrar en Catálogo
                             </button>
                           </div>
                         </div>
-
-                        {/* Si la búsqueda en catálogo no arroja resultados, ofrecer las 2 opciones de la Excepción Paso 4 */}
-                        {busquedaInsumoModal.trim() && productosFiltradosModal.length === 0 && (
-                          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
-                            <span className="text-amber-200">
-                              No se encontró &ldquo;{busquedaInsumoModal}&rdquo; en el catálogo general.
-                            </span>
-                            <div className="flex items-center gap-2 shrink-0">
+                      ) : (
+                        <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
+                          {productosFiltradosModal.map((prod) => {
+                            const yaAgregado = itemsSolicitados.some(
+                              (it) => !it.es_manual && it.id_producto === prod.id_producto
+                            );
+                            const stockActual = Number(prod.cantidad_actual ?? 0);
+                            return (
                               <button
+                                key={prod.id_producto}
                                 type="button"
-                                onClick={() => {
-                                  setManualDescripcion(busquedaInsumoModal.trim());
-                                  setMostrarCargaManual(true);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-violet-500/20 text-violet-200 border border-violet-500/40 font-semibold cursor-pointer"
-                              >
-                                Cargar Manualmente para Sondeo
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setModalNuevoProductoAbierto(true)}
-                                className="px-2.5 py-1 rounded-lg bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 font-semibold cursor-pointer"
-                              >
-                                Registrar Producto en Catálogo
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Excepción Paso 4: Panel de Carga Manual de Datos Técnicos Básicos (Marca, Modelo, Descripción) */}
-                      <AnimatePresence>
-                        {mostrarCargaManual && (
-                          <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="bg-violet-950/25 border border-violet-500/40 rounded-xl p-4 space-y-3"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-violet-300">
-                                Carga Manual de Insumo para Sondeo (Sin alterar el catálogo general)
-                              </span>
-                              <span className="text-[11px] font-mono text-violet-400">
-                                Texto Libre Técnico
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                              <div className="sm:col-span-4">
-                                <label className="block text-[11px] font-mono text-slate-300 mb-1">
-                                  Marca *
-                                </label>
-                                <input
-                                  type="text"
-                                  value={manualMarca}
-                                  onChange={(e) => setManualMarca(e.target.value)}
-                                  placeholder="Ej. Samsung / Apple"
-                                  className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-4">
-                                <label className="block text-[11px] font-mono text-slate-300 mb-1">
-                                  Modelo *
-                                </label>
-                                <input
-                                  type="text"
-                                  value={manualModelo}
-                                  onChange={(e) => setManualModelo(e.target.value)}
-                                  placeholder="Ej. Galaxy S23 Ultra"
-                                  className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-4">
-                                <label className="block text-[11px] font-mono text-slate-300 mb-1">
-                                  Descripción Técnica *
-                                </label>
-                                <input
-                                  type="text"
-                                  value={manualDescripcion}
-                                  onChange={(e) => setManualDescripcion(e.target.value)}
-                                  placeholder="Ej. Flex placa sub-carga original"
-                                  className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-400"
-                                />
-                              </div>
-                            </div>
-
-                            <div className="flex justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setMostrarCargaManual(false)}
-                                className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
-                              >
-                                Cancelar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={agregarInsumoManualSondeo}
-                                className="px-4 py-1.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
-                              >
-                                Añadir Ítem Manual al Sondeo
-                              </button>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* Lista de Productos/Insumos Agregados a la Solicitud */}
-                      <div className="flex-1 bg-[#1E293B] border border-slate-800 rounded-xl overflow-hidden flex flex-col">
-                        <div className="px-4 py-2.5 bg-[#0F172A]/60 border-b border-slate-800 flex items-center justify-between">
-                          <span className="text-xs font-mono uppercase text-slate-400">
-                            Renglones del Pedido ({itemsSolicitados.length})
-                          </span>
-                        </div>
-
-                        {itemsSolicitados.length === 0 ? (
-                          <div className="p-8 text-center text-xs text-slate-500">
-                            Aún no ha incorporado insumos o repuestos a esta solicitud de cotización.
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-slate-800 max-h-56 overflow-y-auto">
-                            {itemsSolicitados.map((item) => (
-                              <div
-                                key={item.uid}
-                                className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-800/30"
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold text-white truncate">
-                                      {item.nombre_mostrar}
-                                    </span>
-                                    {item.es_manual ? (
-                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300 border border-violet-500/30">
-                                        Sondeo Manual
-                                      </span>
-                                    ) : (
-                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                                        Catálogo
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-[11px] text-slate-400 truncate">
-                                    {item.detalle_mostrar}
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={() => eliminarItemSolicitado(item.uid)}
-                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs transition-colors cursor-pointer"
-                                    title="Quitar ítem"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  /* =========================================================
-                     VISTA 2: RESUMEN FINAL Y CONFIRMACIÓN DE EMISIÓN (PASO 6 Y 7)
-                     ========================================================= */
-                  <div className="space-y-6">
-                    <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-2xl p-5 flex items-start gap-4">
-                      <span className="text-2xl">📨</span>
-                      <div className="space-y-1 text-sm">
-                        <h3 className="font-bold text-white">
-                          Verifique los datos antes de despachar la Solicitud de Cotización
-                        </h3>
-                        <p className="text-slate-300 text-xs leading-relaxed">
-                          Al confirmar, el sistema instanciará la cabecera en estado{' '}
-                          <span className="text-cyan-300 font-semibold">&ldquo;Enviada a Proveedores&rdquo;</span>,
-                          generará una cotización hija en estado{' '}
-                          <span className="text-cyan-300 font-semibold">&ldquo;Pendiente de Evaluación&rdquo;</span>{' '}
-                          con un token criptográfico único por cada proveedor elegido y despachará los correos electrónicos individuales.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Resumen de Proveedores Destinatarios */}
-                      <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-5 space-y-3">
-                        <h4 className="text-xs font-mono uppercase tracking-wider text-cyan-400">
-                          Proveedores Destinatarios ({objetosProveedoresSeleccionados.length})
-                        </h4>
-                        <div className="divide-y divide-slate-800 max-h-60 overflow-y-auto">
-                          {objetosProveedoresSeleccionados.map((p) => (
-                            <div key={p.cuit_prov} className="py-2.5 flex items-center justify-between gap-2">
-                              <div>
-                                <div className="text-sm font-bold text-white">{p.nombre_proveedor}</div>
-                                <div className="text-xs text-slate-400 font-mono">
-                                  CUIT: {p.cuit_prov} • {p.correo || 'Sin correo'}
-                                </div>
-                              </div>
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                Activo
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Resumen de Insumos Requeridos */}
-                      <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-5 space-y-3">
-                        <h4 className="text-xs font-mono uppercase tracking-wider text-cyan-400">
-                          Insumos / Repuestos a Cotizar ({itemsSolicitados.length})
-                        </h4>
-                        <div className="divide-y divide-slate-800 max-h-60 overflow-y-auto">
-                          {itemsSolicitados.map((item) => (
-                            <div key={item.uid} className="py-2.5 flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm font-bold text-white truncate">
-                                  {item.nombre_mostrar}
-                                </div>
-                                <div className="text-xs text-slate-400">{item.detalle_mostrar}</div>
-                              </div>
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-mono shrink-0 ${
-                                  item.es_manual
-                                    ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
-                                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                                onClick={() =>
+                                  yaAgregado
+                                    ? eliminarItemSolicitado(`cat-${prod.id_producto}`)
+                                    : agregarInsumoDeCatalogo(prod)
+                                }
+                                className={`w-full p-2.5 rounded-xl border text-left transition-colors flex items-center justify-between gap-3 cursor-pointer ${
+                                  yaAgregado
+                                    ? 'bg-cyan-500/15 border-cyan-400/60'
+                                    : 'bg-[#1E293B]/90 border-slate-800 hover:border-slate-600'
                                 }`}
                               >
-                                {item.es_manual ? 'Sondeo Manual' : 'Catálogo'}
-                              </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-bold text-white truncate">{prod.nombre}</div>
+                                  <div className="text-[11px] text-slate-400 truncate">
+                                    {prod.nombre_categoria || prod.categoria || 'Catálogo General'} •{' '}
+                                    <span className={stockActual === 0 ? 'text-rose-400 font-semibold' : 'text-slate-300'}>
+                                      Stock: {stockActual}
+                                    </span>
+                                  </div>
+                                </div>
+                                <span
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${
+                                    yaAgregado
+                                      ? 'bg-cyan-400 text-slate-950'
+                                      : 'bg-slate-800 text-cyan-300 border border-cyan-500/30'
+                                  }`}
+                                >
+                                  {yaAgregado ? '✓ Agregado' : '+ Agregar'}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Insumos agregados al pedido (5 cols) */}
+                    <div className="lg:col-span-5 bg-[#0F172A]/70 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                      <div className="px-4 py-2.5 bg-[#0F172A] border-b border-slate-800 flex items-center justify-between">
+                        <span className="text-xs font-mono uppercase text-cyan-300 font-bold">
+                          Seleccionados ({itemsSolicitados.length})
+                        </span>
+                        {itemsSolicitados.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setItemsSolicitados([])}
+                            className="text-[11px] text-rose-400 hover:text-rose-300 cursor-pointer"
+                          >
+                            Vaciar
+                          </button>
+                        )}
+                      </div>
+
+                      {itemsSolicitados.length === 0 ? (
+                        <div className="p-8 text-center text-xs text-slate-500 my-auto">
+                          Haz clic en los insumos de la izquierda para sumarlos a la solicitud.
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-800 max-h-72 overflow-y-auto">
+                          {itemsSolicitados.map((item) => (
+                            <div
+                              key={item.uid}
+                              className="px-3.5 py-2.5 flex items-center justify-between gap-2 hover:bg-slate-800/30"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-bold text-white truncate">{item.nombre_mostrar}</div>
+                                <div className="text-[10px] text-slate-400 truncate">
+                                  {item.es_manual ? 'Sondeo Manual' : item.detalle_mostrar}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => eliminarItemSolicitado(item.uid)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs cursor-pointer shrink-0"
+                                title="Quitar ítem"
+                              >
+                                ✕
+                              </button>
                             </div>
                           ))}
                         </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : !confirmandoEmision && pasoModalSolicitud === 2 ? (
+                /* =========================================================
+                   PASO 2: SELECCIÓN RÁPIDA DE PROVEEDORES + FILTROS
+                   ========================================================= */
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">
+                        2. Seleccione los Proveedores Destinatarios ({proveedoresSeleccionados.length} seleccionado/s)
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        Filtre el padrón por nombre, CUIT o estado y elija quiénes recibirán el sondeo.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={seleccionarTodosProveedoresActivos}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 cursor-pointer"
+                      >
+                        ✓ Seleccionar Activos Visibles
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNombreProveedorSugerido(busquedaProveedorModal.trim());
+                          setModalNuevoProveedorAbierto(true);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 text-xs font-bold border border-cyan-500/30 cursor-pointer"
+                      >
+                        + Registrar Proveedor
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Barra de búsqueda y filtro de proveedores */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-[#0F172A]/80 border border-slate-800 rounded-xl p-3.5">
+                    <div className="sm:col-span-8">
+                      <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                        Buscar por nombre, CUIT o correo
+                      </label>
+                      <input
+                        type="text"
+                        value={busquedaProveedorModal}
+                        onChange={(e) => setBusquedaProveedorModal(e.target.value)}
+                        placeholder="Ej. TechParts, 30-71234567-9..."
+                        className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#06B6D4]"
+                      />
+                    </div>
+                    <div className="sm:col-span-4">
+                      <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                        Mostrar
+                      </label>
+                      <select
+                        value={filtroEstadoProveedorModal}
+                        onChange={(e) => setFiltroEstadoProveedorModal(e.target.value)}
+                        className="w-full bg-[#1E293B] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#06B6D4]"
+                      >
+                        <option value="ACTIVOS">Solo Proveedores Activos</option>
+                        <option value="TODOS">Todos (Activos e Inactivos)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {proveedoresInactivosSeleccionados.length > 0 && (
+                    <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-3 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <strong className="text-amber-300">⚠ Proveedor(es) inactivo(s) seleccionado(s): </strong>
+                        El sistema bloquea la emisión hacia proveedores inactivos.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={quitarProveedoresInactivos}
+                        className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-bold border border-amber-400/40 cursor-pointer"
+                      >
+                        Quitar inactivos
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Grid de Proveedores */}
+                  <div className="max-h-80 overflow-y-auto pr-1">
+                    {cargandoAuxiliares ? (
+                      <div className="py-10 text-center text-xs text-slate-400 font-mono">
+                        Cargando padrón de proveedores...
+                      </div>
+                    ) : proveedoresFiltradosModal.length === 0 ? (
+                      <div className="bg-[#0F172A] border border-amber-500/30 rounded-xl p-6 text-center space-y-3">
+                        <p className="text-xs text-amber-300 font-semibold">
+                          No se encontraron proveedores con esos criterios.
+                        </p>
+                        <div className="flex flex-wrap justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNombreProveedorSugerido(busquedaProveedorModal.trim());
+                              setModalNuevoProveedorAbierto(true);
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs cursor-pointer"
+                          >
+                            Registrar Nuevo Proveedor
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBusquedaProveedorModal('');
+                              setFiltroEstadoProveedorModal('ACTIVOS');
+                            }}
+                            className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
+                          >
+                            Limpiar filtros
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                        {proveedoresFiltradosModal.map((prov) => {
+                          const seleccionado = proveedoresSeleccionados.includes(prov.cuit_prov);
+                          return (
+                            <div
+                              key={prov.cuit_prov}
+                              onClick={() => toggleSeleccionProveedor(prov.cuit_prov)}
+                              className={`p-3 rounded-xl border transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                                seleccionado
+                                  ? prov.estado
+                                    ? 'bg-cyan-500/10 border-[#06B6D4]'
+                                    : 'bg-rose-500/15 border-rose-500/60'
+                                  : 'bg-[#0F172A]/80 border-slate-800 hover:border-slate-600'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-white truncate">
+                                    {prov.nombre_proveedor}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                                      prov.estado
+                                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                        : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                    }`}
+                                  >
+                                    {prov.estado ? 'Activo' : 'Inactivo'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
+                                  CUIT: {prov.cuit_prov} • {prov.correo || 'Sin correo'}
+                                </div>
+                              </div>
+
+                              <input
+                                type="checkbox"
+                                checked={seleccionado}
+                                onChange={() => {}}
+                                className="w-4 h-4 accent-[#06B6D4] rounded cursor-pointer"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* =========================================================
+                   VISTA FINAL: RESUMEN Y CONFIRMACIÓN DE EMISIÓN
+                   ========================================================= */
+                <div className="space-y-6">
+                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-2xl p-5 flex items-start gap-4">
+                    <span className="text-2xl">📨</span>
+                    <div className="space-y-1 text-sm">
+                      <h3 className="font-bold text-white">
+                        Verifique los datos antes de despachar la Solicitud de Cotización
+                      </h3>
+                      <p className="text-slate-300 text-xs leading-relaxed">
+                        Al confirmar, el sistema instanciará la cabecera en estado{' '}
+                        <span className="text-cyan-300 font-semibold">&ldquo;Enviada a Proveedores&rdquo;</span>,
+                        generará una cotización hija en estado{' '}
+                        <span className="text-cyan-300 font-semibold">&ldquo;Pendiente de Evaluación&rdquo;</span>{' '}
+                        con un token criptográfico único por cada proveedor elegido y despachará los correos electrónicos individuales.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Resumen de Proveedores Destinatarios */}
+                    <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-5 space-y-3">
+                      <h4 className="text-xs font-mono uppercase tracking-wider text-cyan-400">
+                        Proveedores Destinatarios ({objetosProveedoresSeleccionados.length})
+                      </h4>
+                      <div className="divide-y divide-slate-800 max-h-60 overflow-y-auto">
+                        {objetosProveedoresSeleccionados.map((p) => (
+                          <div key={p.cuit_prov} className="py-2.5 flex items-center justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-bold text-white">{p.nombre_proveedor}</div>
+                              <div className="text-xs text-slate-400 font-mono">
+                                CUIT: {p.cuit_prov} • {p.correo || 'Sin correo'}
+                              </div>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              Activo
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Resumen de Insumos Requeridos */}
+                    <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-5 space-y-3">
+                      <h4 className="text-xs font-mono uppercase tracking-wider text-cyan-400">
+                        Insumos / Repuestos a Cotizar ({itemsSolicitados.length})
+                      </h4>
+                      <div className="divide-y divide-slate-800 max-h-60 overflow-y-auto">
+                        {itemsSolicitados.map((item) => (
+                          <div key={item.uid} className="py-2.5 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-bold text-white truncate">
+                                {item.nombre_mostrar}
+                              </div>
+                              <div className="text-xs text-slate-400">{item.detalle_mostrar}</div>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono shrink-0 ${
+                                item.es_manual
+                                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                                  : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                              }`}
+                            >
+                              {item.es_manual ? 'Sondeo Manual' : 'Catálogo'}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+            </div>
 
-              {/* Pie del Modal (Acciones Paso 5, Excepción Paso 5 y Paso 7) */}
-              <div className="px-6 py-4 border-t border-slate-800 bg-[#0F172A]/90 flex flex-wrap items-center justify-between gap-3">
-                {!confirmandoEmision ? (
-                  <>
+            {/* Pie del Modal */}
+            <div className="px-6 py-4 border-t border-slate-800 bg-[#0F172A]/90 flex flex-wrap items-center justify-between gap-3">
+              {!confirmandoEmision && pasoModalSolicitud === 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={cerrarModalNuevaSolicitud}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-semibold border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (itemsSolicitados.length === 0) {
+                        setErrorModal('Agrega al menos un insumo o repuesto antes de continuar a los proveedores.');
+                        return;
+                      }
+                      setErrorModal('');
+                      setPasoModalSolicitud(2);
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 cursor-pointer"
+                  >
+                    Siguiente: Seleccionar Proveedores ({itemsSolicitados.length}) →
+                  </button>
+                </>
+              ) : !confirmandoEmision && pasoModalSolicitud === 2 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorModal('');
+                      setPasoModalSolicitud(1);
+                    }}
+                    disabled={procesandoEnvio}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-semibold border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    ← Volver a Insumos
+                  </button>
+
+                  <div className="flex flex-wrap items-center gap-3">
                     <button
                       type="button"
-                      onClick={cerrarModalNuevaSolicitud}
+                      onClick={() => ejecutarGuardadoSolicitud(true)}
                       disabled={procesandoEnvio}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-semibold border border-slate-700 transition-all cursor-pointer"
+                      className="px-4 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs sm:text-sm font-bold border border-amber-500/40 transition-colors cursor-pointer"
                     >
-                      Cancelar
+                      {procesandoEnvio ? 'Guardando...' : 'Guardar como Borrador'}
                     </button>
 
-                    <div className="flex flex-wrap items-center gap-3">
-                      {/* Excepción Paso 5: Guardar como Borrador (sin confirmación ni notificación) */}
-                      <button
-                        type="button"
-                        onClick={() => ejecutarGuardadoSolicitud(true)}
-                        disabled={procesandoEnvio}
-                        className="px-4 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs sm:text-sm font-bold border border-amber-500/40 transition-all cursor-pointer"
-                      >
-                        {procesandoEnvio ? 'Guardando...' : 'Guardar como Borrador'}
-                      </button>
-
-                      {/* Paso 5: Enviar Cotización */}
-                      <button
-                        type="button"
-                        onClick={handleAvanzarConfirmacion}
-                        disabled={procesandoEnvio}
-                        className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
-                      >
-                        <span>Enviar Cotización</span>
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {/* Excepción Paso 7: Rechazar confirmación y retornar al formulario manteniendo los datos */}
                     <button
                       type="button"
-                      onClick={() => setConfirmandoEmision(false)}
+                      onClick={handleAvanzarConfirmacion}
                       disabled={procesandoEnvio}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-semibold border border-slate-700 transition-all cursor-pointer"
+                      className="px-5 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 cursor-pointer"
                     >
-                      ← Volver al Formulario de Confección
+                      Enviar Cotización →
                     </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmandoEmision(false)}
+                    disabled={procesandoEnvio}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-semibold border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    ← Volver a Proveedores
+                  </button>
 
-                    {/* Paso 7: Confirmar Emisión */}
-                    <button
-                      type="button"
-                      onClick={() => ejecutarGuardadoSolicitud(false)}
-                      disabled={procesandoEnvio}
-                      className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
-                    >
-                      <span>
-                        {procesandoEnvio
-                          ? 'Despachando Solicitud y Tokens...'
-                          : 'Confirmar y Emitir Solicitud'}
-                      </span>
-                    </button>
-                  </>
-                )}
-              </div>
-            </motion.div>
+                  <button
+                    type="button"
+                    onClick={() => ejecutarGuardadoSolicitud(false)}
+                    disabled={procesandoEnvio}
+                    className="px-6 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm tracking-wide shadow-lg shadow-cyan-500/25 cursor-pointer"
+                  >
+                    {procesandoEnvio
+                      ? 'Despachando Solicitud y Tokens...'
+                      : 'Confirmar y Emitir Solicitud'}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
 
       {/* =====================================================================
           CU-15: MODAL DE DETALLE Y CONSULTA DE SOLICITUD DE COTIZACIÓN
          ===================================================================== */}
-      <DetalleSolicitudModal
-        isOpen={modalDetalleAbierto}
-        onClose={() => {
-          setModalDetalleAbierto(false);
-          setSolicitudDetalle(null);
-        }}
-        solicitud={solicitudDetalle}
-        cargando={cargandoDetalle}
-        onModificar={(sol) => abrirModalModificarSolicitud(sol)}
-        onEliminar={(sol) => iniciarEliminacionSolicitud(sol)}
-      />
+      {modalDetalleAbierto && (
+        <DetalleSolicitudModal
+          isOpen={modalDetalleAbierto}
+          onClose={() => {
+            setModalDetalleAbierto(false);
+            setSolicitudDetalle(null);
+          }}
+          solicitud={solicitudDetalle}
+          cargando={cargandoDetalle}
+          onModificar={(sol) => abrirModalModificarSolicitud(sol)}
+          onEliminar={(sol) => iniciarEliminacionSolicitud(sol)}
+        />
+      )}
 
       {/* =====================================================================
           CU-16: MODAL DE MODIFICACIÓN DE SOLICITUD DE COTIZACIÓN (BORRADOR)
          ===================================================================== */}
-      <ModificarSolicitudModal
-        isOpen={modalModificarAbierto}
-        onClose={() => {
-          setModalModificarAbierto(false);
-          setSolicitudEditando(null);
-        }}
-        solicitud={solicitudEditando}
-        token={token}
-        proveedoresPadron={proveedoresPadron}
-        productosCatalogo={productosCatalogo}
-        cargandoAuxiliares={cargandoAuxiliares}
-        onGuardadoExitoso={handleGuardadoModificacionExitoso}
-        onAbrirNuevoProveedor={(sug) => {
-          setNombreProveedorSugerido(sug);
-          setModalNuevoProveedorAbierto(true);
-        }}
-        onAbrirNuevoProducto={() => setModalNuevoProductoAbierto(true)}
-      />
+      {modalModificarAbierto && !modalNuevoProductoAbierto && !modalNuevoProveedorAbierto && (
+        <ModificarSolicitudModal
+          isOpen={modalModificarAbierto}
+          onClose={() => {
+            setModalModificarAbierto(false);
+            setSolicitudEditando(null);
+          }}
+          solicitud={solicitudEditando}
+          token={token}
+          proveedoresPadron={proveedoresPadron}
+          productosCatalogo={productosCatalogo}
+          cargandoAuxiliares={cargandoAuxiliares}
+          onGuardadoExitoso={handleGuardadoModificacionExitoso}
+          onAbrirNuevoProveedor={(sug) => {
+            setNombreProveedorSugerido(sug);
+            setModalNuevoProveedorAbierto(true);
+          }}
+          onAbrirNuevoProducto={() => setModalNuevoProductoAbierto(true)}
+        />
+      )}
 
       {/* =====================================================================
           CU-17: MODAL DE CONFIRMACIÓN CRÍTICA DE ELIMINACIÓN DE SOLICITUD
          ===================================================================== */}
-      <ConfirmarEliminacionSolicitudModal
-        isOpen={Boolean(solicitudAEliminar)}
-        onClose={() => setSolicitudAEliminar(null)}
-        solicitud={solicitudAEliminar}
-        onConfirmar={ejecutarEliminacionDefinitiva}
-        eliminando={eliminandoSolicitud}
-      />
+      {Boolean(solicitudAEliminar) && (
+        <ConfirmarEliminacionSolicitudModal
+          isOpen={Boolean(solicitudAEliminar)}
+          onClose={() => setSolicitudAEliminar(null)}
+          solicitud={solicitudAEliminar}
+          onConfirmar={ejecutarEliminacionDefinitiva}
+          eliminando={eliminandoSolicitud}
+        />
+      )}
 
       {/* Excepción Paso 4: Modal para Registrar Nuevo Proveedor (CU-24) sin perder el progreso */}
-      <SupplierModal
-        isOpen={modalNuevoProveedorAbierto}
-        onClose={() => setModalNuevoProveedorAbierto(false)}
-        proveedor={null}
-        nombreSugerido={nombreProveedorSugerido}
-        paises={paises}
-        onSaved={(nuevoProv) => {
-          setModalNuevoProveedorAbierto(false);
-          cargarDatosAuxiliares();
-          if (nuevoProv?.cuit_prov) {
-            setProveedoresSeleccionados((prev) =>
-              prev.includes(nuevoProv.cuit_prov) ? prev : [...prev, nuevoProv.cuit_prov]
-            );
-            setBusquedaProveedorModal('');
-          }
-        }}
-      />
+      {modalNuevoProveedorAbierto && (
+        <SupplierModal
+          isOpen={modalNuevoProveedorAbierto}
+          onClose={() => setModalNuevoProveedorAbierto(false)}
+          proveedor={null}
+          nombreSugerido={nombreProveedorSugerido}
+          paises={paises}
+          onSaved={(nuevoProv) => {
+            setModalNuevoProveedorAbierto(false);
+            cargarDatosAuxiliares();
+            if (nuevoProv?.cuit_prov) {
+              setProveedoresSeleccionados((prev) =>
+                prev.includes(nuevoProv.cuit_prov) ? prev : [...prev, nuevoProv.cuit_prov]
+              );
+              setBusquedaProveedorModal('');
+            }
+          }}
+        />
+      )}
 
       {/* Excepción Paso 4: Modal para Registrar Producto Formal en Catálogo (CU-12) sin perder el progreso */}
-      <RegistrarProductoModal
-        isOpen={modalNuevoProductoAbierto}
-        onClose={() => setModalNuevoProductoAbierto(false)}
-        onSuccess={(msg, nuevoProd) => {
-          setModalNuevoProductoAbierto(false);
-          cargarDatosAuxiliares();
-          if (nuevoProd && nuevoProd.id_producto) {
-            agregarInsumoDeCatalogo(nuevoProd);
-          }
-        }}
-      />
+      {modalNuevoProductoAbierto && (
+        <RegistrarProductoModal
+          isOpen={modalNuevoProductoAbierto}
+          onClose={() => setModalNuevoProductoAbierto(false)}
+          onSuccess={(msg, nuevoProd) => {
+            setModalNuevoProductoAbierto(false);
+            cargarDatosAuxiliares();
+            if (nuevoProd && nuevoProd.id_producto) {
+              agregarInsumoDeCatalogo(nuevoProd);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

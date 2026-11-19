@@ -202,11 +202,15 @@ export default function AdminBackupsScreen() {
       );
       const detalle = res.data?.detalle || {};
       const eliminados = detalle.eliminados ?? 0;
+      const registrosBd = detalle.registros_bd_eliminados ?? 0;
       const mb = detalle.mb_liberados ?? 0;
-      if (eliminados > 0) {
-        dispararAlerta('exito', `Depuración completa: se eliminaron ${eliminados} archivo(s) huérfano(s) del disco (${mb} MB liberados).`);
+      if (eliminados > 0 || registrosBd > 0) {
+        const partes = [];
+        if (eliminados > 0) partes.push(`${eliminados} archivo(s) suelto(s) del disco (${mb} MB liberados)`);
+        if (registrosBd > 0) partes.push(`${registrosBd} registro(s) huérfano(s) de historial sin archivo`);
+        dispararAlerta('exito', `Depuración completa: se limpiaron ${partes.join(' y ')}.`);
       } else {
-        dispararAlerta('info', 'El repositorio físico se encuentra íntegro y sincronizado. No hay archivos huérfanos.');
+        dispararAlerta('info', 'El repositorio físico y la base de datos están sincronizados. No hay elementos huérfanos.');
       }
       await cargarDatos();
     } catch (error) {
@@ -603,39 +607,71 @@ export default function AdminBackupsScreen() {
               <button
                 onClick={ejecutarDepuracionHuerfanos}
                 disabled={depurandoHuerfanos || cargando}
-                title="Escanear y eliminar archivos .sql que no pertenezcan a ninguna copia registrada"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-950/30 hover:bg-amber-900/50 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-all disabled:opacity-50"
+                title="Escanear la carpeta de respaldos para eliminar archivos .sql sueltos sin registro y limpiar filas del historial cuyo archivo ya no exista en disco."
+                className="flex flex-col items-start px-3.5 py-2 rounded-lg bg-amber-950/30 hover:bg-amber-900/50 text-amber-300 border border-amber-500/30 transition-all disabled:opacity-50 cursor-pointer"
               >
-                <HugeiconsIcon icon={CleanIcon} size={16} className={depurandoHuerfanos ? 'animate-spin' : ''} />
-                <span className="hidden sm:inline">Depurar Huérfanos</span>
+                <span className="flex items-center gap-1.5 text-xs font-semibold">
+                  <HugeiconsIcon icon={CleanIcon} size={15} className={depurandoHuerfanos ? 'animate-spin' : ''} />
+                  <span>Depurar Huérfanos</span>
+                </span>
+                <span className="text-[10px] text-amber-200/70 font-normal hidden sm:block">
+                  Sincroniza disco y registros BD
+                </span>
               </button>
 
               <button
                 onClick={ejecutarCicloProgramado}
                 disabled={ejecutandoCiclo || cargando}
-                title="Evaluar y ejecutar el ciclo de respaldos automáticos programados"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-950/40 hover:bg-violet-900/60 text-violet-300 border border-violet-500/40 text-xs font-semibold transition-all disabled:opacity-50"
+                title="Evalúa los niveles automáticos habilitados (Diario, Semanal, Quincenal, Mensual) según calendario y ejecuta los respaldos que correspondan con rotación FIFO."
+                className="flex flex-col items-start px-3.5 py-2 rounded-lg bg-violet-950/40 hover:bg-violet-900/60 text-violet-300 border border-violet-500/40 transition-all disabled:opacity-50 cursor-pointer"
               >
-                <HugeiconsIcon icon={PlayIcon} size={16} className={ejecutandoCiclo ? 'animate-spin' : ''} />
-                <span className="hidden sm:inline">Ejecutar Ciclo</span>
+                <span className="flex items-center gap-1.5 text-xs font-semibold">
+                  <HugeiconsIcon icon={PlayIcon} size={15} className={ejecutandoCiclo ? 'animate-spin' : ''} />
+                  <span>Ejecutar Ciclo</span>
+                </span>
+                <span className="text-[10px] text-violet-200/70 font-normal hidden sm:block">
+                  Evalúa respaldos programados
+                </span>
               </button>
 
               <button
                 onClick={cargarDatos}
                 disabled={cargando}
                 title="Actualizar listado"
-                className="p-2.5 rounded-lg bg-[#0F172A] border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white transition-colors disabled:opacity-50"
+                className="p-2.5 rounded-lg bg-[#0F172A] border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
               >
                 <HugeiconsIcon icon={RefreshIcon} size={18} className={cargando ? 'animate-spin' : ''} />
               </button>
 
               <button
                 onClick={abrirModalGenerar}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 font-semibold text-sm shadow-md shadow-cyan-500/20 transition-all active:scale-[0.98]"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 font-semibold text-sm shadow-md shadow-cyan-500/20 transition-all active:scale-[0.98] cursor-pointer"
               >
                 <HugeiconsIcon icon={CloudBackupIcon} size={18} />
                 <span>Generar Respaldo Manual</span>
               </button>
+            </div>
+          </div>
+
+          {/* Guía rápida de acciones de mantenimiento */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className="p-3 rounded-xl bg-amber-950/15 border border-amber-500/25 text-slate-300 flex items-start gap-2.5">
+              <span className="text-amber-400 font-bold shrink-0">🧹</span>
+              <div>
+                <span className="font-semibold text-amber-300">Depurar Huérfanos: </span>
+                <span className="text-slate-400">
+                  Elimina archivos <code className="text-slate-300">.sql</code> residuales que no figuren en el historial y limpia registros cuyo archivo físico falte en el servidor (estado &ldquo;No Encontrado&rdquo;).
+                </span>
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-violet-950/15 border border-violet-500/25 text-slate-300 flex items-start gap-2.5">
+              <span className="text-violet-400 font-bold shrink-0">▶</span>
+              <div>
+                <span className="font-semibold text-violet-300">Ejecutar Ciclo: </span>
+                <span className="text-slate-400">
+                  Evalúa en el momento las políticas automáticas activas (Diario, Semanal, Quincenal, Mensual) y genera el respaldo si corresponde por calendario, aplicando rotación FIFO.
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1201,149 +1237,142 @@ export default function AdminBackupsScreen() {
       {/* ====================================================================== */}
       {/* MODAL: FICHA TÉCNICA DE LA COPIA DE SEGURIDAD */}
       {/* ====================================================================== */}
-      <AnimatePresence>
-        {modalDetalle && detalleBackup && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg bg-[#1E293B] border border-slate-700 rounded-2xl shadow-2xl overflow-hidden"
-            >
-              <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-slate-800 text-cyan-400">
-                    <HugeiconsIcon icon={Database01Icon} size={20} />
+      {modalDetalle && detalleBackup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#1E293B] border border-slate-700 rounded-2xl shadow-2xl overflow-hidden my-auto">
+            <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-slate-800 text-cyan-400 shrink-0">
+                  <HugeiconsIcon icon={Database01Icon} size={20} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-slate-100">Ficha Técnica de Respaldo</h3>
+                  <p className="text-xs text-slate-400">Metadatos e integridad física en el servidor</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setModalDetalle(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-sm">
+              <div className="space-y-3">
+                <div className="min-w-0">
+                  <span className="text-xs text-slate-500 block uppercase font-mono">Nombre de Archivo</span>
+                  <span className="font-semibold text-slate-200 break-all block">{detalleBackup.nombre_archivo}</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Versión</span>
+                    <span className="font-semibold text-cyan-300 block">v{detalleBackup.version}</span>
                   </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-100">Ficha Técnica de Respaldo</h3>
-                    <p className="text-xs text-slate-400">Metadatos e integridad física en el servidor</p>
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Nivel / Categoría</span>
+                    {(() => {
+                      const badge = getBadgeCategoria(detalleBackup.categoria_backup || (detalleBackup.automatico ? 'DIARIO' : 'MANUAL'));
+                      return (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border mt-0.5 ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
-                <button
-                  onClick={() => setModalDetalle(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                >
-                  <HugeiconsIcon icon={Cancel01Icon} size={18} />
-                </button>
-              </div>
 
-              <div className="p-6 space-y-4 text-sm">
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-xs text-slate-500 block uppercase font-mono">Nombre de Archivo</span>
-                    <span className="font-semibold text-slate-200">{detalleBackup.nombre_archivo}</span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Versión</span>
-                      <span className="font-semibold text-cyan-300">v{detalleBackup.version}</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Nivel / Categoría</span>
-                      {(() => {
-                        const badge = getBadgeCategoria(detalleBackup.categoria_backup || (detalleBackup.automatico ? 'DIARIO' : 'MANUAL'));
-                        return (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border mt-0.5 ${badge.className}`}>
-                            {badge.label}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Subcarpeta de Destino</span>
-                      <span className="font-semibold text-slate-200 font-mono text-xs">
-                        {detalleBackup.carpeta_relativa || 'backups/'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Tipo de Ejecución</span>
-                      <span className="font-semibold text-slate-200">
-                        {detalleBackup.automatico ? 'Automático (Programado)' : 'Manual (Bajo Demanda)'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Fecha de Creación</span>
-                      <span className="font-semibold text-slate-200">{detalleBackup.fecha_creacion}</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Hora Registrada</span>
-                      <span className="font-semibold text-slate-200">{detalleBackup.hora_creacion || 'N/D'}</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Tamaño en Disco</span>
-                      <span className="font-semibold text-slate-200">
-                        {detalleBackup.tamano_formateado || `${detalleBackup.tamano_mb} MB`}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-500 block uppercase font-mono">Integridad Física</span>
-                      <span
-                        className={`font-semibold ${
-                          detalleBackup.archivo_existe ? 'text-emerald-400' : 'text-rose-400'
-                        }`}
-                      >
-                        {detalleBackup.archivo_existe ? 'Archivo Íntegro en Disco' : 'No Encontrado'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <span className="text-xs text-slate-500 block uppercase font-mono">Operador Responsable</span>
-                    <span className="font-semibold text-slate-200">
-                      {detalleBackup.nombre_usuario || 'Administrador'} ({detalleBackup.email_usuario || 'N/D'})
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Subcarpeta de Destino</span>
+                    <span className="font-semibold text-slate-200 font-mono text-xs break-all block mt-0.5">
+                      {detalleBackup.carpeta_relativa || 'backups/'}
                     </span>
                   </div>
-
-                  <div>
-                    <span className="text-xs text-slate-500 block uppercase font-mono mb-1">Ruta Física en Servidor</span>
-                    <div className="flex items-center justify-between bg-[#0F172A] border border-slate-700/80 rounded-lg p-2 font-mono text-xs text-slate-400 break-all">
-                      <span>{detalleBackup.ubicacion_archivo}</span>
-                      <button
-                        onClick={() => copiarAlPortapapeles(detalleBackup.ubicacion_archivo)}
-                        className="p-1 rounded text-slate-400 hover:text-white transition-colors shrink-0 ml-2"
-                        title="Copiar ruta"
-                      >
-                        <HugeiconsIcon icon={Copy01Icon} size={15} />
-                      </button>
-                    </div>
-                    {copiadoRuta && (
-                      <span className="text-[11px] text-cyan-400 block mt-1">¡Ruta copiada al portapapeles!</span>
-                    )}
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Tipo de Ejecución</span>
+                    <span className="font-semibold text-slate-200 break-words block mt-0.5">
+                      {detalleBackup.automatico ? 'Automático (Programado)' : 'Manual (Bajo Demanda)'}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-700/60">
-                  <button
-                    onClick={() => descargarRespaldo(detalleBackup.id_backup, detalleBackup.nombre_archivo)}
-                    disabled={!detalleBackup.archivo_existe}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-cyan-950/50 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/40 text-xs font-semibold transition-colors disabled:opacity-40"
-                  >
-                    <HugeiconsIcon icon={CloudDownloadIcon} size={16} />
-                    <span>Descargar Archivo</span>
-                  </button>
-                  <button
-                    onClick={() => setModalDetalle(false)}
-                    className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
-                  >
-                    Cerrar
-                  </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Fecha de Creación</span>
+                    <span className="font-semibold text-slate-200 block">{detalleBackup.fecha_creacion}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Hora Registrada</span>
+                    <span className="font-semibold text-slate-200 block">{detalleBackup.hora_creacion || 'N/D'}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Tamaño en Disco</span>
+                    <span className="font-semibold text-slate-200 block">
+                      {detalleBackup.tamano_formateado || `${detalleBackup.tamano_mb} MB`}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block uppercase font-mono">Integridad Física</span>
+                    <span
+                      className={`font-semibold block ${
+                        detalleBackup.archivo_existe ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {detalleBackup.archivo_existe ? 'Archivo Íntegro en Disco' : 'No Encontrado'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="min-w-0">
+                  <span className="text-xs text-slate-500 block uppercase font-mono">Operador Responsable</span>
+                  <span className="font-semibold text-slate-200 break-words block">
+                    {detalleBackup.nombre_usuario || 'Administrador'} ({detalleBackup.email_usuario || 'N/D'})
+                  </span>
+                </div>
+
+                <div className="min-w-0">
+                  <span className="text-xs text-slate-500 block uppercase font-mono mb-1">Ruta Física en Servidor</span>
+                  <div className="flex items-center justify-between bg-[#0F172A] border border-slate-700/80 rounded-lg p-2 font-mono text-xs text-slate-400 break-all">
+                    <span>{detalleBackup.ubicacion_archivo}</span>
+                    <button
+                      onClick={() => copiarAlPortapapeles(detalleBackup.ubicacion_archivo)}
+                      className="p-1 rounded text-slate-400 hover:text-white transition-colors shrink-0 ml-2 cursor-pointer"
+                      title="Copiar ruta"
+                    >
+                      <HugeiconsIcon icon={Copy01Icon} size={15} />
+                    </button>
+                  </div>
+                  {copiadoRuta && (
+                    <span className="text-[11px] text-cyan-400 block mt-1">¡Ruta copiada al portapapeles!</span>
+                  )}
                 </div>
               </div>
-            </motion.div>
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-700/60">
+                <button
+                  onClick={() => descargarRespaldo(detalleBackup.id_backup, detalleBackup.nombre_archivo)}
+                  disabled={!detalleBackup.archivo_existe}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-cyan-950/50 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/40 text-xs font-semibold transition-colors disabled:opacity-40 cursor-pointer"
+                >
+                  <HugeiconsIcon icon={CloudDownloadIcon} size={16} />
+                  <span>Descargar Archivo</span>
+                </button>
+                <button
+                  onClick={() => setModalDetalle(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

@@ -274,7 +274,7 @@ export default function EntregarDispositivo({ onAlerta }) {
       ? rep.dispositivo
       : `${rep.dispositivo?.marca || ''} ${rep.dispositivo?.modelo || 'Dispositivo'}`.trim();
     const serie = rep.dispositivo?.numero_serie || rep.numero_serie || 'Sin registrar';
-    const idRep = rep.id_reparacion || rep.idReparacion || '';
+    const codigoSeg = rep.codigo_seguridad || rep.codigo_sec_reparacion || 'Verificado';
     const fecha = new Date().toLocaleDateString('es-AR');
 
     const htmlContent = `
@@ -284,8 +284,8 @@ export default function EntregarDispositivo({ onAlerta }) {
         <meta charset="UTF-8">
         <title>Acta de Entrega y Términos - IFixPos</title>
         <style>
-          @page { size: A4; margin: 25mm 20mm; }
-          body { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 25px; line-height: 1.6; }
+          @page { size: A4; margin: 0mm; }
+          body { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 20mm 18mm; line-height: 1.6; }
           .header { border-bottom: 3px solid #06b6d4; padding-bottom: 12px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end; }
           .logo-text { font-size: 24px; font-weight: 900; color: #0f172a; letter-spacing: -0.5px; }
           .logo-sub { font-size: 11px; color: #06b6d4; font-weight: 700; text-transform: uppercase; font-family: monospace; }
@@ -310,7 +310,7 @@ export default function EntregarDispositivo({ onAlerta }) {
             <div class="logo-sub">Servicio Técnico y Reparación de Hardware</div>
           </div>
           <div class="order-badge">
-            Orden de Servicio: <strong>#${idRep}</strong><br>
+            Código de Seguimiento: <strong>${codigoSeg}</strong><br>
             Fecha de Emisión: <strong>${fecha}</strong>
           </div>
         </div>

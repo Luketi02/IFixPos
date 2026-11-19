@@ -905,19 +905,21 @@ export default function AdminPurchaseOrdersScreen() {
         }}
       />
 
-      {/* Modal de Generación y Optimización de Órdenes de Compra */}
-      <GenerarOrdenCompraModal
-        isOpen={modalGenerarOpen}
-        onClose={() => setModalGenerarOpen(false)}
-        onOrdenesEmitidas={(nuevasOrdenes) => {
-          consultarOrdenesCompra(filtros);
-          if (Array.isArray(nuevasOrdenes) && nuevasOrdenes.length > 0) {
-            setMensajeExito(
-              `Se generaron y despacharon ${nuevasOrdenes.length} orden(es) de compra en estado "Esperando Entrega" con su comprobante PDF enviado al proveedor.`
-            );
-          }
-        }}
-      />
+      {/* Modal de Generación y Optimización de Órdenes de Compra (montaje condicional) */}
+      {modalGenerarOpen && (
+        <GenerarOrdenCompraModal
+          isOpen={modalGenerarOpen}
+          onClose={() => setModalGenerarOpen(false)}
+          onOrdenesEmitidas={(nuevasOrdenes) => {
+            consultarOrdenesCompra(filtros);
+            if (Array.isArray(nuevasOrdenes) && nuevasOrdenes.length > 0) {
+              setMensajeExito(
+                `Se generaron y despacharon ${nuevasOrdenes.length} orden(es) de compra en estado "Esperando Entrega" con su comprobante PDF enviado al proveedor.`
+              );
+            }
+          }}
+        />
+      )}
 
       {/* Modal de Recepción Física de Mercadería y Conciliación */}
       <RecepcionarCompraModal

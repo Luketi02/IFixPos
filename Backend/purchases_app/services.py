@@ -1,5 +1,6 @@
+import logging
 import secrets
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
@@ -8,6 +9,8 @@ from core_app.selectors import obtener_dias_validez_cotizacion
 from django.core.exceptions import ValidationError
 
 from django.core.files.storage import default_storage
+
+logger = logging.getLogger(__name__)
 
 from purchases_app.models import (
     Proveedor,
@@ -247,13 +250,346 @@ def modificar_proveedor(
 # CU-14: GENERAR SOLICITUD DE COTIZACIÓN (SERVICES)
 # ==============================================================================
 
+def _obtener_remitente_administracion_general(datos_local: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+    """
+    Resuelve la casilla oficial de 'Administración General' (`emailAdministracion`)
+    desde ConfiguracionSistema para el despacho de Solicitudes de Cotización y
+    Órdenes de Compra. Si no está configurada, hace fallback seguro a `emailLocal`
+    y luego a `settings.DEFAULT_FROM_EMAIL`.
+    Retorna `(correo_puro, remitente_formateado)`.
+    """
+    from django.conf import settings
+    from core_app.selectors import obtener_configuracion_texto
+
+    if datos_local is None:
+        datos_local = _obtener_datos_institucionales_local()
+
+    email_admin = obtener_configuracion_texto('emailAdministracion', fallback='')
+    if email_admin and '@' in email_admin and email_admin != 'S/N':
+        correo_puro = email_admin.strip()
+    elif datos_local.get('emailLocal') and '@' in datos_local['emailLocal']:
+        correo_puro = datos_local['emailLocal'].strip()
+    else:
+        correo_puro = getattr(settings, 'DEFAULT_FROM_EMAIL', 'administracion@ifixpos.com')
+
+    nombre_local = datos_local.get('nombreLocal') or 'IFixPos ERP'
+    remitente_fmt = f"{nombre_local} - Administración General <{correo_puro}>"
+    return correo_puro, remitente_fmt
+
+
+def generar_pdf_solicitud_cotizacion(
+    solicitud: SolicitudCotizacion,
+    proveedor: Proveedor,
+    token_acceso: str
+) -> str:
+    """
+    Genera el documento PDF formal de la Solicitud de Cotización con ReportLab,
+    incluyendo los datos institucionales de la empresa, el correo de Administración General,
+    los datos fiscales del proveedor invitado, la tabla de insumos/repuestos solicitados
+    y las instrucciones para responder desde el Portal de Proveedores.
+    """
+    import os
+    from django.conf import settings
+    from core_app.selectors import obtener_url_frontend
+
+    cuit_limpio = (proveedor.cuit_prov or 'prov').replace('-', '').replace(' ', '')
+    fecha_str = solicitud.fecha_emision.strftime('%Y%m%d') if solicitud.fecha_emision else timezone.now().strftime('%Y%m%d')
+    rel_path = f"solicitudes_cotizacion/solicitud_{solicitud.id_solicitud}_{cuit_limpio}_{fecha_str}.pdf"
+
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+        media_root = getattr(settings, 'MEDIA_ROOT', None) or os.path.join(os.getcwd(), 'media')
+        dir_sol = os.path.join(media_root, 'solicitudes_cotizacion')
+        os.makedirs(dir_sol, exist_ok=True)
+        abs_path = os.path.join(media_root, rel_path)
+
+        datos_local = _obtener_datos_institucionales_local()
+        correo_admin, _ = _obtener_remitente_administracion_general(datos_local)
+        dir_prov = _formatear_direccion_proveedor(proveedor)
+        url_portal = f"{obtener_url_frontend()}/portal-proveedor/cotizar/{token_acceso}"
+
+        doc = SimpleDocTemplate(
+            abs_path,
+            pagesize=letter,
+            rightMargin=36,
+            leftMargin=36,
+            topMargin=36,
+            bottomMargin=36,
+            title=f"Solicitud de Cotización #{solicitud.id_solicitud}",
+            author=datos_local['nombreLocal']
+        )
+        styles = getSampleStyleSheet()
+        estilo_titulo = ParagraphStyle(
+            'SCTitulo',
+            parent=styles['Heading1'],
+            fontName='Helvetica-Bold',
+            fontSize=15,
+            leading=19,
+            textColor=colors.HexColor('#0F172A')
+        )
+        estilo_normal = ParagraphStyle(
+            'SCNormal',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=9,
+            leading=13,
+            textColor=colors.HexColor('#1E293B')
+        )
+        estilo_th = ParagraphStyle(
+            'SCTh',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            fontSize=9,
+            leading=11,
+            textColor=colors.white
+        )
+        estilo_footer = ParagraphStyle(
+            'SCFooter',
+            parent=styles['Normal'],
+            fontName='Helvetica-Oblique',
+            fontSize=8,
+            leading=11,
+            alignment=1,
+            textColor=colors.HexColor('#64748B')
+        )
+
+        fecha_emision_fmt = (
+            solicitud.fecha_emision.strftime('%d/%m/%Y')
+            if solicitud.fecha_emision
+            else timezone.now().strftime('%d/%m/%Y')
+        )
+
+        elementos = [
+            Paragraph(f"<b>SOLICITUD FORMAL DE COTIZACIÓN N° #{solicitud.id_solicitud}</b>", estilo_titulo),
+            Paragraph(
+                f"Fecha de Emisión: <b>{fecha_emision_fmt}</b> | "
+                f"Departamento Emisor: <b>Administración General</b> ({correo_admin})",
+                estilo_normal
+            ),
+            Spacer(1, 12),
+            Paragraph(
+                f"<b>EMPRESA SOLICITANTE:</b> {datos_local['nombreLocal']} | CUIT/CUIL: {datos_local['cuilLocal']}<br/>"
+                f"Dirección: {datos_local['direccionLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {correo_admin}",
+                estilo_normal
+            ),
+            Spacer(1, 8),
+            Paragraph(
+                f"<b>PROVEEDOR INVITADO:</b> {proveedor.nombre_proveedor} | CUIT: {proveedor.cuit_prov}<br/>"
+                f"Dirección: {dir_prov} | Tel: {proveedor.telefono or 'S/N'} | Email: {proveedor.correo or 'S/N'}",
+                estilo_normal
+            ),
+            Spacer(1, 14),
+            Paragraph(
+                "Solicitamos tenga a bien remitir su cotización formal indicando precio unitario, plazo estimado de entrega "
+                "y fecha de validez de la oferta para los siguientes artículos/insumos:",
+                estilo_normal
+            ),
+            Spacer(1, 10),
+        ]
+
+        filas = [[
+            Paragraph("#", estilo_th),
+            Paragraph("Producto / Insumo Solicitado", estilo_th),
+            Paragraph("Categoría", estilo_th),
+            Paragraph("Cant. Requerida", estilo_th),
+        ]]
+
+        items_sol = solicitud.solicitudcotizacionproducto_set.select_related('id_producto', 'id_producto__id_categoria').all()
+        for idx, item in enumerate(items_sol, start=1):
+            prod = item.id_producto
+            nombre_p = prod.nombre if prod else f"Artículo #{item.id_producto_id}"
+            cat_p = prod.id_categoria.nombre if (prod and prod.id_categoria) else "General"
+            filas.append([
+                Paragraph(str(idx), estilo_normal),
+                Paragraph(nombre_p, estilo_normal),
+                Paragraph(cat_p, estilo_normal),
+                Paragraph(f"<b>{item.cantidad} u.</b>", estilo_normal),
+            ])
+
+        tabla = Table(filas, colWidths=[35, 275, 130, 90])
+        tabla.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elementos.append(tabla)
+        elementos.append(Spacer(1, 16))
+
+        elementos.append(
+            Paragraph(
+                f"<b>RESPUESTA EN LÍNEA:</b> Puede cargar sus precios, plazo de entrega y presupuesto PDF directamente desde "
+                f"nuestro Portal de Proveedores en: <font color='#0891B2'>{url_portal}</font>",
+                estilo_normal
+            )
+        )
+        elementos.append(Spacer(1, 20))
+        elementos.append(
+            Paragraph(
+                f"Documento oficial emitido por {datos_local['nombreLocal']} (CUIT: {datos_local['cuilLocal']}) • "
+                f"Administración General: {correo_admin} • Tel: {datos_local['telefonoLocal']}",
+                estilo_footer
+            )
+        )
+        elementos.append(
+            Paragraph(
+                "Esta solicitud de cotización no constituye una orden de compra vinculante hasta su evaluación y adjudicación formal.",
+                estilo_footer
+            )
+        )
+        doc.build(elementos)
+    except Exception as exc:
+        logger.warning("[Solicitud Cotización PDF] Advertencia al generar PDF #%s: %s", solicitud.id_solicitud, exc)
+
+    return rel_path
+
+
 def despachar_correo_cotizacion(*, cotizacion: Cotizacion, token_acceso: str) -> bool:
     """
-    Función auxiliar (Stub) para simular el envío de correos electrónicos individuales
-    a cada proveedor seleccionado con su token de acceso y enlace seguro (CU-14 Paso 10).
+    Despacha el correo electrónico formal a cada proveedor invitado con:
+    - Remitente oficial de 'Administración General' (`emailAdministracion`).
+    - Cuerpo en texto plano y esquema HTML institucional con tabla de insumos solicitados
+      y enlace directo al Portal Seguro de Proveedores.
+    - Archivo PDF formal de la Solicitud de Cotización adjunto.
     """
-    # En producción se conecta al dispatcher de correos (SMTP, SendGrid, etc.)
-    return True
+    import os
+    from django.conf import settings
+    from django.core.mail import EmailMultiAlternatives
+    from core_app.correos import despachar_correo_en_commit
+    from core_app.selectors import obtener_url_frontend
+
+    invitacion = getattr(cotizacion, 'id_invitacion', None)
+    prov = getattr(invitacion, 'cuit_prov', None)
+    solicitud = getattr(invitacion, 'id_solicitud', None)
+    if not prov or not prov.correo or not solicitud:
+        return False
+
+    try:
+        datos_local = _obtener_datos_institucionales_local()
+        correo_admin, remitente_fmt = _obtener_remitente_administracion_general(datos_local)
+        url_portal = f"{obtener_url_frontend()}/portal-proveedor/cotizar/{token_acceso}"
+        fecha_emision_fmt = (
+            solicitud.fecha_emision.strftime('%d/%m/%Y')
+            if solicitud.fecha_emision
+            else timezone.now().strftime('%d/%m/%Y')
+        )
+
+        ruta_pdf_rel = generar_pdf_solicitud_cotizacion(solicitud, prov, token_acceso)
+
+        items_sol = list(
+            solicitud.solicitudcotizacionproducto_set.select_related('id_producto', 'id_producto__id_categoria').all()
+        )
+        filas_texto = "\n".join(
+            f"  - {it.id_producto.nombre if it.id_producto else 'Insumo'} | Cantidad: {it.cantidad} u."
+            for it in items_sol
+        )
+        filas_html = "".join(
+            f"""
+            <tr>
+              <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">
+                {it.id_producto.nombre if it.id_producto else f'Artículo #{it.id_producto_id}'}
+              </td>
+              <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; color: #475569;">
+                {it.id_producto.id_categoria.nombre if (it.id_producto and it.id_producto.id_categoria) else 'General'}
+              </td>
+              <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; font-weight: 700; color: #0891b2;">
+                {it.cantidad} u.
+              </td>
+            </tr>
+            """
+            for it in items_sol
+        )
+
+        asunto = f"Solicitud Formal de Cotización #{solicitud.id_solicitud} - {datos_local['nombreLocal']}"
+        cuerpo_texto = (
+            f"Estimado proveedor {prov.nombre_proveedor} (CUIT: {prov.cuit_prov}),\n\n"
+            f"Desde Administración General de {datos_local['nombreLocal']} le enviamos la Solicitud Formal "
+            f"de Cotización #{solicitud.id_solicitud} (emitida el {fecha_emision_fmt}).\n\n"
+            f"Artículos / Insumos solicitados:\n{filas_texto}\n\n"
+            f"Adjuntamos el documento oficial en formato PDF con el detalle completo.\n"
+            f"Para responder con sus precios, plazo de entrega y presupuesto formal, ingrese al siguiente enlace seguro:\n"
+            f"{url_portal}\n\n"
+            f"Atentamente,\n"
+            f"Administración General — {datos_local['nombreLocal']}\n"
+            f"CUIT/CUIL: {datos_local['cuilLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {correo_admin}"
+        )
+
+        cuerpo_html = f"""
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 660px; margin: 0 auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; overflow: hidden;">
+          <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 22px 26px; border-bottom: 4px solid #06b6d4;">
+            <div style="font-size: 11px; color: #22d3ee; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">
+              Administración General • Abastecimiento y Compras
+            </div>
+            <h2 style="margin: 6px 0 0 0; color: #ffffff; font-size: 20px;">
+              Solicitud Formal de Cotización #{solicitud.id_solicitud}
+            </h2>
+            <p style="margin: 4px 0 0 0; color: #cbd5e1; font-size: 12px;">
+              {datos_local['nombreLocal']} • Emitida el {fecha_emision_fmt}
+            </p>
+          </div>
+          <div style="padding: 24px 26px; color: #1e293b; font-size: 13px; line-height: 1.6;">
+            <p style="margin-top: 0;">Estimado proveedor <strong>{prov.nombre_proveedor}</strong> (CUIT: <code>{prov.cuit_prov}</code>),</p>
+            <p>
+              Lo invitamos a cotizar los insumos detallados a continuación. Adjunto a este correo encontrará
+              el <strong>documento oficial en formato PDF</strong> de la Solicitud de Cotización.
+            </p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; border: 1px solid #cbd5e1;">
+              <thead>
+                <tr style="background: #f1f5f9;">
+                  <th style="padding: 9px 10px; text-align: left; color: #334155; border-bottom: 2px solid #cbd5e1;">Producto / Insumo</th>
+                  <th style="padding: 9px 10px; text-align: left; color: #334155; border-bottom: 2px solid #cbd5e1;">Categoría</th>
+                  <th style="padding: 9px 10px; text-align: center; color: #334155; border-bottom: 2px solid #cbd5e1;">Cantidad</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas_html}
+              </tbody>
+            </table>
+            <div style="text-align: center; margin: 24px 0;">
+              <a href="{url_portal}" style="display: inline-block; background: #06b6d4; color: #0f172a; text-decoration: none; font-weight: 800; padding: 12px 24px; border-radius: 8px; font-size: 13px;">
+                Responder Cotización en Portal Seguro →
+              </a>
+            </div>
+            <p style="font-size: 11px; color: #64748b; background: #f8fafc; padding: 10px 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
+              Si el botón no abre automáticamente, copie y pegue este enlace en su navegador:<br/>
+              <span style="color: #0891b2; word-break: break-all;">{url_portal}</span>
+            </p>
+          </div>
+          <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 26px; font-size: 11px; color: #64748b;">
+            <strong>{datos_local['nombreLocal']}</strong> — Administración General<br/>
+            CUIT/CUIL: {datos_local['cuilLocal']} • {datos_local['direccionLocal']} • Tel: {datos_local['telefonoLocal']} • Email: {correo_admin}
+          </div>
+        </div>
+        """
+
+        msg = EmailMultiAlternatives(
+            subject=asunto,
+            body=cuerpo_texto,
+            from_email=remitente_fmt,
+            to=[prov.correo],
+            reply_to=[correo_admin]
+        )
+        msg.attach_alternative(cuerpo_html, "text/html")
+
+        if ruta_pdf_rel:
+            media_root = getattr(settings, 'MEDIA_ROOT', None) or os.path.join(os.getcwd(), 'media')
+            abs_pdf = os.path.join(media_root, ruta_pdf_rel)
+            if os.path.exists(abs_pdf):
+                msg.attach_file(abs_pdf, 'application/pdf')
+
+        despachar_correo_en_commit(
+            lambda: msg.send(fail_silently=False),
+            contexto=f"Solicitud Cotización #{solicitud.id_solicitud} -> {prov.correo}"
+        )
+        return True
+    except Exception as exc:
+        logger.warning("[Solicitud Cotización Correo] Error preparando correo para %s: %s", prov.correo, exc)
+        return False
 
 
 @transaction.atomic
@@ -878,13 +1214,19 @@ def generar_pdf_orden_compra(orden: OrdenCompra) -> str:
             textColor=colors.white
         )
 
+        correo_admin, _ = _obtener_remitente_administracion_general(datos_local)
+
         elementos = [
             Paragraph(f"<b>ORDEN DE COMPRA OFICIAL N° #{orden.id_orden}</b>", estilo_titulo),
-            Paragraph(f"Fecha de Emisión: {orden.fecha_emision.strftime('%d/%m/%Y')} | Modalidad: <b>{orden.tipo_entrega_nombre}</b>", estilo_normal),
+            Paragraph(
+                f"Fecha de Emisión: {orden.fecha_emision.strftime('%d/%m/%Y')} | "
+                f"Modalidad: <b>{orden.tipo_entrega_nombre}</b> | Departamento Emisor: <b>Administración General</b>",
+                estilo_normal
+            ),
             Spacer(1, 12),
             Paragraph(
                 f"<b>COMPRADOR (LOCAL):</b> {datos_local['nombreLocal']} | CUIT/CUIL: {datos_local['cuilLocal']}<br/>"
-                f"Dirección: {datos_local['direccionLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {datos_local['emailLocal']}",
+                f"Dirección: {datos_local['direccionLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {correo_admin}",
                 estilo_normal
             ),
             Spacer(1, 8),
@@ -930,6 +1272,30 @@ def generar_pdf_orden_compra(orden: OrdenCompra) -> str:
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ]))
         elementos.append(tabla)
+        elementos.append(Spacer(1, 20))
+
+        estilo_footer = ParagraphStyle(
+            'OCFooter',
+            parent=styles['Normal'],
+            fontName='Helvetica-Oblique',
+            fontSize=8,
+            leading=11,
+            alignment=1,
+            textColor=colors.HexColor('#64748B')
+        )
+        elementos.append(
+            Paragraph(
+                f"Documento oficial emitido por {datos_local['nombreLocal']} (CUIT: {datos_local['cuilLocal']}) • "
+                f"{datos_local['direccionLocal']} • Administración General: {correo_admin} / Tel: {datos_local['telefonoLocal']}",
+                estilo_footer
+            )
+        )
+        elementos.append(
+            Paragraph(
+                "Orden de Compra sujeta a verificación de recepción física y remito comercial. Prohibida su alteración.",
+                estilo_footer
+            )
+        )
         doc.build(elementos)
     except Exception:
         # Fallback seguro si el entorno de pruebas restringe escritura en disco
@@ -941,11 +1307,14 @@ def generar_pdf_orden_compra(orden: OrdenCompra) -> str:
 def despachar_correo_orden_compra(orden: OrdenCompra, ruta_pdf_rel: Optional[str] = None) -> bool:
     """
     Paso 8 (CU-54): Despacha formalmente el contrato y documento legal (PDF)
-    vía correo electrónico al proveedor adjudicado.
+    de la Orden de Compra vía correo electrónico al proveedor adjudicado,
+    enviado desde 'Administración General' (`emailAdministracion`) con esquema HTML,
+    cuerpo detallado y PDF formal adjunto.
     """
     import os
     from django.conf import settings
     from django.core.mail import EmailMultiAlternatives
+    from core_app.correos import despachar_correo_en_commit
 
     prov = orden.cuit_prov
     if not prov or not prov.correo:
@@ -953,30 +1322,129 @@ def despachar_correo_orden_compra(orden: OrdenCompra, ruta_pdf_rel: Optional[str
 
     try:
         datos_local = _obtener_datos_institucionales_local()
-        asunto = f"Orden de Compra Oficial #{orden.id_orden} - {datos_local['nombreLocal']}"
-        cuerpo = (
-            f"Estimado proveedor {prov.nombre_proveedor} (CUIT: {prov.cuit_prov}),\n\n"
-            f"Por medio del presente adjuntamos la Orden de Compra Oficial #{orden.id_orden} "
-            f"emitida el {orden.fecha_emision.strftime('%d/%m/%Y')} bajo modalidad '{orden.tipo_entrega_nombre}'.\n"
-            f"Los precios unitarios indicados corresponden a su cotización formal vigente.\n\n"
-            f"Atentamente,\n"
-            f"{datos_local['nombreLocal']}\n"
-            f"CUIT/CUIL: {datos_local['cuilLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {datos_local['emailLocal']}"
+        correo_admin, remitente_fmt = _obtener_remitente_administracion_general(datos_local)
+        fecha_emision_fmt = (
+            orden.fecha_emision.strftime('%d/%m/%Y')
+            if orden.fecha_emision
+            else timezone.now().strftime('%d/%m/%Y')
         )
+
+        detalles = list(orden.detalles.select_related('id_producto').all())
+        total_general = Decimal("0.00")
+        filas_texto_list = []
+        filas_html_list = []
+
+        for det in detalles:
+            sub = Decimal(str(det.cantidad)) * det.precio_unitario
+            total_general += sub
+            nom_prod = det.id_producto.nombre if det.id_producto else f"Producto #{det.id_producto_id}"
+            filas_texto_list.append(
+                f"  - {nom_prod} | Cant: {det.cantidad} u. | P. Unit: ${det.precio_unitario:,.2f} | Subtotal: ${sub:,.2f}"
+            )
+            filas_html_list.append(
+                f"""
+                <tr>
+                  <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">{nom_prod}</td>
+                  <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #334155;">{det.cantidad} u.</td>
+                  <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155; font-family: monospace;">${det.precio_unitario:,.2f}</td>
+                  <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #0f172a; font-weight: 700; font-family: monospace;">${sub:,.2f}</td>
+                </tr>
+                """
+            )
+
+        filas_texto = "\n".join(filas_texto_list)
+        filas_html = "".join(filas_html_list)
+
+        asunto = f"Orden de Compra Oficial #{orden.id_orden} - {datos_local['nombreLocal']}"
+        cuerpo_texto = (
+            f"Estimado proveedor {prov.nombre_proveedor} (CUIT: {prov.cuit_prov}),\n\n"
+            f"Desde Administración General de {datos_local['nombreLocal']} adjuntamos la Orden de Compra Oficial #{orden.id_orden} "
+            f"emitida el {fecha_emision_fmt} bajo modalidad '{orden.tipo_entrega_nombre}'.\n\n"
+            f"Detalle de artículos adjudicados:\n{filas_texto}\n"
+            f"TOTAL COMPROMETIDO: ${total_general:,.2f}\n\n"
+            f"Adjuntamos el documento legal oficial en formato PDF.\n"
+            f"Por favor confirmar recepción y coordinar entrega con su respectivo remito comercial.\n\n"
+            f"Atentamente,\n"
+            f"Administración General — {datos_local['nombreLocal']}\n"
+            f"CUIT/CUIL: {datos_local['cuilLocal']} | Tel: {datos_local['telefonoLocal']} | Email: {correo_admin}"
+        )
+
+        cuerpo_html = f"""
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 680px; margin: 0 auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; overflow: hidden;">
+          <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 22px 26px; border-bottom: 4px solid #8b5cf6;">
+            <div style="font-size: 11px; color: #c4b5fd; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">
+              Administración General • Orden de Compra Adjudicada
+            </div>
+            <h2 style="margin: 6px 0 0 0; color: #ffffff; font-size: 20px;">
+              Orden de Compra Oficial N° #{orden.id_orden}
+            </h2>
+            <p style="margin: 4px 0 0 0; color: #cbd5e1; font-size: 12px;">
+              {datos_local['nombreLocal']} • Emitida el {fecha_emision_fmt} • Modalidad: <strong>{orden.tipo_entrega_nombre}</strong>
+            </p>
+          </div>
+          <div style="padding: 24px 26px; color: #1e293b; font-size: 13px; line-height: 1.6;">
+            <p style="margin-top: 0;">Estimado proveedor <strong>{prov.nombre_proveedor}</strong> (CUIT: <code>{prov.cuit_prov}</code>),</p>
+            <p>
+              Le remitimos formalmente la <strong>Orden de Compra Oficial #{orden.id_orden}</strong> correspondiente a los
+              artículos detallados a continuación. Adjunto a este correo encontrará el <strong>documento oficial en formato PDF</strong>.
+            </p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; border: 1px solid #cbd5e1;">
+              <thead>
+                <tr style="background: #f1f5f9;">
+                  <th style="padding: 9px 10px; text-align: left; color: #334155; border-bottom: 2px solid #cbd5e1;">Producto / Insumo</th>
+                  <th style="padding: 9px 10px; text-align: center; color: #334155; border-bottom: 2px solid #cbd5e1;">Cantidad</th>
+                  <th style="padding: 9px 10px; text-align: right; color: #334155; border-bottom: 2px solid #cbd5e1;">Precio Unitario</th>
+                  <th style="padding: 9px 10px; text-align: right; color: #334155; border-bottom: 2px solid #cbd5e1;">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas_html}
+              </tbody>
+              <tfoot>
+                <tr style="background: #f8fafc;">
+                  <td colspan="3" style="padding: 10px; text-align: right; font-weight: 800; color: #0f172a; border-top: 2px solid #94a3b8;">
+                    TOTAL COMPROMETIDO:
+                  </td>
+                  <td style="padding: 10px; text-align: right; font-weight: 900; color: #0891b2; font-family: monospace; font-size: 14px; border-top: 2px solid #94a3b8;">
+                    ${total_general:,.2f}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+            <p style="font-size: 12px; color: #475569; background: #f8fafc; padding: 10px 12px; border-radius: 6px; border-left: 4px solid #8b5cf6;">
+              <strong>Modalidad de Entrega:</strong> {orden.tipo_entrega_nombre}.<br/>
+              Por favor adjuntar el remito comercial correspondiente al momento de la entrega para su recepción física en almacén.
+            </p>
+          </div>
+          <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 26px; font-size: 11px; color: #64748b;">
+            <strong>{datos_local['nombreLocal']}</strong> — Administración General<br/>
+            CUIT/CUIL: {datos_local['cuilLocal']} • {datos_local['direccionLocal']} • Tel: {datos_local['telefonoLocal']} • Email: {correo_admin}
+          </div>
+        </div>
+        """
+
         msg = EmailMultiAlternatives(
             subject=asunto,
-            body=cuerpo,
-            from_email=datos_local['emailLocal'],
-            to=[prov.correo]
+            body=cuerpo_texto,
+            from_email=remitente_fmt,
+            to=[prov.correo],
+            reply_to=[correo_admin]
         )
+        msg.attach_alternative(cuerpo_html, "text/html")
+
         if ruta_pdf_rel:
             media_root = getattr(settings, 'MEDIA_ROOT', None) or os.path.join(os.getcwd(), 'media')
             abs_pdf = os.path.join(media_root, ruta_pdf_rel)
             if os.path.exists(abs_pdf):
-                msg.attach_file(abs_pdf)
-        msg.send(fail_silently=True)
+                msg.attach_file(abs_pdf, 'application/pdf')
+
+        despachar_correo_en_commit(
+            lambda: msg.send(fail_silently=False),
+            contexto=f"Orden de Compra #{orden.id_orden} -> {prov.correo}"
+        )
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Orden de Compra Correo] Error preparando correo para %s: %s", prov.correo, exc)
         return False
 
 

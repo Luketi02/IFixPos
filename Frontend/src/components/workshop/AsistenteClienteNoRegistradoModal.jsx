@@ -603,11 +603,6 @@ export default function AsistenteClienteNoRegistradoModal({
       return;
     }
 
-    if (selectedCategorias.length === 0) {
-      setErrorMessage('Selecciona al menos una categoría de reparación.');
-      return;
-    }
-
     if (descripcionProblema.trim().length < 10) {
       setErrorMessage('La descripción del problema debe contener al menos 10 caracteres.');
       return;
@@ -844,30 +839,6 @@ export default function AsistenteClienteNoRegistradoModal({
           {/* CUERPO DEL MODAL                                               */}
           {/* ============================================================== */}
           <div className="p-6 max-h-[75vh] overflow-y-auto space-y-5">
-            {/* Alerta suave con auto-desvanecimiento a los 6s */}
-            <AnimatePresence>
-              {errorMessage && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  className="p-3.5 rounded-xl bg-rose-950/90 border border-rose-500/50 text-rose-200 text-xs flex items-center justify-between gap-3 shadow-lg"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">⚠️</span>
-                    <span>{errorMessage}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setErrorMessage('')}
-                    className="text-rose-300 hover:text-white font-bold px-1.5"
-                  >
-                    ✕
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             {/* ============================================================ */}
             {/* PASO 1: REGISTRAR CUENTA DE CLIENTE O SELECCIONAR EXISTENTE  */}
             {/* ============================================================ */}
@@ -1437,10 +1408,11 @@ export default function AsistenteClienteNoRegistradoModal({
                   </div>
                 </div>
 
-                {/* 1. Categorías de Reparación */}
+                {/* 1. Categorías de Reparación (opcional) */}
                 <div className="space-y-2" ref={dropdownCatRef}>
                   <label className="block text-xs font-semibold text-slate-300">
-                    Categorías de Reparación <span className="text-cyan-400">*</span>
+                    Categorías de Reparación{' '}
+                    <span className="text-slate-500 font-normal">(opcional)</span>
                   </label>
 
                   {categoriasSeleccionadasInfo.length > 0 && (
@@ -1751,6 +1723,37 @@ export default function AsistenteClienteNoRegistradoModal({
             )}
           </div>
         </motion.div>
+
+        {/* Notificación push de errores/problemas en esquina inferior izquierda (auto-desvanecimiento 6s) */}
+        <AnimatePresence>
+          {errorMessage && (
+            <motion.div
+              initial={{ opacity: 0, x: -24, y: 12 }}
+              animate={{ opacity: 1, x: 0, y: 0 }}
+              exit={{ opacity: 0, x: -24, y: 12 }}
+              role="alert"
+              className="fixed bottom-6 left-6 z-[70] max-w-md w-[calc(100%-3rem)] p-4 rounded-2xl bg-rose-950/95 border border-rose-500/60 text-rose-100 text-xs flex items-start justify-between gap-3 shadow-2xl"
+            >
+              <div className="flex items-start gap-2.5">
+                <span className="text-base leading-none mt-0.5">⚠️</span>
+                <div className="space-y-0.5">
+                  <p className="font-bold text-rose-200 uppercase tracking-wider text-[10px]">
+                    Atención
+                  </p>
+                  <p className="leading-relaxed">{errorMessage}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErrorMessage('')}
+                className="text-rose-300 hover:text-white font-bold px-1.5 py-0.5 cursor-pointer shrink-0"
+                aria-label="Cerrar aviso"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </AnimatePresence>
   );

@@ -3362,5 +3362,52 @@ class PendientesBackendAuditoriaTests(TestCase):
         self.assertEqual(res_304.status_code, 304)
         self.assertEqual(res_304['ETag'], etag)
 
+    def test_reporte_inspeccion_ventas_y_unicidad_carrito_mostrador(self):
+        """
+        Verifica:
+        1. El endpoint GET /api/sales/reportes/ventas/ retorna kpis_ventas, arqueo_caja,
+           evolucion_semanal, ventas y egresos_detalle.
+        2. La cancelación de una venta presencial (MOSTRADOR) no crea ni asocia carritos
+           de compra al cliente, y _obtener_o_crear_carrito_activo mantiene 1 único carrito por usuario.
+        """
+        from sales_app.models import Beneficio
+        from sales_app.services import cancelar_venta_y_restituir_stock
+        from sales_app.services_carrito import _obtener_o_crear_carrito_activo
+
+        # Crear múltiples carritos duplicados para el cliente y verificar consolidación a 1 solo
+        CarritoCompra.objects.create(id_usuario=self.cliente, estado='activo', fecha_creacion=timezone.now().date())
+        CarritoCompra.objects.create(id_usuario=self.cliente, estado='activo', fecha_creacion=timezone.now().date())
+        CarritoCompra.objects.create(id_usuario=self.cliente, estado='finalizado', fecha_creacion=timezone.now().date())
+
+        carrito_unico = _obtener_o_crear_carrito_activo(self.cliente)
+        self.assertIsNotNone(carrito_unico)
+        self.assertEqual(CarritoCompra.objects.filter(id_usuario=self.cliente).count(), 1)
+
+        # Limpiar carrito del cliente y verificar que cancelar una venta de MOSTRADOR NO crea carrito
+        CarritoCompra.objects.filter(id_usuario=self.cliente).delete()
+        venta_mostrador = Venta.objects.create(
+            id_usuario=self.cliente,
+            fecha_venta=timezone.now().date(),
+            monto_subtotal=Decimal('15000.00'),
+            costo_envio=Decimal('0.00'),
+            metodo_entrega='MOSTRADOR',
+            estado_venta='PENDIENTE',
+            codigo_sec='POS-NOCART-01'
+        )
+        cancelar_venta_y_restituir_stock(id_venta=venta_mostrador.id_venta)
+        self.assertEqual(CarritoCompra.objects.filter(id_usuario=self.cliente).count(), 0)
+
+        # Verificar endpoint de reporte de inspección de ventas y arqueo
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.admin)
+        res_rep = api_client.get('/api/sales/reportes/ventas/')
+        self.assertEqual(res_rep.status_code, 200)
+        self.assertIn('kpis_ventas', res_rep.data)
+        self.assertIn('arqueo_caja', res_rep.data)
+        self.assertIn('evolucion_semanal', res_rep.data)
+        self.assertIn('ventas', res_rep.data)
+        self.assertIn('egresos_detalle', res_rep.data)
+
+
 
 

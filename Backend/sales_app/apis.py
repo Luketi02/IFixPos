@@ -292,15 +292,45 @@ class CompletarPagoApi(APIView):
                 }
                 for det in operacion.detalleventa_set.all()
             ]
+            rep_asoc = (
+                operacion.reparacion_set
+                .select_related('id_dispositivo__id_modelo__id_marca')
+                .first()
+            )
+            if not items and rep_asoc:
+                disp = getattr(rep_asoc, 'id_dispositivo', None)
+                mod = getattr(disp, 'id_modelo', None)
+                mar = getattr(mod, 'id_marca', None)
+                desc_disp = f"{getattr(mar, 'nombre', '')} {getattr(mod, 'nombre', '')}".strip() or "Dispositivo"
+                items.append({
+                    "producto": f"Pago de Diagnóstico — {desc_disp}",
+                    "cantidad": 1,
+                    "precio_unitario": str(operacion.monto_subtotal),
+                    "subtotal": str(operacion.monto_subtotal)
+                })
+                concepto_resumen = f"Pago de diagnóstico para {desc_disp}"
+            elif rep_asoc:
+                disp = getattr(rep_asoc, 'id_dispositivo', None)
+                mod = getattr(disp, 'id_modelo', None)
+                mar = getattr(mod, 'id_marca', None)
+                desc_disp = f"{getattr(mar, 'nombre', '')} {getattr(mod, 'nombre', '')}".strip() or "Dispositivo"
+                concepto_resumen = f"Pago de servicio técnico para {desc_disp}"
+            else:
+                cant_total = sum(int(i.get("cantidad") or 0) for i in items)
+                concepto_resumen = f"Compra de {cant_total} producto{'s' if cant_total != 1 else ''}"
             estado = operacion.estado_venta
         else:
             tipo_operacion = "Reparación"
             id_operacion = operacion.id_reparacion
+            disp = getattr(operacion, 'id_dispositivo', None)
+            mod = getattr(disp, 'id_modelo', None)
+            mar = getattr(mod, 'id_marca', None)
+            desc_disp = f"{getattr(mar, 'nombre', '')} {getattr(mod, 'nombre', '')}".strip() or "Dispositivo"
             items = []
             diag = operacion.diagnostico_set.order_by('-id_diagnostico').first()
             if diag and diag.costo_diagnostico:
                 items.append({
-                    "producto": f"Diagnóstico / Mano de Obra ({diag.descripcion_falla[:40]}...)",
+                    "producto": f"Diagnóstico / Mano de Obra — {desc_disp}",
                     "cantidad": 1,
                     "precio_unitario": str(diag.costo_diagnostico),
                     "subtotal": str(diag.costo_diagnostico)
@@ -314,6 +344,11 @@ class CompletarPagoApi(APIView):
                     "subtotal": str(st)
                 })
             estado = operacion.etapa
+            etapa_up = str(estado or '').strip().upper()
+            if etapa_up in ('ESPERANDO_PAGO_DIAGNOSTICO', 'ESPERANDO_DISPOSITIVO'):
+                concepto_resumen = f"Pago de diagnóstico para {desc_disp}"
+            else:
+                concepto_resumen = f"Reparación de {desc_disp}"
 
         from sales_app.selectors import _construir_desglose_cobro
         desglose = _construir_desglose_cobro(
@@ -329,6 +364,7 @@ class CompletarPagoApi(APIView):
                 "tipo_operacion": tipo_operacion,
                 "codigo_seguridad": operacion.codigo_sec or "",
                 "estado": estado,
+                "concepto_resumen": concepto_resumen,
                 "cliente": {
                     "nombre": cliente_nombre,
                     "email": cliente_email,
@@ -1255,8 +1291,9 @@ class RealizarCompraInvitadoApi(APIView):
 
 class MisBeneficiosClienteApi(APIView):
     """
-    Retorna la lista de beneficios activos e historial para el cliente autenticado.
-    Permite nutrir la pestaña 'Mis Beneficios y Cupones' y el selector de Checkout.
+    Retorna la lista de beneficios activos e historial para el cliente autenticado,
+    o para un cliente específico (`?id_cliente=<id>`) cuando la consulta es realizada
+    por un Administrador o Técnico desde Venta Presencial en Mostrador.
     """
     permission_classes = [IsAuthenticated]
 
@@ -1267,8 +1304,17 @@ class MisBeneficiosClienteApi(APIView):
         )
         from sales_app.serializers import BeneficioClienteOutputSerializer
 
-        activos = obtener_beneficios_activos_cliente(request.user.id_usuario)
-        historial = obtener_historial_beneficios_cliente(request.user.id_usuario)
+        target_id_usuario = request.user.id_usuario
+        id_cliente_param = request.query_params.get('id_cliente')
+        if id_cliente_param and str(id_cliente_param).strip().isdigit():
+            rol = getattr(request.user, 'id_rol', None) or getattr(request.user, 'rol', None)
+            codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+            nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+            if codigo_rol in ('ADMIN', 'TECNICO') or nombre_rol in ('administrador', 'técnico', 'tecnico'):
+                target_id_usuario = int(str(id_cliente_param).strip())
+
+        activos = obtener_beneficios_activos_cliente(target_id_usuario)
+        historial = obtener_historial_beneficios_cliente(target_id_usuario)
 
         ser_activos = BeneficioClienteOutputSerializer(activos, many=True)
         ser_historial = BeneficioClienteOutputSerializer(historial, many=True)
@@ -1337,3 +1383,55 @@ class DepuracionMotorBeneficiosApi(APIView):
             "resumen_ejecucion": resumen,
             "metricas": metricas_actualizadas
         }, status=status.HTTP_200_OK)
+
+
+class ReporteInspeccionVentasApi(APIView):
+    """
+    Endpoint exclusivo para Administradores (Categoría: Métricas y Análisis).
+    Inspecciona las ventas realizadas (presenciales y virtuales), evolución semanal,
+    arqueo de ingresos y egresos, y detalle completo de cada operación.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _verificar_admin(self, user):
+        rol = getattr(user, 'id_rol', None) or getattr(user, 'rol', None)
+        codigo_rol = (getattr(rol, 'codigo', '') or '').upper()
+        nombre_rol = (getattr(rol, 'nombre_rol', '') or '').lower()
+        if codigo_rol != 'ADMIN' and nombre_rol != 'administrador':
+            raise PermissionDenied("Se requiere rol de Administrador para inspeccionar el reporte de ventas y arqueo.")
+
+    def get(self, request):
+        import datetime
+        from django.utils import timezone
+        from sales_app.serializers import ReporteInspeccionVentasInputSerializer
+        from sales_app.selectors import obtener_reporte_inspeccion_ventas_y_arqueo
+
+        self._verificar_admin(request.user)
+
+        params = request.query_params.copy()
+        if not params.get('id_medio_pago'):
+            params.pop('id_medio_pago', None)
+
+        serializer = ReporteInspeccionVentasInputSerializer(data=params)
+        serializer.is_valid(raise_exception=True)
+        datos = serializer.validated_data
+
+        hoy = timezone.now().date()
+        f_fin = datos.get('fecha_fin') or hoy
+        f_inicio = datos.get('fecha_inicio') or (f_fin - datetime.timedelta(days=30))
+
+        try:
+            reporte = obtener_reporte_inspeccion_ventas_y_arqueo(
+                fecha_inicio=f_inicio,
+                fecha_fin=f_fin,
+                canal=datos.get('canal', 'TODAS'),
+                estado_venta=datos.get('estado_venta', 'TODOS'),
+                id_medio_pago=datos.get('id_medio_pago'),
+                buscar=datos.get('buscar', '')
+            )
+        except DjangoValidationError as e:
+            msg = e.messages[0] if hasattr(e, 'messages') else str(e)
+            return Response({"error": msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(reporte, status=status.HTTP_200_OK)
+

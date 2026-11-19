@@ -567,9 +567,14 @@ class CopiasSeguridadYRestauracionTests(TestCase):
         )
 
         self.archivos_creados = []
+        import tempfile
+        from django.test import override_settings
+        self._tmp_backups_dir = tempfile.mkdtemp(prefix='ifixpos_test_backups_')
+        self._backups_override = override_settings(BACKUPS_DIR=self._tmp_backups_dir)
+        self._backups_override.enable()
 
     def tearDown(self):
-        import os
+        import os, shutil
         from django.core.cache import cache
         cache.clear()
         for ruta in self.archivos_creados:
@@ -578,6 +583,10 @@ class CopiasSeguridadYRestauracionTests(TestCase):
                     os.remove(ruta)
                 except OSError:
                     pass
+        if hasattr(self, '_backups_override'):
+            self._backups_override.disable()
+        if hasattr(self, '_tmp_backups_dir') and os.path.exists(self._tmp_backups_dir):
+            shutil.rmtree(self._tmp_backups_dir, ignore_errors=True)
 
     def test_servicio_generar_copia_seguridad_manual(self):
         """CU-22: Verifica la generación de archivo físico, registro y auditoría."""
@@ -1051,9 +1060,14 @@ class SistemaBackupsNivelesYRotacionTests(TestCase):
         CopiaSeguridad.objects.all().delete()
 
         self.archivos_creados = []
+        import tempfile
+        from django.test import override_settings
+        self._tmp_backups_dir = tempfile.mkdtemp(prefix='ifixpos_test_backups_')
+        self._backups_override = override_settings(BACKUPS_DIR=self._tmp_backups_dir)
+        self._backups_override.enable()
 
     def tearDown(self):
-        import os
+        import os, shutil
         from django.core.cache import cache
         cache.clear()
         for ruta in self.archivos_creados:
@@ -1062,6 +1076,10 @@ class SistemaBackupsNivelesYRotacionTests(TestCase):
                     os.remove(ruta)
                 except OSError:
                     pass
+        if hasattr(self, '_backups_override'):
+            self._backups_override.disable()
+        if hasattr(self, '_tmp_backups_dir') and os.path.exists(self._tmp_backups_dir):
+            shutil.rmtree(self._tmp_backups_dir, ignore_errors=True)
 
     def test_subdirectorios_por_categoria(self):
         """Verifica que cada nivel de backup guarde físicamente en su subcarpeta asignada."""

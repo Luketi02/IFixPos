@@ -3,6 +3,7 @@ from purchases_app.apis import (
     FiltrarProveedoresApi,
     RegistrarProveedorApi,
     ModificarProveedorApi,
+    InspeccionarProveedorApi,
     FiltrarOrdenesCompraApi,
     FiltrarSolicitudesCotizacionApi,
     FiltrarCotizacionesApi,
@@ -33,6 +34,9 @@ urlpatterns = [
     # CU-36: Filtrar Proveedores (GET lista / POST alta)
     path('proveedores/filtrar/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores-query'),
     path('proveedores/', FiltrarProveedoresApi.as_view(), name='filtrar-proveedores'),
+
+    # Inspección Integral de Proveedor y Cumplimiento
+    path('proveedores/<str:id_proveedor>/inspeccion/', InspeccionarProveedorApi.as_view(), name='inspeccionar-proveedor'),
 
     # CU-28: Modificar Proveedor
     path('proveedores/<str:id_proveedor>/modificar/', ModificarProveedorApi.as_view(), name='modificar-proveedor-action'),

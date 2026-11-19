@@ -48,6 +48,7 @@ class ConfiguracionPublicaComercioApi(APIView):
         from core_app.selectors import (
             obtener_configuracion_texto,
             obtener_configuracion_decimal,
+            obtener_direccion_local_formateada,
             obtener_datos_bancarios_comercio,
             obtener_dias_garantia_reparacion,
             obtener_dias_limite_retiro_equipo,
@@ -60,7 +61,7 @@ class ConfiguracionPublicaComercioApi(APIView):
             "telefonoLocal": obtener_configuracion_texto('telefonoLocal', ''),
             "emailLocal": obtener_configuracion_texto('emailLocal', 'contacto@empresa.com'),
             "emailSoporte": obtener_email_soporte(),
-            "direccionLocal": obtener_configuracion_texto('direccionLocal', ''),
+            "direccionLocal": obtener_direccion_local_formateada(''),
             "cuilLocal": obtener_configuracion_texto('cuilLocal', ''),
             "imagenLocal": obtener_configuracion_texto('imagenLocal', '/itemLogoVentana.svg'),
             "datosBancarios": obtener_datos_bancarios_comercio(),
@@ -438,7 +439,10 @@ class DepurarBackupsHuerfanosApi(BaseBackupAdminApiView):
         from core_app.services import depurar_archivos_backup_huerfanos
         res = depurar_archivos_backup_huerfanos()
         return Response({
-            "mensaje": f"Depuración completada: {res['eliminados']} archivos huérfanos eliminados ({res['mb_liberados']} MB liberados).",
+            "mensaje": (
+                f"Depuración completada: {res['eliminados']} archivos sueltos eliminados ({res['mb_liberados']} MB liberados)"
+                + (f" y {res.get('registros_bd_eliminados', 0)} registro(s) sin archivo limpiados." if res.get('registros_bd_eliminados') else ".")
+            ),
             "detalle": res
         }, status=status.HTTP_200_OK)
 

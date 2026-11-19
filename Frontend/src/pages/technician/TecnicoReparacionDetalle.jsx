@@ -643,20 +643,24 @@ export default function TecnicoReparacionDetalle() {
           </div>
         </div>
 
-        {/* Modales */}
-        <CargarDiagnosticoModal
-          isOpen={modalDiagnosticoAbierto}
-          onClose={() => setModalDiagnosticoAbierto(false)}
-          reparacion={reparacion}
-          onSuccess={handleDiagnosticoExitoso}
-        />
+        {/* Modales con montaje condicional */}
+        {modalDiagnosticoAbierto && (
+          <CargarDiagnosticoModal
+            isOpen={modalDiagnosticoAbierto}
+            onClose={() => setModalDiagnosticoAbierto(false)}
+            reparacion={reparacion}
+            onSuccess={handleDiagnosticoExitoso}
+          />
+        )}
 
-        <CambiarEstadoModal
-          isOpen={modalEstadoAbierto}
-          onClose={() => setModalEstadoAbierto(false)}
-          reparacion={reparacion}
-          onSuccess={handleCambioEstadoExitoso}
-        />
+        {modalEstadoAbierto && (
+          <CambiarEstadoModal
+            isOpen={modalEstadoAbierto}
+            onClose={() => setModalEstadoAbierto(false)}
+            reparacion={reparacion}
+            onSuccess={handleCambioEstadoExitoso}
+          />
+        )}
 
         {/* Modal Interactivo de Bloqueo Preventivo (Deuda o Sin Recepción Física) */}
         <AnimatePresence>

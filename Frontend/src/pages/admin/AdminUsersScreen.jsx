@@ -5,6 +5,7 @@ import useAuth from '../../context/useAuth';
 import AdminSidebar from '../../components/navigation/AdminSidebar';
 import AdminHeader from '../../components/navigation/AdminHeader';
 import EditUserModal from '../../components/users/EditUserModal';
+import RegistrarUsuarioModal from '../../components/users/RegistrarUsuarioModal';
 import Paginacion from '../../components/common/Paginacion';
 import { EsqueletoTabla } from '../../components/common/EsqueletoCarga';
 
@@ -34,9 +35,10 @@ export default function AdminUsersScreen() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Estado para Modal de Edición (Modificar Usuario)
+  // Estado para Modal de Edición y Registro Administrativo
   const [usuarioEditar, setUsuarioEditar] = useState(null);
   const [modalEditarAbierto, setModalEditarAbierto] = useState(false);
+  const [modalRegistrarAbierto, setModalRegistrarAbierto] = useState(false);
 
   // Auto-ocultar alertas a los 6 segundos
   useEffect(() => {
@@ -280,6 +282,24 @@ export default function AdminUsersScreen() {
         />
 
         <div className="p-6 sm:p-8 space-y-6 flex-1 max-w-7xl w-full mx-auto">
+          {/* Barra superior de acciones del Directorio */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-white tracking-tight">Padrón y Gestión de Cuentas</h2>
+              <p className="text-xs text-slate-400">
+                Consulta usuarios filtrando por datos fiscales o ubicación, o da de alta nuevas cuentas con su rol asignado.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setModalRegistrarAbierto(true)}
+              className="px-4 py-2.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 transition-all flex items-center gap-2 self-start sm:self-auto cursor-pointer shrink-0"
+            >
+              <span>+</span>
+              <span>Registrar Usuario</span>
+            </button>
+          </div>
+
           {/* Cápsulas de Resumen */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-2xl bg-[#1E293B] border border-slate-700/80 text-center">
@@ -682,16 +702,28 @@ export default function AdminUsersScreen() {
       </main>
 
       {/* Modal de Edición Administrativa de Usuario */}
-      <EditUserModal
-        isOpen={modalEditarAbierto}
-        onClose={() => {
-          setModalEditarAbierto(false);
-          setUsuarioEditar(null);
-        }}
-        usuario={usuarioEditar}
-        roles={roles}
-        onSaved={handleUsuarioGuardado}
-      />
+      {modalEditarAbierto && (
+        <EditUserModal
+          isOpen={modalEditarAbierto}
+          onClose={() => {
+            setModalEditarAbierto(false);
+            setUsuarioEditar(null);
+          }}
+          usuario={usuarioEditar}
+          roles={roles}
+          onSaved={handleUsuarioGuardado}
+        />
+      )}
+
+      {/* Modal de Registro Administrativo de Nuevo Usuario */}
+      {modalRegistrarAbierto && (
+        <RegistrarUsuarioModal
+          isOpen={modalRegistrarAbierto}
+          onClose={() => setModalRegistrarAbierto(false)}
+          roles={roles}
+          onCreated={(msg) => handleUsuarioGuardado(msg)}
+        />
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ from sales_app.apis import (
     InspeccionarBeneficioApi,
     RevocarBeneficioApi,
     ReporteLogisticaApi,
+    ReporteInspeccionVentasApi,
     MercadoPagoCrearPreferenciaApi,
     MercadoPagoWebhookApi,
     MercadoPagoConfigPublicaApi,
@@ -81,6 +82,9 @@ urlpatterns = [
 
     # CU-75: Generar Reporte de Distribución Geográfica y Logística
     path('reportes/logistica/', ReporteLogisticaApi.as_view(), name='api_reporte_logistica'),
+
+    # Reporte de Inspección de Ventas y Arqueo de Ingresos/Egresos
+    path('reportes/ventas/', ReporteInspeccionVentasApi.as_view(), name='api_reporte_inspeccion_ventas'),
 
     # Integración Oficial Mercado Pago (Automatizada)
     path('mercadopago/crear-preferencia/', MercadoPagoCrearPreferenciaApi.as_view(), name='api_mp_crear_preferencia'),

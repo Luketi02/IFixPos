@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import useAuth from '../../context/useAuth';
 
@@ -38,6 +37,10 @@ export default function GenerarOrdenCompraModal({
   // Alertas suaves con auto-cierre a los 6 segundos (Regla 6)
   const [errorAlerta, setErrorAlerta] = useState('');
   const [mensajeInfo, setMensajeInfo] = useState('');
+  const [avisoPrecioHistorico, setAvisoPrecioHistorico] = useState('');
+  const [proveedoresActivos, setProveedoresActivos] = useState([]);
+  const [borradorManualProveedor, setBorradorManualProveedor] = useState('');
+  const [preciosManualesHuerfanos, setPreciosManualesHuerfanos] = useState({});
 
   useEffect(() => {
     if (!errorAlerta) return undefined;
@@ -65,23 +68,40 @@ export default function GenerarOrdenCompraModal({
       setOrdenesEmitidasResultado([]);
       setErrorAlerta('');
       setMensajeInfo('');
+      setAvisoPrecioHistorico('');
+      setBorradorManualProveedor('');
+      setPreciosManualesHuerfanos({});
       return;
     }
 
-    const cargarProductos = async () => {
+    const cargarProductosYProveedores = async () => {
       setCargandoCatalogo(true);
       try {
         const activeToken = token || localStorage.getItem('access_token');
         const config = {
           headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {}
         };
-        const resp = await axios.get(`${API_BASE_URL}/api/catalog/productos/`, config);
-        const lista = Array.isArray(resp.data)
-          ? resp.data
-          : Array.isArray(resp.data?.results)
-          ? resp.data.results
+        const [respProd, respProv] = await Promise.all([
+          axios.get(`${API_BASE_URL}/api/catalog/productos/`, config),
+          axios.get(`${API_BASE_URL}/api/purchases/proveedores/`, config).catch(() => ({ data: [] }))
+        ]);
+        const lista = Array.isArray(respProd.data)
+          ? respProd.data
+          : Array.isArray(respProd.data?.results)
+          ? respProd.data.results
           : [];
         setCatalogoProductos(lista.filter((p) => p.estado !== false));
+
+        const provs = Array.isArray(respProv.data)
+          ? respProv.data
+          : Array.isArray(respProv.data?.results)
+          ? respProv.data.results
+          : [];
+        const activos = provs.filter((p) => p.estado);
+        setProveedoresActivos(activos);
+        if (activos.length > 0) {
+          setBorradorManualProveedor(activos[0].cuit_prov);
+        }
       } catch {
         setErrorAlerta('No se pudo cargar el catálogo de productos e insumos.');
       } finally {
@@ -89,7 +109,7 @@ export default function GenerarOrdenCompraModal({
       }
     };
 
-    cargarProductos();
+    cargarProductosYProveedores();
   }, [isOpen, token]);
 
   // Filtrado reactivo del buscador de catálogo
@@ -224,13 +244,19 @@ export default function GenerarOrdenCompraModal({
       setBorradoresDescartados([]);
       setProductosHuerfanos(listaHuerfanos);
 
-      // Excepción Paso 3: Si hay productos sin cotización aceptada vigente, resaltarlos y notificar
+      // Excepción Paso 3: Si hay productos sin cotización aceptada vigente, mostrar aviso amarillo abajo a la izquierda
       if (listaHuerfanos.length > 0) {
-        setErrorAlerta(
-          `Atención: ${listaHuerfanos.length} insumo(s) solicitado(s) no posee(n) ningún precio histórico vigente en cotizaciones aceptadas. Revise los ítems resaltados o inicie una Solicitud de Cotización previa.`
+        const preciosIniciales = {};
+        listaHuerfanos.forEach((h) => {
+          const prodCat = catalogoProductos.find((p) => p.id_producto === h.id_producto);
+          const precioRef = Number(prodCat?.precio_compra || prodCat?.precio_venta || 1000);
+          preciosIniciales[h.id_producto] = precioRef > 0 ? String(precioRef) : '1000';
+        });
+        setPreciosManualesHuerfanos(preciosIniciales);
+        setAvisoPrecioHistorico(
+          `Atención: ${listaHuerfanos.length} insumo(s) no posee(n) ningún precio histórico vigente en cotizaciones aceptadas. Puedes iniciar una cotización previa o continuar de todos modos asignando un proveedor manual.`
         );
         if (listaBorradores.length === 0) {
-          // Interrumpe el avance si ningún ítem pudo cotizarse
           setEtapaActual('FORMULARIO');
           return;
         }
@@ -246,6 +272,115 @@ export default function GenerarOrdenCompraModal({
     } finally {
       setCalculando(false);
     }
+  };
+
+  // Continuar de todos modos generando borrador manual para los insumos sin precio histórico
+  const handleContinuarSinPrecioHistorico = () => {
+    if (productosHuerfanos.length === 0) return;
+    if (proveedoresActivos.length === 0) {
+      setErrorAlerta('No hay proveedores activos registrados para asignar la compra manual.');
+      return;
+    }
+
+    const cuitElegido = borradorManualProveedor || proveedoresActivos[0].cuit_prov;
+    const provObj = proveedoresActivos.find((p) => p.cuit_prov === cuitElegido) || proveedoresActivos[0];
+
+    const itemsManuales = productosHuerfanos.map((h) => {
+      const cant = Number(h.cantidad_solicitada) || 1;
+      const precioUnit = Number(preciosManualesHuerfanos[h.id_producto] || 1000);
+      return {
+        id_producto: h.id_producto,
+        nombre_producto: h.nombre_producto,
+        cantidad: cant,
+        precio_unitario: String(precioUnit > 0 ? precioUnit : 1000),
+        subtotal: cant * (precioUnit > 0 ? precioUnit : 1000),
+        es_precio_manual: true
+      };
+    });
+
+    const montoManual = itemsManuales.reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
+
+    setBorradores((prev) => {
+      // Si ya existía un borrador del mismo proveedor, fusionar los ítems; si no, añadir nuevo borrador manual
+      const existe = prev.some((b) => b.cuit_prov === provObj.cuit_prov);
+      if (existe) {
+        return prev.map((b) => {
+          if (b.cuit_prov !== provObj.cuit_prov) return b;
+          const idsActuales = new Set((b.items || []).map((it) => it.id_producto));
+          const nuevos = itemsManuales.filter((it) => !idsActuales.has(it.id_producto));
+          const itemsCombinados = [...(b.items || []), ...nuevos];
+          const nuevoTotal = itemsCombinados.reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
+          return {
+            ...b,
+            items: itemsCombinados,
+            monto_total: nuevoTotal,
+            es_manual_sin_cotizacion: true
+          };
+        });
+      }
+      return [
+        ...prev,
+        {
+          cuit_prov: provObj.cuit_prov,
+          nombre_proveedor: provObj.nombre_proveedor,
+          correo: provObj.correo || '',
+          telefono: provObj.telefono || '',
+          ofrece_envio: Boolean(provObj.envio),
+          tipo_entrega: requiereEnvio && provObj.envio ? 2 : 1,
+          tipo_entrega_nombre: requiereEnvio && provObj.envio ? 'Envío a Domicilio' : 'Retiro en Sucursal',
+          sol_tec: esUrgenciaTecnica,
+          items: itemsManuales,
+          monto_total: montoManual,
+          es_manual_sin_cotizacion: true
+        }
+      ];
+    });
+
+    setProductosHuerfanos([]);
+    setAvisoPrecioHistorico('');
+    setEtapaActual('BORRADORES');
+  };
+
+  // Permitir editar proveedor y precio unitario en borradores manuales sin precio histórico
+  const handleCambiarProveedorBorradorManual = (cuitActual, nuevoCuit) => {
+    const provObj = proveedoresActivos.find((p) => p.cuit_prov === nuevoCuit);
+    if (!provObj) return;
+    setBorradores((prev) =>
+      prev.map((b) =>
+        b.cuit_prov === cuitActual
+          ? {
+              ...b,
+              cuit_prov: provObj.cuit_prov,
+              nombre_proveedor: provObj.nombre_proveedor,
+              correo: provObj.correo || '',
+              telefono: provObj.telefono || '',
+              ofrece_envio: Boolean(provObj.envio),
+              tipo_entrega: b.tipo_entrega === 2 && !provObj.envio ? 1 : b.tipo_entrega,
+              tipo_entrega_nombre: b.tipo_entrega === 2 && !provObj.envio ? 'Retiro en Sucursal' : b.tipo_entrega_nombre
+            }
+          : b
+      )
+    );
+  };
+
+  const handleCambiarPrecioManualItem = (cuitProv, idProd, nuevoPrecio) => {
+    const numPrecio = Math.max(0, Number(nuevoPrecio) || 0);
+    setBorradores((prev) =>
+      prev.map((b) => {
+        if (b.cuit_prov !== cuitProv) return b;
+        const nuevosItems = (b.items || []).map((it) =>
+          it.id_producto === idProd
+            ? {
+                ...it,
+                precio_unitario: String(nuevoPrecio),
+                subtotal: Number(it.cantidad || 1) * numPrecio
+              }
+            : it
+        );
+        const totalNuevo = nuevosItems.reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
+        return { ...b, items: nuevosItems, monto_total: totalNuevo };
+      })
+    );
   };
 
   // Excepción Paso 5: Descartar un borrador específico sin afectar al resto
@@ -358,20 +493,97 @@ export default function GenerarOrdenCompraModal({
   );
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.96, y: 12 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.96, y: 12 }}
-          transition={{ duration: 0.2 }}
-          className="relative w-full max-w-5xl bg-[#1E293B] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden my-8 flex flex-col max-h-[92vh]"
-        >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/85 overflow-y-auto">
+      {/* Avisos flotantes en esquina inferior izquierda (siempre visibles sin importar el scroll) */}
+      <div className="fixed bottom-6 left-6 z-[60] flex flex-col gap-2.5 max-w-md pointer-events-none">
+        {avisoPrecioHistorico && (
+          <div className="pointer-events-auto p-4 rounded-2xl bg-amber-950/95 border border-amber-500/50 text-amber-200 text-xs shadow-2xl space-y-3">
+            <div className="flex items-start justify-between gap-2.5">
+              <div className="flex items-start gap-2.5">
+                <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <div className="space-y-1">
+                  <span className="font-bold text-amber-300 block">Insumos sin precio histórico vigente</span>
+                  <span className="leading-relaxed block text-amber-100/90">{avisoPrecioHistorico}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAvisoPrecioHistorico('')}
+                className="text-amber-300 hover:text-white text-xs shrink-0 cursor-pointer"
+                title="Cerrar aviso"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleContinuarSinPrecioHistorico}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Continuar de todos modos →
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  navigate('/admin/cotizaciones');
+                }}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-200 border border-amber-500/40 font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Ir a Cotizaciones
+              </button>
+            </div>
+          </div>
+        )}
+
+        {errorAlerta && (
+          <div className="pointer-events-auto p-3.5 bg-amber-950/95 border border-amber-500/50 rounded-2xl text-amber-200 text-xs flex items-center justify-between gap-3 shadow-2xl">
+            <div className="flex items-center gap-2.5">
+              <svg className="w-5 h-5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="font-medium">{errorAlerta}</span>
+            </div>
+            <button type="button" onClick={() => setErrorAlerta('')} className="text-amber-300 hover:text-white cursor-pointer">
+              ✕
+            </button>
+          </div>
+        )}
+
+        {mensajeInfo && (
+          <div className="pointer-events-auto p-3.5 bg-cyan-950/95 border border-cyan-500/40 rounded-2xl text-cyan-200 text-xs flex items-center justify-between gap-3 shadow-2xl">
+            <div className="flex items-center gap-2.5">
+              <svg className="w-5 h-5 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="font-medium">{mensajeInfo}</span>
+            </div>
+            <button type="button" onClick={() => setMensajeInfo('')} className="text-cyan-300 hover:text-white cursor-pointer">
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="relative w-full max-w-5xl bg-[#1E293B] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden my-8 flex flex-col max-h-[92vh]">
           {/* Barra superior Cyber-Tech */}
           <div className="h-1.5 w-full bg-gradient-to-r from-cyan-400 via-violet-500 to-emerald-400" />
 
           {/* Cabecera */}
-          <div className="px-6 py-5 bg-[#0F172A]/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+          <div className="relative px-6 py-5 pr-16 bg-[#0F172A]/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+            {/* Botón X siempre fijo en esquina superior derecha */}
+            <button
+              type="button"
+              onClick={onClose}
+              title="Cerrar ventana"
+              className="absolute top-4 right-4 w-9 h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+            >
+              ✕
+            </button>
+
             <div className="flex items-center gap-3.5">
               <div className="w-11 h-11 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -419,60 +631,11 @@ export default function GenerarOrdenCompraModal({
               >
                 3. Emisión y Despacho
               </span>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="ml-2 w-9 h-9 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 flex items-center justify-center transition-colors"
-              >
-                ✕
-              </button>
             </div>
           </div>
 
           {/* Cuerpo Desplazable */}
           <div className="p-6 overflow-y-auto space-y-6 flex-1">
-            {/* Alertas de Error e Información */}
-            <AnimatePresence>
-              {errorAlerta && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  className="p-4 bg-rose-500/15 border border-rose-500/40 rounded-xl text-rose-300 text-xs flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <svg className="w-5 h-5 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="font-medium">{errorAlerta}</span>
-                  </div>
-                  <button type="button" onClick={() => setErrorAlerta('')} className="text-slate-400 hover:text-white">
-                    ✕
-                  </button>
-                </motion.div>
-              )}
-
-              {mensajeInfo && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  className="p-4 bg-cyan-500/15 border border-cyan-500/40 rounded-xl text-cyan-300 text-xs flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <svg className="w-5 h-5 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="font-medium">{mensajeInfo}</span>
-                  </div>
-                  <button type="button" onClick={() => setMensajeInfo('')} className="text-slate-400 hover:text-white">
-                    ✕
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             {/* Panel de Excepción Paso 3: Ítems Huérfanos sin Precio Histórico Vigente */}
             {productosHuerfanos.length > 0 && etapaActual !== 'EXITO' && (
               <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/40 space-y-3">
@@ -486,14 +649,21 @@ export default function GenerarOrdenCompraModal({
                     </h4>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleContinuarSinPrecioHistorico}
+                      className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors cursor-pointer"
+                    >
+                      Continuar de todos modos →
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
                         onClose();
                         navigate('/admin/cotizaciones');
                       }}
-                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors"
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-500/30 transition-colors cursor-pointer"
                     >
                       Iniciar Solicitud de Cotización Previa
                     </button>
@@ -501,7 +671,7 @@ export default function GenerarOrdenCompraModal({
                       <button
                         type="button"
                         onClick={handleQuitarTodosLosHuerfanos}
-                        className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
                       >
                         Quitar Ítems Huérfanos
                       </button>
@@ -510,7 +680,7 @@ export default function GenerarOrdenCompraModal({
                 </div>
 
                 <p className="text-xs text-amber-200/90">
-                  Los siguientes repuestos no registran ningún precio histórico vigente que cumpla las condiciones solicitadas. Es necesario emitir primero una Solicitud de Cotización hacia los proveedores:
+                  Los siguientes repuestos no registran ningún precio histórico vigente que cumpla las condiciones solicitadas. Puedes emitir una Solicitud de Cotización previa o pulsar <strong>&ldquo;Continuar de todos modos&rdquo;</strong> para asignar proveedor y precio manualmente:
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -779,16 +949,36 @@ export default function GenerarOrdenCompraModal({
                           {/* Cabecera del Borrador del Proveedor */}
                           <div className="px-5 py-4 bg-slate-900/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
                             <div>
-                              <div className="flex items-center gap-2.5">
-                                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                                  Proveedor Ganador
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase border ${
+                                  borrador.es_manual_sin_cotizacion
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                                }`}>
+                                  {borrador.es_manual_sin_cotizacion ? 'Asignación Directa' : 'Proveedor Ganador'}
                                 </span>
-                                <h4 className="text-sm font-extrabold text-white">
-                                  {borrador.nombre_proveedor}
-                                </h4>
-                                <span className="text-xs font-mono text-slate-400">
-                                  (CUIT: {borrador.cuit_prov})
-                                </span>
+                                {borrador.es_manual_sin_cotizacion && proveedoresActivos.length > 0 ? (
+                                  <select
+                                    value={borrador.cuit_prov}
+                                    onChange={(e) => handleCambiarProveedorBorradorManual(borrador.cuit_prov, e.target.value)}
+                                    className="px-3 py-1 rounded-lg bg-[#1E293B] border border-amber-500/40 text-xs font-bold text-white focus:outline-none focus:border-cyan-400"
+                                  >
+                                    {proveedoresActivos.map((p) => (
+                                      <option key={p.cuit_prov} value={p.cuit_prov}>
+                                        {p.nombre_proveedor} (CUIT: {p.cuit_prov})
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <>
+                                    <h4 className="text-sm font-extrabold text-white">
+                                      {borrador.nombre_proveedor}
+                                    </h4>
+                                    <span className="text-xs font-mono text-slate-400">
+                                      (CUIT: {borrador.cuit_prov})
+                                    </span>
+                                  </>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap items-center gap-3">
                                 <span>Correo: {borrador.correo || 'No especificado'}</span>
@@ -859,12 +1049,32 @@ export default function GenerarOrdenCompraModal({
                                       {it.cantidad} unid.
                                     </td>
                                     <td className="px-4 py-3 text-right font-mono">
-                                      <span className="inline-flex items-center gap-1 text-slate-200">
-                                        <svg className="w-3 h-3 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                                        </svg>
-                                        {formatMoneda(it.precio_unitario)}
-                                      </span>
+                                      {it.es_precio_manual ? (
+                                        <div className="inline-flex items-center gap-1">
+                                          <span className="text-slate-400">$</span>
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            value={it.precio_unitario}
+                                            onChange={(e) =>
+                                              handleCambiarPrecioManualItem(
+                                                borrador.cuit_prov,
+                                                it.id_producto,
+                                                e.target.value
+                                              )
+                                            }
+                                            className="w-24 px-2 py-1 rounded-lg bg-[#1E293B] border border-amber-500/40 text-right text-xs text-white font-mono focus:outline-none focus:border-cyan-400"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 text-slate-200">
+                                          <svg className="w-3 h-3 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                                          </svg>
+                                          {formatMoneda(it.precio_unitario)}
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="px-5 py-3 text-right font-mono font-bold text-cyan-300">
                                       {formatMoneda(it.subtotal)}
@@ -1059,8 +1269,7 @@ export default function GenerarOrdenCompraModal({
               </div>
             )}
           </div>
-        </motion.div>
+        </div>
       </div>
-    </AnimatePresence>
   );
 }

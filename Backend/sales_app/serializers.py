@@ -88,17 +88,13 @@ class RealizarCompraInputSerializer(serializers.Serializer):
         return attrs
 
 
-class CompletarPagoInputSerializer(serializers.Serializer):
-    """
-    CU-21: Completar pago (La Aduana Financiera).
-    Valida el medio de pago, monto abonado y el número de operación
-    (estrictamente obligatorio si el medio de pago es TRANSFERENCIA).
-    """
+class PagoMixtoTramoInputSerializer(serializers.Serializer):
+    """Tramo individual dentro de un cobro mixto en caja."""
     medio_pago = serializers.CharField(
         required=True,
         error_messages={
-            'required': 'El medio de pago es obligatorio.',
-            'blank': 'El medio de pago no puede estar vacío.'
+            'required': 'El medio de pago del tramo es obligatorio.',
+            'blank': 'El medio de pago del tramo no puede estar vacío.'
         }
     )
     monto_pagado = serializers.DecimalField(
@@ -107,11 +103,49 @@ class CompletarPagoInputSerializer(serializers.Serializer):
         required=True,
         min_value=Decimal('0.01'),
         error_messages={
-            'required': 'El monto a pagar es obligatorio.',
+            'required': 'El monto del tramo es obligatorio.',
+            'invalid': 'El monto del tramo debe ser un número decimal válido.',
+            'min_value': 'El monto del tramo debe ser mayor a cero.'
+        }
+    )
+    numero_operacion = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=100
+    )
+    detalle = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=500
+    )
+
+
+class CompletarPagoInputSerializer(serializers.Serializer):
+    """
+    CU-21: Completar pago (La Aduana Financiera).
+    Valida el medio de pago, monto abonado y el número de operación
+    (estrictamente obligatorio si el medio de pago es TRANSFERENCIA).
+    Soporta también `pagos_mixtos` (múltiples medios sin repetir).
+    """
+    medio_pago = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True
+    )
+    monto_pagado = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=Decimal('0.01'),
+        error_messages={
             'invalid': 'El monto a pagar debe ser un número decimal válido.',
             'min_value': 'El monto a pagar debe ser mayor a cero.'
         }
     )
+    pagos_mixtos = PagoMixtoTramoInputSerializer(many=True, required=False)
     numero_operacion = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -163,7 +197,39 @@ class CompletarPagoInputSerializer(serializers.Serializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
+        pagos_mixtos = attrs.get('pagos_mixtos')
+        if pagos_mixtos:
+            if len(pagos_mixtos) < 2:
+                raise serializers.ValidationError({
+                    'pagos_mixtos': 'El cobro mixto requiere al menos 2 medios de pago distintos.'
+                })
+            medios_vistos = set()
+            for idx, tramo in enumerate(pagos_mixtos, start=1):
+                m_raw = str(tramo.get('medio_pago') or '').strip().upper()
+                if m_raw in medios_vistos:
+                    raise serializers.ValidationError({
+                        'pagos_mixtos': f'No puedes repetir el mismo medio de pago ({tramo.get("medio_pago")}) en el cobro mixto.'
+                    })
+                medios_vistos.add(m_raw)
+                num_tramo = (tramo.get('numero_operacion') or '').strip()
+                if ('TRANSFERENCIA' in m_raw or 'TRANSF' in m_raw or 'CBU' in m_raw) and not num_tramo:
+                    raise serializers.ValidationError({
+                        'pagos_mixtos': f'El número de operación es obligatorio para el tramo {idx} ({tramo.get("medio_pago")}).'
+                    })
+                tramo['numero_operacion'] = num_tramo if num_tramo else None
+            return attrs
+
+        # Modo cobro único
         medio_raw = str(attrs.get('medio_pago') or '').strip().upper()
+        if not medio_raw:
+            raise serializers.ValidationError({
+                'medio_pago': 'El medio de pago es obligatorio.'
+            })
+        if attrs.get('monto_pagado') is None:
+            raise serializers.ValidationError({
+                'monto_pagado': 'El monto a pagar es obligatorio.'
+            })
+
         numero_op = (attrs.get('numero_operacion') or '').strip()
 
         # Si el medio de pago es transferencia, el número de operación es obligatorio
@@ -642,11 +708,40 @@ class RealizarVentaPresencialInputSerializer(serializers.Serializer):
             'empty': 'La lista de productos no puede estar vacía.'
         }
     )
-    # Campos opcionales para Cobro Atómico en Mostrador (POS)
+    # Campos opcionales para Cobro Atómico en Mostrador (POS) y Canje de Beneficios
+    beneficios_aplicados = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+        default=list,
+        help_text='IDs de beneficios activos seleccionados para el cliente vinculado.'
+    )
     medio_pago = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     monto_pagado = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     numero_operacion = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     detalle = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class ReporteInspeccionVentasInputSerializer(serializers.Serializer):
+    """
+    La Aduana: Valida los parámetros de consulta para el reporte de Inspección de Ventas
+    y Arqueo de Ingresos/Egresos.
+    """
+    fecha_inicio = serializers.DateField(required=False, allow_null=True)
+    fecha_fin = serializers.DateField(required=False, allow_null=True)
+    canal = serializers.ChoiceField(
+        choices=['TODAS', 'PRESENCIAL', 'VIRTUAL', 'todas', 'presencial', 'virtual'],
+        required=False,
+        default='TODAS'
+    )
+    estado_venta = serializers.ChoiceField(
+        choices=['TODOS', 'PAGADA', 'PENDIENTE', 'CANCELADA', 'todos', 'pagada', 'pendiente', 'cancelada'],
+        required=False,
+        default='TODOS'
+    )
+    id_medio_pago = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    buscar = serializers.CharField(required=False, allow_blank=True, default='', max_length=200)
+
 
 
 # ==============================================================================

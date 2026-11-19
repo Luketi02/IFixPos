@@ -48,7 +48,7 @@ const renderEstrellasVisuales = (puntuacion, max = 5, sizeClass = 'text-base') =
 };
 
 export default function AdminSatisfactionReportScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   // ============================================================================
   // ESTADOS DE PARÁMETROS TEMPORALES Y FILTROS (PASOS 2 Y 3)
@@ -382,9 +382,24 @@ export default function AdminSatisfactionReportScreen() {
       { header: 'CSAT Promedio', key: 'promedio_estrellas', align: 'center', render: (f) => `${Number(f.promedio_estrellas).toFixed(2)} ★` }
     ];
 
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Usuario Autenticado';
+
+    const tecSel = listaTecnicos.find((t) => String(t.id_usuario) === String(idTecnico));
+    const catSel = listaCategorias.find((c) => String(c.id_categoria) === String(idCategoria));
+    const filtrosActivos = [
+      tecSel ? `Técnico: ${tecSel.nombre_completo || tecSel.email}` : 'Técnicos: Todos',
+      catSel ? `Categoría: ${catSel.nombre}` : 'Categorías: Todas',
+      rangoEstrellasMax ? `Tope Estrellas: ≤ ${rangoEstrellasMax}★` : 'Calificaciones: 1★ a 5★'
+    ];
+
     exportarInformePDF({
       titulo: 'Informe Ejecutivo: Satisfacción del Cliente y Calidad (CSAT)',
-      subtitulo: `Período Auditado: ${fechaInicio} al ${fechaFin} | Taller Central`,
+      subtitulo: 'Auditoría de calidad post-servicio, matriz de satisfacción por rubro y detección de reseñas críticas',
+      periodo: `${fechaInicio} al ${fechaFin}`,
+      filtros: filtrosActivos,
       resumenEjecutivo: `Auditoría global de calidad post-servicio sobre un volumen de ${total_resenas} valoraciones de clientes. Se obtuvo un índice CSAT global de ${csat_global.toFixed(2)} / 5.00 estrellas. Se identificaron ${resenas_criticas_total} reseñas críticas (≤ 3★, equivalente al ${porcentaje_criticas.toFixed(1)}% del total) que demandan seguimiento preventivo o correctivo.`,
       kpis: [
         { label: 'Índice CSAT Global', valor: `${csat_global.toFixed(2)} / 5.00 ★`, detalle: csat_global >= 4 ? 'Nivel Excelente' : 'Requiere Atención' },
@@ -403,7 +418,12 @@ export default function AdminSatisfactionReportScreen() {
           columnas: columnasMatriz,
           filas: matriz_calidad
         }
-      ]
+      ],
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
     });
   };
 

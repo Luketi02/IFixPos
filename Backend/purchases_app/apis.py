@@ -27,7 +27,8 @@ from purchases_app.selectors import (
     calcular_mejores_ofertas,
     obtener_orden_esperando_entrega,
     obtener_detalle_orden_compra,
-    listar_compras_directas
+    listar_compras_directas,
+    obtener_expediente_inspeccion_proveedor
 )
 from purchases_app.serializers import (
     FiltrarProveedoresInputSerializer,
@@ -41,6 +42,7 @@ from purchases_app.serializers import (
     RegistrarProveedorInputSerializer,
     ModificarProveedorInputSerializer,
     ProveedorDetalleOutputSerializer,
+    ExpedienteInspeccionProveedorOutputSerializer,
     GenerarSolicitudInputSerializer,
     SolicitudCotizacionListOutputSerializer,
     SolicitudCotizacionDetailOutputSerializer,
@@ -1072,3 +1074,30 @@ class EstadoMotorAbastecimientoApi(APIView):
             "total_articulos_deficitarios": len(articulos_deficitarios),
             "articulos_deficitarios": articulos_deficitarios
         }, status=status.HTTP_200_OK)
+
+
+class InspeccionarProveedorApi(APIView):
+    """
+    Endpoint para inspeccionar en detalle a un proveedor:
+    datos legales y de contacto, confiabilidad, cumplimiento de entregas,
+    recepciones históricas, cotizaciones respondidas y órdenes de compra.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id_proveedor: str):
+        _exigir_rol_admin(request.user)
+
+        try:
+            expediente = obtener_expediente_inspeccion_proveedor(
+                usuario_ejecutor=request.user,
+                id_proveedor=id_proveedor
+            )
+        except ObjectDoesNotExist as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        output = ExpedienteInspeccionProveedorOutputSerializer(expediente)
+        return Response(output.data, status=status.HTTP_200_OK)
+

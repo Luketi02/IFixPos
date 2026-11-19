@@ -3579,30 +3579,50 @@ class CU10ActualizarEstadoReparacionTestCase(TestCase):
         self.assertEqual(log.tipo, 'AUDITORIA_TALLER')
         self.assertEqual(log.id_usuario, self.tecnico)
 
-    def test_servicio_transicion_hacia_esperando_repuestos_desde_estado_invalido_bloqueada(self):
-        """Bloquea pasar a ESPERANDO_REPUESTOS si el equipo no está en EN_REPARACION."""
+    def test_servicio_transicion_esperando_diagnostico_primera_vez_bloqueada_y_segunda_permitida(self):
+        """
+        Bloquea cambiar de estado si la reparación está en ESPERANDO_DIAGNOSTICO por primera vez,
+        y permite transicionar libremente en la segunda vez o desde otros estados activos.
+        """
         from workshop_app.services import cambiar_estado_reparacion
 
-        # Equipo en ESPERANDO_CONFIRMACION
-        rep_esperando_conf = Reparacion.objects.create(
+        rep_primera_vez = Reparacion.objects.create(
             fecha_inicio=timezone.now().date(),
-            etapa='ESPERANDO_CONFIRMACION',
+            etapa='ESPERANDO_DIAGNOSTICO',
             codigo_sec='REP1009',
-            desc_cliente='Presupuesto sin aceptar',
+            desc_cliente='Ingreso inicial esperando primer diagnóstico',
             id_dispositivo=self.dispositivo,
             id_usuario=self.tecnico
         )
 
+        # Primera vez en ESPERANDO_DIAGNOSTICO: bloqueado
         with self.assertRaises(ValidationError) as ctx:
             cambiar_estado_reparacion(
                 usuario_tecnico=self.tecnico,
-                id_reparacion=rep_esperando_conf.id_reparacion,
+                id_reparacion=rep_primera_vez.id_reparacion,
                 datos_validados={
-                    'nuevo_estado': 'ESPERANDO_REPUESTOS',
-                    'comentario': 'Intento inválido.'
+                    'nuevo_estado': 'EN_REPARACION',
+                    'comentario': 'Intento inválido antes del primer diagnóstico.'
                 }
             )
-        self.assertIn("Para pasar a 'Esperando Repuestos', el equipo debe encontrarse en 'En Reparación'", str(ctx.exception))
+        self.assertIn("por primera vez", str(ctx.exception))
+
+        # Segunda vez en ESPERANDO_DIAGNOSTICO (tras diagnóstico previo o reingreso en bitácora): permitido
+        Diagnostico.objects.create(
+            id_reparacion=rep_primera_vez,
+            fecha_diagnostico=timezone.now().date(),
+            descripcion_falla='Diagnóstico inicial registrado',
+            costo_diagnostico=Decimal('5000.00')
+        )
+        rep_segunda_vez = cambiar_estado_reparacion(
+            usuario_tecnico=self.tecnico,
+            id_reparacion=rep_primera_vez.id_reparacion,
+            datos_validados={
+                'nuevo_estado': 'ESPERANDO_REPUESTOS',
+                'comentario': 'Segunda vez en esperando diagnóstico: pasando a esperar repuestos.'
+            }
+        )
+        self.assertEqual(rep_segunda_vez.etapa, 'ESPERANDO_REPUESTOS')
 
     def test_servicio_transicion_hacia_finalizado_exitoso(self):
         """Permite transicionar de EN_REPARACION a FINALIZADO si cuenta con diagnóstico."""

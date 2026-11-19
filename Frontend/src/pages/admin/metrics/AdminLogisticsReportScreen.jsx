@@ -34,7 +34,7 @@ const obtenerFechaFormato = (d) => {
 };
 
 export default function AdminLogisticsReportScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   // ============================================================================
   // ESTADOS DE PARÁMETROS TEMPORALES Y GEOGRÁFICOS (PASOS 2 Y 3)
@@ -320,9 +320,25 @@ export default function AdminLogisticsReportScreen() {
       { header: 'Ticket Promedio', key: 'ticket_promedio', align: 'right', render: (f) => formatearMoneda(f.ticket_promedio) }
     ];
 
+    const nombreEjecutor =
+      [user?.nombre, user?.apellido].filter(Boolean).join(' ').trim() ||
+      user?.email ||
+      'Usuario Autenticado';
+
+    const provSel = provincias.find((p) => String(p.id_provincia) === String(idProvincia));
+    const ciuSel = ciudades.find((c) => String(c.id_ciudad) === String(idCiudad));
+    const filtrosActivos = [
+      'Modalidad: Envío a Domicilio',
+      provSel ? `Provincia: ${provSel.nombre_provincia}` : 'Provincias: Todas',
+      ciuSel ? `Ciudad: ${ciuSel.nombre_ciudad}` : null,
+      estadoVenta ? `Estado: ${estadoVenta}` : null
+    ].filter(Boolean);
+
     exportarInformePDF({
       titulo: 'Informe Ejecutivo: Distribución Geográfica y Logística',
-      subtitulo: `Período: ${fechaInicio} al ${fechaFin} | Modalidad: Ventas con Envío a Domicilio`,
+      subtitulo: 'Evaluación territorial de despachos e-commerce, recaudación de fletes y facturación regional',
+      periodo: `${fechaInicio} al ${fechaFin}`,
+      filtros: filtrosActivos,
       resumenEjecutivo: `Análisis de concentración geográfica de ventas e-commerce en ${totalZonas || 0} localidades. Se registraron ${volumenTotal || 0} despachos a domicilio con una recaudación logística acumulada de ${formatearMoneda(recaudacionLogisticaTotal || 0)} (flete promedio: ${formatearMoneda(fletePromedio || 0)}) y una facturación bruta regional de ${formatearMoneda(facturacionBrutaTotal || 0)}, alcanzando un ticket promedio por despacho de ${formatearMoneda(ticketPromedioGlobal || 0)}.`,
       kpis: [
         { label: 'Destinos Activos', valor: `${totalZonas || 0}`, detalle: 'Ciudades atendidas' },
@@ -336,7 +352,12 @@ export default function AdminLogisticsReportScreen() {
           columnas,
           filas: datosReporte
         }
-      ]
+      ],
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
     });
   };
 

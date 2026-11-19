@@ -276,13 +276,16 @@ export default function AdminEfficiencyReportScreen() {
   // ============================================================================
   const dualBarEficiencia = useMemo(() => {
     if (!datosReporte || !Array.isArray(datosReporte) || datosReporte.length === 0) return [];
-    return datosReporte.map((item) => ({
-      label: item.nombre_categoria,
-      val1: Number(item.facturacion_mano_obra || 0),
-      val1Label: formatearMoneda(item.facturacion_mano_obra),
-      val2: Number(item.volumen_reparaciones || 0),
-      val2Label: `${item.volumen_reparaciones || 0} órdenes`
-    }));
+    return datosReporte.map((item) => {
+      const monto = Number(item.facturacion_bruta ?? item.facturacion_mano_obra ?? 0);
+      return {
+        label: item.nombre_categoria,
+        val1: monto,
+        val1Label: formatearMoneda(monto),
+        val2: Number(item.volumen_reparaciones || 0),
+        val2Label: `${item.volumen_reparaciones || 0} órdenes`
+      };
+    });
   }, [datosReporte]);
 
   const rankingVelocidad = useMemo(() => {
@@ -305,9 +308,9 @@ export default function AdminEfficiencyReportScreen() {
   const donutFacturacion = useMemo(() => {
     if (!datosReporte || !Array.isArray(datosReporte) || datosReporte.length === 0) return [];
     const colores = ['#06B6D4', '#8B5CF6', '#10B981', '#F59E0B', '#EC4899', '#3B82F6', '#14B8A6'];
-    const totalFact = datosReporte.reduce((acc, i) => acc + Number(i.facturacion_mano_obra || 0), 0) || 1;
+    const totalFact = datosReporte.reduce((acc, i) => acc + Number(i.facturacion_bruta ?? i.facturacion_mano_obra ?? 0), 0) || 1;
     return datosReporte.slice(0, 6).map((item, idx) => {
-      const fact = Number(item.facturacion_mano_obra || 0);
+      const fact = Number(item.facturacion_bruta ?? item.facturacion_mano_obra ?? 0);
       return {
         label: item.nombre_categoria,
         valor: formatearMoneda(fact),
@@ -336,10 +339,11 @@ export default function AdminEfficiencyReportScreen() {
       const pct = volumenTotal > 0 ? ((vol / volumenTotal) * 100).toFixed(1) : '0.0';
       const dias = Number(i.tiempo_promedio_dias || 0);
       const diag = dias <= 2 ? 'Resolución Ágil' : dias <= 5 ? 'Ritmo Estándar' : 'Cuello de Botella';
+      const montoRubro = i.facturacion_bruta ?? i.facturacion_mano_obra ?? 0;
       return [
         i.nombre_categoria,
         String(vol),
-        formatearMoneda(i.facturacion_mano_obra),
+        formatearMoneda(montoRubro),
         `${dias.toFixed(1)} días (${i.tiempo_promedio_horas || 0} hs)`,
         `${pct}%`,
         diag
@@ -358,7 +362,8 @@ export default function AdminEfficiencyReportScreen() {
     datosReporte.forEach((i) => {
       const dias = Number(i.tiempo_promedio_dias || 0);
       const diag = dias <= 2 ? 'Resolución Ágil' : dias <= 5 ? 'Ritmo Estándar' : 'Cuello de Botella';
-      desgloseTexto += `  • ${i.nombre_categoria}: ${i.volumen_reparaciones || 0} servicios | ${formatearMoneda(i.facturacion_mano_obra)} | ${dias.toFixed(1)} días medio (${diag})\n`;
+      const montoRubro = i.facturacion_bruta ?? i.facturacion_mano_obra ?? 0;
+      desgloseTexto += `  • ${i.nombre_categoria}: ${i.volumen_reparaciones || 0} servicios | ${formatearMoneda(montoRubro)} | ${dias.toFixed(1)} días medio (${diag})\n`;
     });
 
     const resumenTexto = `=== INFORME GERENCIAL: DEMANDA Y EFICIENCIA POR CATEGORÍA ===\n` +
@@ -376,14 +381,25 @@ export default function AdminEfficiencyReportScreen() {
       user?.email ||
       'Usuario Autenticado';
 
+    const catSel = categorias.find((c) => String(c.id_categoria) === String(idCategoria));
+    const filtrosActivos = [
+      catSel ? `Categoría: ${catSel.nombre}` : 'Categorías: Todas',
+      idTipoDispositivo ? 'Tipo de Dispositivo: Filtrado' : 'Dispositivos: Todos'
+    ];
+
     exportarInformePDF({
       titulo: 'Reporte de Demanda y Eficiencia por Categoría',
       subtitulo: 'Análisis de carga de trabajo, ingresos de mano de obra y detección de cuellos de botella',
       periodo: `${fechaInicio} al ${fechaFin}`,
+      filtros: filtrosActivos,
       kpis,
       tablas,
       resumenTexto,
-      usuario: { nombre: nombreEjecutor, email: user?.email || '' }
+      usuario: {
+        nombre: nombreEjecutor,
+        email: user?.email || '',
+        rol: user?.rol?.nombre_rol || user?.id_rol?.nombre_rol || 'Administrador'
+      }
     });
   };
 

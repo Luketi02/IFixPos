@@ -18,35 +18,63 @@ TIPOS_EGRESO = ['egreso', 'venta', 'taller', 'baja', 'salida', 'consumo']
 
 def _obtener_o_crear_carrito_activo(usuario: Usuario) -> CarritoCompra:
     """
-    Recupera el carrito activo del usuario garantizando unicidad estricta.
-    Si existen múltiples carritos activos residuales, consolida los ítems
-    en el más reciente y marca los duplicados como 'abandonado'.
-    Si no existe ninguno, crea un carrito activo nuevo.
+    Recupera el carrito activo del usuario garantizando unicidad estricta (1 carrito por cliente).
+    - Si existen múltiples carritos activos residuales, consolida todos sus ítems en el principal
+      y elimina los carritos duplicados para no romper el flujo de venta virtual.
+    - Si no existe carrito activo pero el usuario posee un carrito histórico ('finalizado'/'abandonado'),
+      lo reactiva limpiamente y elimina cualquier duplicado excedente.
+    - Si no existe ningún registro previo, crea un único carrito activo nuevo.
     """
-    carritos_activos = CarritoCompra.objects.filter(
-        id_usuario=usuario,
-        estado='activo'
-    ).order_by('-id_carrito')
+    carritos_activos = list(
+        CarritoCompra.objects.filter(
+            id_usuario=usuario,
+            estado__iexact='activo'
+        ).order_by('-id_carrito')
+    )
 
-    if carritos_activos.exists():
-        carrito_principal = carritos_activos.first()
-        duplicados = carritos_activos.exclude(id_carrito=carrito_principal.id_carrito)
-        if duplicados.exists():
-            for dup in duplicados:
-                for item_dup in dup.carritoproducto_set.all():
-                    item_existente = CarritoProducto.objects.filter(
+    if carritos_activos:
+        carrito_principal = carritos_activos[0]
+        if carrito_principal.estado != 'activo':
+            carrito_principal.estado = 'activo'
+            carrito_principal.save(update_fields=['estado'])
+
+        for dup in carritos_activos[1:]:
+            for item_dup in list(dup.carritoproducto_set.all()):
+                item_existente = CarritoProducto.objects.filter(
+                    id_carrito=carrito_principal,
+                    id_producto_id=item_dup.id_producto_id
+                ).first()
+                if item_existente:
+                    item_existente.cantidad += item_dup.cantidad
+                    item_existente.save(update_fields=['cantidad'])
+                else:
+                    CarritoProducto.objects.create(
                         id_carrito=carrito_principal,
-                        id_producto=item_dup.id_producto
-                    ).first()
-                    if item_existente:
-                        item_existente.cantidad += item_dup.cantidad
-                        item_existente.save(update_fields=['cantidad'])
-                    else:
-                        item_dup.id_carrito = carrito_principal
-                        item_dup.save(update_fields=['id_carrito'])
-                dup.estado = 'abandonado'
-                dup.save(update_fields=['estado'])
+                        id_producto_id=item_dup.id_producto_id,
+                        cantidad=item_dup.cantidad
+                    )
+            dup.delete()
+
+        # Eliminar también cualquier otro carrito inactivo antiguo del usuario para mantener 1 solo registro
+        CarritoCompra.objects.filter(id_usuario=usuario).exclude(
+            id_carrito=carrito_principal.id_carrito
+        ).delete()
         return carrito_principal
+
+    # Si no hay carrito activo, reutilizar el carrito existente del usuario si lo hubiera
+    carritos_existentes = list(
+        CarritoCompra.objects.filter(id_usuario=usuario).order_by('-id_carrito')
+    )
+    if carritos_existentes:
+        carrito_reutilizado = carritos_existentes[0]
+        CarritoProducto.objects.filter(id_carrito=carrito_reutilizado).delete()
+        carrito_reutilizado.estado = 'activo'
+        carrito_reutilizado.fecha_creacion = timezone.now().date()
+        carrito_reutilizado.save(update_fields=['estado', 'fecha_creacion'])
+
+        for viejo in carritos_existentes[1:]:
+            viejo.delete()
+        return carrito_reutilizado
 
     return CarritoCompra.objects.create(
         id_usuario=usuario,

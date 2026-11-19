@@ -41,12 +41,18 @@ export default function CompletarPago({ onAlerta }) {
   const [desgloseOperacion, setDesgloseOperacion] = useState(null);
   const [cargandoDesglose, setCargandoDesglose] = useState(false);
 
-  // Formulario de cobro
+  // Formulario de cobro (Simple y Cobro Mixto)
   const [medioPago, setMedioPago] = useState('Efectivo');
   const [numeroOperacion, setNumeroOperacion] = useState('');
   const [montoAbonado, setMontoAbonado] = useState('');
   const [detalle, setDetalle] = useState('');
   const [procesandoPago, setProcesandoPago] = useState(false);
+
+  // Estados de Cobro Mixto (paso a paso uno a uno)
+  const [cobroMixto, setCobroMixto] = useState(false);
+  const [tramosMixtos, setTramosMixtos] = useState([]);
+  const [ejecutandoMixto, setEjecutandoMixto] = useState(false);
+  const [indiceTramoActual, setIndiceTramoActual] = useState(0);
 
   // Fase 3: Ticket de Éxito
   const [ticketExito, setTicketExito] = useState(null);
@@ -279,6 +285,10 @@ export default function CompletarPago({ onAlerta }) {
       setMedioPago(primerMedio);
       setNumeroOperacion('');
       setDetalle('');
+      setCobroMixto(false);
+      setTramosMixtos([]);
+      setEjecutandoMixto(false);
+      setIndiceTramoActual(0);
     } catch (error) {
       console.error('Error al recuperar detalles de la operación:', error);
       const msg = error.response?.data?.error || 'No se pudieron recuperar los renglones de la operación.';
@@ -303,16 +313,32 @@ export default function CompletarPago({ onAlerta }) {
     setOperacionSeleccionada(null);
     setDesgloseOperacion(null);
     setTicketExito(null);
+    setCobroMixto(false);
+    setTramosMixtos([]);
+    setEjecutandoMixto(false);
+    setIndiceTramoActual(0);
     cargarTransacciones();
   };
 
   // ============================================================================
   // CONFIRMACIÓN DEL COBRO Y TRANSICIÓN DE ESTADO (CU-21 & CU-20)
   // ============================================================================
-  const esTransferencia = useMemo(() => {
-    const m = (medioPago || '').toLowerCase();
+  const listaNombresMedios = useMemo(() => {
+    if (catalogoMediosPago.length > 0) {
+      return catalogoMediosPago.map((m) => m.nombre_medio_pago).filter(Boolean);
+    }
+    return ['Efectivo', 'Transferencia Virtual', 'Tarjeta de Débito / Crédito'];
+  }, [catalogoMediosPago]);
+
+  const esMedioTransferencia = useCallback((nombreMedio) => {
+    const m = String(nombreMedio || '').toLowerCase();
     return m.includes('transf') || m.includes('bancari') || m.includes('cbu');
-  }, [medioPago]);
+  }, []);
+
+  const esTransferencia = useMemo(
+    () => esMedioTransferencia(medioPago),
+    [medioPago, esMedioTransferencia]
+  );
 
   const totalAdeudadoNum = useMemo(() => {
     if (!desgloseOperacion?.total_a_cobrar) {
@@ -321,7 +347,80 @@ export default function CompletarPago({ onAlerta }) {
     return parseFloat(desgloseOperacion.total_a_cobrar || 0);
   }, [desgloseOperacion, operacionSeleccionada]);
 
+  // Activar / desactivar Cobro Mixto inicializando 2 tramos con medios distintos
+  const handleToggleCobroMixto = (activar) => {
+    if (activar) {
+      if (listaNombresMedios.length < 2) {
+        dispararMensaje('warning', 'Se necesitan al menos 2 medios de pago habilitados para realizar un cobro mixto.');
+        return;
+      }
+      const primer = medioPago && listaNombresMedios.includes(medioPago) ? medioPago : listaNombresMedios[0];
+      const segundo = listaNombresMedios.find((m) => m !== primer) || listaNombresMedios[1];
+      const mitad = Math.floor((totalAdeudadoNum / 2) * 100) / 100;
+      const resto = Math.max(0, Number((totalAdeudadoNum - mitad).toFixed(2)));
+      setTramosMixtos([
+        { id: 1, medio_pago: primer, monto_pagado: mitad > 0 ? mitad.toFixed(2) : '', numero_operacion: '' },
+        { id: 2, medio_pago: segundo, monto_pagado: resto > 0 ? resto.toFixed(2) : '', numero_operacion: '' }
+      ]);
+      setCobroMixto(true);
+      setEjecutandoMixto(false);
+      setIndiceTramoActual(0);
+    } else {
+      setCobroMixto(false);
+      setEjecutandoMixto(false);
+      setIndiceTramoActual(0);
+      setMontoAbonado(totalAdeudadoNum.toFixed(2));
+    }
+  };
+
+  const handleActualizarTramoMixto = (idx, campo, valor) => {
+    setTramosMixtos((prev) => {
+      const copia = prev.map((t) => ({ ...t }));
+      copia[idx][campo] = valor;
+      // Si se edita el monto del primer tramo y hay exactamente 2 tramos, autocompletar el saldo en el tramo 2
+      if (campo === 'monto_pagado' && idx === 0 && copia.length === 2) {
+        const m1 = parseFloat(valor || 0);
+        if (!isNaN(m1) && m1 >= 0 && m1 <= totalAdeudadoNum) {
+          copia[1].monto_pagado = (totalAdeudadoNum - m1).toFixed(2);
+        }
+      }
+      return copia;
+    });
+  };
+
+  const handleAgregarTramoMixto = () => {
+    const usados = new Set(tramosMixtos.map((t) => t.medio_pago));
+    const disponible = listaNombresMedios.find((m) => !usados.has(m));
+    if (!disponible) return;
+    setTramosMixtos((prev) => [
+      ...prev,
+      { id: Date.now(), medio_pago: disponible, monto_pagado: '0.00', numero_operacion: '' }
+    ]);
+  };
+
+  const handleQuitarTramoMixto = (idx) => {
+    if (tramosMixtos.length <= 2) return;
+    setTramosMixtos((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const sumaTramosMixtos = useMemo(() => {
+    return tramosMixtos.reduce((acc, t) => acc + (parseFloat(t.monto_pagado || 0) || 0), 0);
+  }, [tramosMixtos]);
+
+  const configuracionMixtaValida = useMemo(() => {
+    if (!cobroMixto || tramosMixtos.length < 2) return false;
+    const medios = new Set();
+    for (const t of tramosMixtos) {
+      const m = parseFloat(t.monto_pagado);
+      if (isNaN(m) || m <= 0) return false;
+      if (!t.medio_pago || medios.has(t.medio_pago)) return false;
+      medios.add(t.medio_pago);
+    }
+    return Math.abs(sumaTramosMixtos - totalAdeudadoNum) <= 0.01;
+  }, [cobroMixto, tramosMixtos, sumaTramosMixtos, totalAdeudadoNum]);
+
   const esFormularioValido = useMemo(() => {
+    if (cobroMixto) return configuracionMixtaValida;
     const monto = parseFloat(montoAbonado);
     if (isNaN(monto) || monto <= 0) return false;
     // El monto debe cubrir exactamente el total a cobrar
@@ -329,20 +428,9 @@ export default function CompletarPago({ onAlerta }) {
     // Si es transferencia, el número de operación es obligatorio
     if (esTransferencia && !numeroOperacion.trim()) return false;
     return true;
-  }, [montoAbonado, totalAdeudadoNum, esTransferencia, numeroOperacion]);
+  }, [cobroMixto, configuracionMixtaValida, montoAbonado, totalAdeudadoNum, esTransferencia, numeroOperacion]);
 
-  const handleConfirmarCobro = async (e) => {
-    if (e && e.preventDefault) e.preventDefault();
-
-    if (!esFormularioValido) {
-      if (esTransferencia && !numeroOperacion.trim()) {
-        dispararMensaje('error', 'El número de operación es obligatorio para cobros por transferencia bancaria.');
-        return;
-      }
-      dispararMensaje('error', 'Por favor verifica el monto ingresado. Debe cubrir exactamente el total a cobrar.');
-      return;
-    }
-
+  const enviarCobroAlBackend = async ({ esMixto = false } = {}) => {
     setProcesandoPago(true);
     try {
       const codSeguridad =
@@ -357,17 +445,30 @@ export default function CompletarPago({ onAlerta }) {
         busquedaExacta.trim() ||
         undefined;
 
-      const payload = {
-        identificador: ident,
-        codigo_seguridad: codSeguridad || undefined,
-        id_operacion: operacionSeleccionada.id_operacion,
-        tipo_operacion: operacionSeleccionada.tipo_operacion,
-        monto_pagado: parseFloat(montoAbonado),
-        medio_pago: medioPago,
-        numero_operacion: numeroOperacion.trim() || undefined,
-        cod_operacion: numeroOperacion.trim() || undefined,
-        detalle: detalle.trim() || undefined
-      };
+      const payload = esMixto
+        ? {
+            identificador: ident,
+            codigo_seguridad: codSeguridad || undefined,
+            id_operacion: operacionSeleccionada.id_operacion,
+            tipo_operacion: operacionSeleccionada.tipo_operacion,
+            detalle: detalle.trim() || undefined,
+            pagos_mixtos: tramosMixtos.map((t) => ({
+              medio_pago: t.medio_pago,
+              monto_pagado: parseFloat(t.monto_pagado),
+              numero_operacion: t.numero_operacion?.trim() || undefined
+            }))
+          }
+        : {
+            identificador: ident,
+            codigo_seguridad: codSeguridad || undefined,
+            id_operacion: operacionSeleccionada.id_operacion,
+            tipo_operacion: operacionSeleccionada.tipo_operacion,
+            monto_pagado: parseFloat(montoAbonado),
+            medio_pago: medioPago,
+            numero_operacion: numeroOperacion.trim() || undefined,
+            cod_operacion: numeroOperacion.trim() || undefined,
+            detalle: detalle.trim() || undefined
+          };
 
       const endpoint = codSeguridad
         ? `${API_BASE_URL}/api/sales/pagos/completar/${encodeURIComponent(codSeguridad)}/`
@@ -383,14 +484,18 @@ export default function CompletarPago({ onAlerta }) {
       const data = response.data;
       dispararMensaje('success', data.mensaje || '¡Cobro registrado con éxito! Factura generada.');
 
+      const resumenMedios = esMixto
+        ? tramosMixtos.map((t) => `${t.medio_pago} ($${parseFloat(t.monto_pagado).toFixed(2)})`).join(' + ')
+        : medioPago;
+
       // Transición al ticket de éxito con comprobante
       setTicketExito({
         cliente:
           operacionSeleccionada.cliente?.nombre ||
           desgloseOperacion?.cliente?.nombre ||
           'Consumidor',
-        montoPagado: montoAbonado,
-        medioPago: medioPago,
+        montoPagado: esMixto ? totalAdeudadoNum.toFixed(2) : montoAbonado,
+        medioPago: resumenMedios,
         tipoOperacion: operacionSeleccionada.tipo_operacion,
         codigoSeguridad: codSeguridad,
         rutaComprobante: data.ruta_comprobante || data.pago?.ruta_comprobante || ''
@@ -405,6 +510,47 @@ export default function CompletarPago({ onAlerta }) {
       dispararMensaje('error', typeof msg === 'object' ? JSON.stringify(msg) : msg);
     } finally {
       setProcesandoPago(false);
+    }
+  };
+
+  const handleConfirmarCobro = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+
+    if (cobroMixto) {
+      if (!configuracionMixtaValida) {
+        dispararMensaje('error', 'Verifica los medios de pago (sin repetir) y que la suma de montos coincida con el total.');
+        return;
+      }
+      // Iniciar flujo paso a paso uno a uno
+      setIndiceTramoActual(0);
+      setEjecutandoMixto(true);
+      return;
+    }
+
+    if (!esFormularioValido) {
+      if (esTransferencia && !numeroOperacion.trim()) {
+        dispararMensaje('error', 'El número de operación es obligatorio para cobros por transferencia bancaria.');
+        return;
+      }
+      dispararMensaje('error', 'Por favor verifica el monto ingresado. Debe cubrir exactamente el total a cobrar.');
+      return;
+    }
+
+    await enviarCobroAlBackend({ esMixto: false });
+  };
+
+  const handleAvanzarTramoMixto = async () => {
+    const tramoActual = tramosMixtos[indiceTramoActual];
+    if (!tramoActual) return;
+    if (esMedioTransferencia(tramoActual.medio_pago) && !String(tramoActual.numero_operacion || '').trim()) {
+      dispararMensaje('error', `Ingresa el número de operación para el tramo ${indiceTramoActual + 1} (${tramoActual.medio_pago}).`);
+      return;
+    }
+
+    if (indiceTramoActual < tramosMixtos.length - 1) {
+      setIndiceTramoActual((prev) => prev + 1);
+    } else {
+      await enviarCobroAlBackend({ esMixto: true });
     }
   };
 
@@ -631,6 +777,12 @@ export default function CompletarPago({ onAlerta }) {
                     {operacionSeleccionada.cliente?.email || 'Sin correo asociado'}
                     {operacionSeleccionada.cliente?.dni && ` • DNI: ${operacionSeleccionada.cliente.dni}`}
                   </p>
+                  {desgloseOperacion?.concepto_resumen && (
+                    <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-violet-500/15 border border-violet-500/30 text-violet-200 text-xs font-semibold">
+                      <span>🧾</span>
+                      <span>{desgloseOperacion.concepto_resumen}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-[#0F172A] border border-cyan-500/40 rounded-2xl px-6 py-3 text-right">
@@ -643,7 +795,7 @@ export default function CompletarPago({ onAlerta }) {
                 </div>
               </div>
 
-              {/* Renglones de la Operación */}
+              {/* Renglones de la Operación (Productos o Diagnóstico/Reparación) */}
               {cargandoDesglose ? (
                 <div className="py-8 text-center text-slate-400 flex items-center justify-center gap-3">
                   <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
@@ -652,7 +804,7 @@ export default function CompletarPago({ onAlerta }) {
               ) : desgloseOperacion?.items && desgloseOperacion.items.length > 0 ? (
                 <div className="space-y-2">
                   <h4 className="text-xs font-mono uppercase text-slate-400 font-bold">
-                    Renglones e Insumos de la Operación
+                    Detalle de lo que se cobra al cliente
                   </h4>
                   <div className="bg-[#0F172A] border border-slate-800 rounded-xl overflow-hidden">
                     <table className="w-full text-left text-xs">
@@ -681,125 +833,342 @@ export default function CompletarPago({ onAlerta }) {
 
               {/* Formulario de Definición del Cobro */}
               <form onSubmit={handleConfirmarCobro} className="space-y-5 pt-2">
-                <h4 className="text-xs font-mono uppercase text-purple-400 font-bold tracking-wider">
-                  Definición del Pago y Liquidación
-                </h4>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <h4 className="text-xs font-mono uppercase text-purple-400 font-bold tracking-wider">
+                    Definición del Pago y Liquidación
+                  </h4>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Medio de Pago dinámico */}
-                  <div>
-                    <label className="block text-xs font-mono uppercase text-slate-300 font-bold mb-1.5">
-                      Medio de Pago <span className="text-cyan-400">*</span>
-                    </label>
-                    <select
-                      value={medioPago}
-                      onChange={(e) => setMedioPago(e.target.value)}
-                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#06B6D4] focus:ring-1 focus:ring-[#06B6D4]"
-                    >
-                      {catalogoMediosPago.length > 0 ? (
-                        catalogoMediosPago.map((m) => (
-                          <option key={m.id_mediopago || m.nombre_medio_pago} value={m.nombre_medio_pago}>
-                            {m.nombre_medio_pago} {Number(m.recargo) > 0 ? `(+${m.recargo}%)` : ''}
-                          </option>
-                        ))
-                      ) : (
-                        <>
-                          <option value="Efectivo">Efectivo</option>
-                          <option value="Transferencia">Transferencia Virtual</option>
-                          <option value="Tarjeta">Tarjeta de Débito / Crédito</option>
-                        </>
-                      )}
-                    </select>
-                  </div>
-
-                  {/* Monto Abonado */}
-                  <div>
-                    <label className="block text-xs font-mono uppercase text-slate-300 font-bold mb-1.5">
-                      Monto a Percibir ($)
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 font-mono text-sm">
-                        $
-                      </span>
+                  {!ejecutandoMixto && (
+                    <label className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/60 cursor-pointer select-none transition-colors">
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        value={montoAbonado}
-                        onChange={(e) => setMontoAbonado(e.target.value)}
-                        className={`w-full bg-[#0F172A] border rounded-xl pl-8 pr-4 py-3 text-sm text-white font-mono focus:outline-none transition-all ${
-                          Math.abs(parseFloat(montoAbonado || 0) - totalAdeudadoNum) > 0.01
-                            ? 'border-amber-500 focus:border-amber-400 focus:ring-1 focus:ring-amber-400'
-                            : 'border-slate-700 focus:border-[#06B6D4] focus:ring-1 focus:ring-[#06B6D4]'
-                        }`}
-                        required
+                        type="checkbox"
+                        checked={cobroMixto}
+                        onChange={(e) => handleToggleCobroMixto(e.target.checked)}
+                        className="w-4 h-4 rounded accent-cyan-400 cursor-pointer"
                       />
-                    </div>
-                    {Math.abs(parseFloat(montoAbonado || 0) - totalAdeudadoNum) > 0.01 && (
-                      <p className="text-[11px] text-amber-400 mt-1">
-                        ⚠️ El monto debe coincidir exactamente con el total adeudado (${totalAdeudadoNum.toFixed(2)}).
-                      </p>
-                    )}
-                  </div>
+                      <span className="text-xs font-bold text-cyan-300">Cobro mixto (varios medios)</span>
+                    </label>
+                  )}
                 </div>
 
-                {/* Número de Operación: Obligatorio si es Transferencia */}
-                <AnimatePresence>
-                  {esTransferencia && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className="space-y-1.5"
-                    >
-                      <label className="block text-xs font-mono uppercase text-cyan-400 font-bold">
-                        Número de Operación / Transferencia <span className="text-rose-400">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Ej. TRANSF-123456789 / CBU comprobante"
-                        value={numeroOperacion}
-                        onChange={(e) => setNumeroOperacion(e.target.value)}
-                        className="w-full bg-[#0F172A] border border-cyan-500/40 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:border-[#06B6D4] focus:ring-2 focus:ring-[#06B6D4]/30"
-                        required
-                      />
-                      <p className="text-[11px] text-slate-400">
-                        Parámetro obligatorio para la conciliación y auditoría contable de transferencias.
-                      </p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {!cobroMixto ? (
+                  /* ========================================================== */
+                  /* MODO COBRO ÚNICO (MONTO BLOQUEADO, NO MODIFICABLE)         */
+                  /* ========================================================== */
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Medio de Pago dinámico */}
+                      <div>
+                        <label className="block text-xs font-mono uppercase text-slate-300 font-bold mb-1.5">
+                          Medio de Pago <span className="text-cyan-400">*</span>
+                        </label>
+                        <select
+                          value={medioPago}
+                          onChange={(e) => setMedioPago(e.target.value)}
+                          className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#06B6D4] focus:ring-1 focus:ring-[#06B6D4]"
+                        >
+                          {listaNombresMedios.map((nombreMedio) => {
+                            const meta = catalogoMediosPago.find((m) => m.nombre_medio_pago === nombreMedio);
+                            const recargo = Number(meta?.recargo || 0);
+                            return (
+                              <option key={meta?.id_mediopago || nombreMedio} value={nombreMedio}>
+                                {nombreMedio} {recargo > 0 ? `(+${recargo}%)` : ''}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      {/* Monto Abonado (Bloqueado en cobro simple) */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-mono uppercase text-slate-300 font-bold">
+                            Monto a Percibir ($)
+                          </label>
+                          <span className="text-[10px] font-mono text-slate-400">🔒 Monto fijo</span>
+                        </div>
+                        <div className="relative">
+                          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 font-mono text-sm">
+                            $
+                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={totalAdeudadoNum.toFixed(2)}
+                            readOnly
+                            disabled
+                            className="w-full bg-slate-900/70 border border-slate-700/70 rounded-xl pl-8 pr-4 py-3 text-sm text-slate-300 font-mono cursor-not-allowed select-none opacity-90"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Número de Operación: Obligatorio si es Transferencia */}
+                    {esTransferencia && (
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-mono uppercase text-cyan-400 font-bold">
+                          Número de Operación / Transferencia <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej. TRANSF-123456789 / CBU comprobante"
+                          value={numeroOperacion}
+                          onChange={(e) => setNumeroOperacion(e.target.value)}
+                          className="w-full bg-[#0F172A] border border-cyan-500/40 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:border-[#06B6D4] focus:ring-2 focus:ring-[#06B6D4]/30"
+                          required
+                        />
+                        <p className="text-[11px] text-slate-400">
+                          Parámetro obligatorio para la conciliación y auditoría contable de transferencias.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                ) : !ejecutandoMixto ? (
+                  /* ========================================================== */
+                  /* MODO COBRO MIXTO - PASO A: CONFIGURACIÓN DE MEDIOS Y MONTOS*/
+                  /* ========================================================== */
+                  <div className="space-y-4">
+                    <div className="p-3.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-200 flex items-center justify-between gap-2">
+                      <span>
+                        Define los medios de pago y montos para esta operación. No puedes repetir el mismo medio de pago; luego procederás a cobrarlos <strong>uno a uno</strong>.
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {tramosMixtos.map((tramo, idx) => {
+                        const mediosOcupadosOtros = new Set(
+                          tramosMixtos.filter((_, i) => i !== idx).map((t) => t.medio_pago)
+                        );
+                        const opcionesDisponibles = listaNombresMedios.filter(
+                          (m) => m === tramo.medio_pago || !mediosOcupadosOtros.has(m)
+                        );
+
+                        return (
+                          <div
+                            key={tramo.id || idx}
+                            className="p-4 rounded-xl bg-[#0F172A] border border-slate-700/80 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+                          >
+                            <div className="sm:col-span-6">
+                              <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1">
+                                Medio de Pago #{idx + 1}
+                              </label>
+                              <select
+                                value={tramo.medio_pago}
+                                onChange={(e) => handleActualizarTramoMixto(idx, 'medio_pago', e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-400"
+                              >
+                                {opcionesDisponibles.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="sm:col-span-5">
+                              <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1">
+                                Monto tramo #{idx + 1} ($)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                max={totalAdeudadoNum}
+                                value={tramo.monto_pagado}
+                                onChange={(e) => handleActualizarTramoMixto(idx, 'monto_pagado', e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-cyan-400"
+                                required
+                              />
+                            </div>
+
+                            <div className="sm:col-span-1 flex justify-end">
+                              {tramosMixtos.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuitarTramoMixto(idx)}
+                                  className="px-2.5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold cursor-pointer"
+                                  title="Quitar tramo"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                      {tramosMixtos.length < listaNombresMedios.length ? (
+                        <button
+                          type="button"
+                          onClick={handleAgregarTramoMixto}
+                          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-xs font-semibold transition-colors cursor-pointer self-start"
+                        >
+                          + Agregar otro medio de pago
+                        </button>
+                      ) : <span />}
+
+                      <div className="text-xs font-mono text-right">
+                        <span className="text-slate-400">Asignado: </span>
+                        <span
+                          className={`font-bold ${
+                            Math.abs(sumaTramosMixtos - totalAdeudadoNum) <= 0.01
+                              ? 'text-emerald-400'
+                              : 'text-amber-400'
+                          }`}
+                        >
+                          ${sumaTramosMixtos.toFixed(2)}
+                        </span>
+                        <span className="text-slate-500"> / ${totalAdeudadoNum.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* ========================================================== */
+                  /* MODO COBRO MIXTO - PASO B: EJECUCIÓN SECUENCIAL UNO A UNO  */
+                  /* ========================================================== */
+                  (() => {
+                    const tramoActivo = tramosMixtos[indiceTramoActual] || {};
+                    const reqNumOp = esMedioTransferencia(tramoActivo.medio_pago);
+                    const esUltimoTramo = indiceTramoActual === tramosMixtos.length - 1;
+
+                    return (
+                      <div className="p-5 rounded-2xl bg-[#0F172A] border border-cyan-500/40 space-y-4">
+                        {/* Indicador de progreso uno a uno */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {tramosMixtos.map((t, i) => {
+                            const completado = i < indiceTramoActual;
+                            const activo = i === indiceTramoActual;
+                            return (
+                              <div
+                                key={t.id || i}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-mono border flex items-center gap-1.5 ${
+                                  completado
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                                    : activo
+                                    ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 font-bold'
+                                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                                }`}
+                              >
+                                <span>{completado ? '✓' : `${i + 1}.`}</span>
+                                <span>{t.medio_pago}</span>
+                                <span>(${parseFloat(t.monto_pagado || 0).toFixed(2)})</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-mono uppercase text-cyan-400 font-bold">
+                              Cobro {indiceTramoActual + 1} de {tramosMixtos.length}
+                            </p>
+                            <h5 className="text-lg font-extrabold text-white mt-0.5">
+                              {tramoActivo.medio_pago}
+                            </h5>
+                          </div>
+                          <div className="text-left sm:text-right">
+                            <span className="text-[10px] font-mono uppercase text-slate-400 block">
+                              Monto de este tramo
+                            </span>
+                            <span className="text-2xl font-black font-mono text-cyan-400">
+                              ${parseFloat(tramoActivo.monto_pagado || 0).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {reqNumOp && (
+                          <div className="space-y-1.5">
+                            <label className="block text-xs font-mono uppercase text-cyan-400 font-bold">
+                              Número de Operación / Transferencia (Tramo {indiceTramoActual + 1}) <span className="text-rose-400">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. TRANSF-123456789 / CBU comprobante"
+                              value={tramoActivo.numero_operacion || ''}
+                              onChange={(e) =>
+                                handleActualizarTramoMixto(indiceTramoActual, 'numero_operacion', e.target.value)
+                              }
+                              className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                          <button
+                            type="button"
+                            disabled={procesandoPago}
+                            onClick={() => {
+                              if (indiceTramoActual > 0) {
+                                setIndiceTramoActual((prev) => prev - 1);
+                              } else {
+                                setEjecutandoMixto(false);
+                              }
+                            }}
+                            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            {indiceTramoActual > 0 ? '← Volver al pago anterior' : '← Editar distribución'}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={procesandoPago}
+                            onClick={handleAvanzarTramoMixto}
+                            className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-xs sm:text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-40 cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            {procesandoPago ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                                <span>Registrando cobro mixto...</span>
+                              </>
+                            ) : esUltimoTramo ? (
+                              <span>✓ Registrar Pago {indiceTramoActual + 1} y Emitir Comprobante</span>
+                            ) : (
+                              <span>Registrar Pago {indiceTramoActual + 1} y continuar →</span>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
 
                 {/* Detalle / Observaciones */}
-                <div>
-                  <label className="block text-xs font-mono uppercase text-slate-400 font-bold mb-1.5">
-                    Observaciones del Cobro (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Cobro realizado en mostrador durante cierre de turno"
-                    value={detalle}
-                    onChange={(e) => setDetalle(e.target.value)}
-                    className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[#06B6D4]"
-                  />
-                </div>
+                {!ejecutandoMixto && (
+                  <div>
+                    <label className="block text-xs font-mono uppercase text-slate-400 font-bold mb-1.5">
+                      Observaciones del Cobro (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Cobro realizado en mostrador durante cierre de turno"
+                      value={detalle}
+                      onChange={(e) => setDetalle(e.target.value)}
+                      className="w-full bg-[#0F172A] border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-[#06B6D4]"
+                    />
+                  </div>
+                )}
 
-                {/* Botón de Confirmación */}
-                <button
-                  type="submit"
-                  disabled={!esFormularioValido || procesandoPago}
-                  className="w-full py-3.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer mt-4"
-                >
-                  {procesandoPago ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Procesando pago y generando factura fiscal...</span>
-                    </>
-                  ) : (
-                    <span>Confirmar Cobro y Emitir Comprobante</span>
-                  )}
-                </button>
+                {/* Botón de Confirmación Principal (oculto durante la ejecución secuencial mixta) */}
+                {!ejecutandoMixto && (
+                  <button
+                    type="submit"
+                    disabled={!esFormularioValido || procesandoPago}
+                    className="w-full py-3.5 rounded-xl bg-[#06B6D4] hover:bg-cyan-400 text-slate-950 text-sm font-bold tracking-wide shadow-lg shadow-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer mt-4"
+                  >
+                    {procesandoPago ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Procesando pago y generando factura fiscal...</span>
+                      </>
+                    ) : cobroMixto ? (
+                      <span>Iniciar Cobro Mixto (Paso 1 de {tramosMixtos.length}) →</span>
+                    ) : (
+                      <span>Confirmar Cobro y Emitir Comprobante</span>
+                    )}
+                  </button>
+                )}
               </form>
             </div>
           </motion.div>

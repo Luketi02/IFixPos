@@ -4147,3 +4147,80 @@ class MotorAbastecimientoAutomaticoTestCase(TestCase):
         self.assertEqual(res_estado.status_code, status.HTTP_200_OK)
         self.assertIn('auto_abastecimiento_activo', res_estado.data)
         self.assertIn('articulos_deficitarios', res_estado.data)
+
+    def test_inspeccion_integral_proveedor_endpoint(self):
+        """
+        Verifica el endpoint GET /api/purchases/proveedores/<cuit>/inspeccion/
+        que retorna información legal/contacto, métricas de cumplimiento,
+        historial de entregas, cotizaciones y órdenes de compra del proveedor.
+        """
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(f'/api/purchases/proveedores/{self.prov_b.cuit_prov}/inspeccion/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('proveedor', res.data)
+        self.assertIn('metricas_abastecimiento', res.data)
+        self.assertIn('historial_entregas', res.data)
+        self.assertIn('cotizaciones', res.data)
+        self.assertIn('ordenes_compra', res.data)
+        self.assertEqual(res.data['proveedor']['cuit_prov'], self.prov_b.cuit_prov)
+        self.assertIn('clasificacion_cumplimiento', res.data['metricas_abastecimiento'])
+
+    def test_despacho_correos_cotizacion_y_orden_compra_con_pdf_y_admin_general(self):
+        """
+        Verifica que tanto al generar una Solicitud de Cotización como al emitir una Orden de Compra:
+        1. Se despachan correos reales desde la casilla configurada en `emailAdministracion`.
+        2. Incluyen cuerpo de texto, esquema HTML (`text/html`) y un archivo PDF formal adjunto.
+        """
+        from django.core import mail
+        from django.test import override_settings
+        from core_app.models import ConfiguracionSistema
+        from purchases_app.services import generar_solicitud_cotizacion, emitir_ordenes_compra
+
+        ConfiguracionSistema.objects.update_or_create(
+            clave='emailAdministracion',
+            defaults={'valor': 'admin.general@ifixpos.com'}
+        )
+
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            mail.outbox.clear()
+
+            # 1. Generar Solicitud de Cotización (no borrador)
+            generar_solicitud_cotizacion(
+                usuario_admin=self.admin,
+                datos_validados={
+                    'ids_proveedores': [self.prov_b.cuit_prov],
+                    'productos': [{'id_producto': self.producto.id_producto, 'cantidad_requerida': 5}],
+                    'guardar_como_borrador': False
+                }
+            )
+            self.assertEqual(len(mail.outbox), 1)
+            msg_sol = mail.outbox[0]
+            self.assertIn('admin.general@ifixpos.com', msg_sol.from_email)
+            self.assertEqual(msg_sol.to, [self.prov_b.correo])
+            self.assertTrue(any(alt[1] == 'text/html' for alt in msg_sol.alternatives))
+            self.assertTrue(any(att[0].endswith('.pdf') for att in msg_sol.attachments))
+
+            mail.outbox.clear()
+
+            # 2. Emitir Orden de Compra
+            emitir_ordenes_compra(
+                usuario_admin=self.admin,
+                borradores_aprobados=[{
+                    'cuit_prov': self.prov_b.cuit_prov,
+                    'tipo_entrega': 2,
+                    'sol_tec': False,
+                    'items': [{
+                        'id_producto': self.producto.id_producto,
+                        'cantidad': 5,
+                        'precio_unitario': Decimal('12000.00')
+                    }]
+                }]
+            )
+            self.assertEqual(len(mail.outbox), 1)
+            msg_oc = mail.outbox[0]
+            self.assertIn('admin.general@ifixpos.com', msg_oc.from_email)
+            self.assertEqual(msg_oc.to, [self.prov_b.correo])
+            self.assertTrue(any(alt[1] == 'text/html' for alt in msg_oc.alternatives))
+            self.assertTrue(any(att[0].endswith('.pdf') for att in msg_oc.attachments))
+
+
